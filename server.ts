@@ -1245,6 +1245,57 @@ async function startServer() {
     res.json({ success: true, count: updatedCount });
   });
 
+  // Global batch update live sources
+  app.post("/api/sources/global-batch-update", (req, res) => {
+    const { sourceIds, isp, province, status } = req.body;
+    if (!Array.isArray(sourceIds) || sourceIds.length === 0) {
+      return res.status(400).json({ error: "请提供要操作的直播线路 ID 列表" });
+    }
+
+    let updatedCount = 0;
+    channels.forEach((c) => {
+      c.sources.forEach((s) => {
+        if (sourceIds.includes(s.id)) {
+          if (isp !== undefined && isp !== null && isp !== "") {
+            s.isp = isp;
+          }
+          if (province !== undefined && province !== null && province !== "") {
+            s.province = province;
+          }
+          if (status !== undefined && status !== null && status !== "") {
+            s.status = status;
+          }
+          updatedCount++;
+        }
+      });
+    });
+
+    if (updatedCount > 0) {
+      saveData();
+    }
+    res.json({ success: true, count: updatedCount });
+  });
+
+  // Global batch delete live sources
+  app.post("/api/sources/global-batch-delete", (req, res) => {
+    const { sourceIds } = req.body;
+    if (!Array.isArray(sourceIds) || sourceIds.length === 0) {
+      return res.status(400).json({ error: "请提供要删除的直播线路 ID 列表" });
+    }
+
+    let deletedCount = 0;
+    channels.forEach((c) => {
+      const initialCount = c.sources.length;
+      c.sources = c.sources.filter((s) => !sourceIds.includes(s.id));
+      deletedCount += (initialCount - c.sources.length);
+    });
+
+    if (deletedCount > 0) {
+      saveData();
+    }
+    res.json({ success: true, count: deletedCount });
+  });
+
   // Bulk Upload File Handler Endpoint
   app.post("/api/import/file", (req, res) => {
     const { content, type } = req.body;

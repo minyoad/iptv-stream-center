@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import { 
   Tv, 
   Activity, 
@@ -36,7 +36,7 @@ export default function App() {
   const [groups, setGroups] = useState<Group[]>([]);
   const [testingStatus, setTestingStatus] = useState<TestStatus>({ status: "idle", total: 0, checked: 0, results: [] });
   const [activeTab, setActiveTab] = useState<string>("dashboard"); // dashboard, channels, sync, export, epg
-  const [channelSubTab, setChannelSubTab] = useState<"channels" | "groups">("channels");
+  const [channelSubTab, setChannelSubTab] = useState<"channels" | "groups" | "sources">("channels");
   
   // States for interactive actions
   const [searchQuery, setSearchQuery] = useState("");
@@ -99,6 +99,19 @@ export default function App() {
     province: ""
   });
 
+  // Global bulk source operations and filter states
+  const [globalSourceSearch, setGlobalSourceSearch] = useState("");
+  const [globalSourceIsp, setGlobalSourceIsp] = useState("all");
+  const [globalSourceProvince, setGlobalSourceProvince] = useState("all");
+  const [globalSourceStatus, setGlobalSourceStatus] = useState("all");
+  const [selectedGlobalSourceIds, setSelectedGlobalSourceIds] = useState<string[]>([]);
+  const [isBatchGlobalSourceModalOpen, setIsBatchGlobalSourceModalOpen] = useState(false);
+  const [batchGlobalSourceForm, setBatchGlobalSourceForm] = useState({
+    isp: "",
+    province: "",
+    status: ""
+  });
+
   // Custom iframe-safe Confirmation Modal state
   const [confirmModal, setConfirmModal] = useState<{
     isOpen: boolean;
@@ -126,6 +139,63 @@ export default function App() {
     status: "",
     limit: "",
   });
+
+  // Unique lists computed from all active live sources
+  const allUniqueIspOptions = useMemo(() => {
+    const list = new Set<string>();
+    channels.forEach(ch => {
+      if (ch.sources) {
+        ch.sources.forEach(src => {
+          if (src.isp) list.add(src.isp);
+        });
+      }
+    });
+    return Array.from(list);
+  }, [channels]);
+
+  const allUniqueProvinceOptions = useMemo(() => {
+    const list = new Set<string>();
+    channels.forEach(ch => {
+      if (ch.sources) {
+        ch.sources.forEach(src => {
+          if (src.province) list.add(src.province);
+        });
+      }
+    });
+    return Array.from(list);
+  }, [channels]);
+
+  const filteredGlobalSources = useMemo(() => {
+    const list: any[] = [];
+    channels.forEach((ch) => {
+      if (ch.sources) {
+        ch.sources.forEach((src) => {
+          list.push({
+            ...src,
+            channelId: ch.id,
+            channelName: ch.name,
+            channelLogo: ch.logo,
+            channelGroupIds: ch.groupIds
+          });
+        });
+      }
+    });
+
+    return list.filter((item) => {
+      const query = globalSourceSearch.trim().toLowerCase();
+      const matchesText = !query || 
+        item.channelName.toLowerCase().includes(query) || 
+        item.url.toLowerCase().includes(query) || 
+        (item.isp && item.isp.toLowerCase().includes(query)) || 
+        (item.province && item.province.toLowerCase().includes(query));
+
+      const matchesIsp = globalSourceIsp === "all" || item.isp === globalSourceIsp;
+      const matchesProvince = globalSourceProvince === "all" || item.province === globalSourceProvince;
+      const matchesStatus = globalSourceStatus === "all" || item.status === globalSourceStatus;
+
+      return matchesText && matchesIsp && matchesProvince && matchesStatus;
+    });
+  }, [channels, globalSourceSearch, globalSourceIsp, globalSourceProvince, globalSourceStatus]);
 
   // Backup-specific React States and Functions
   const [backups, setBackups] = useState<any[]>([]);
@@ -661,6 +731,95 @@ export default function App() {
     }
   };
 
+  const handleGlobalBatchDelete = () => {
+    if (selectedGlobalSourceIds.length === 0) {
+      showFeedback("info", "请先选择需要批量删除的线路");
+      return;
+    }
+    triggerConfirm(
+      "批量删除全球直播线路",
+      `确定要永久删除选中的 ${selectedGlobalSourceIds.length} 条播放线路吗？此操作涉及多个频道，删除后无法挽回！`,
+      async () => {
+        try {
+          const res = await fetch("/api/sources/global-batch-delete", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ sourceIds: selectedGlobalSourceIds })
+          });
+          if (res.ok) {
+            const data = await res.json();
+            showFeedback("success", `成功跨频道批量删除了 ${data.count} 条播放线路`);
+            setSelectedGlobalSourceIds([]);
+            fetchData();
+          } else {
+            const err = await res.json();
+            showFeedback("error", err.error || "全域批量删除失败");
+          }
+        } catch (e) {
+          showFeedback("error", "网络超时或连接异常");
+        }
+      }
+    );
+  };
+
+  const handleGlobalBatchUpdateSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (selectedGlobalSourceIds.length === 0) return;
+    if (!batchGlobalSourceForm.isp && !batchGlobalSourceForm.province && !batchGlobalSourceForm.status) {
+      showFeedback("error", "请至少指定运营商(ISP)、省份(Province)或线路状态中的一个修改项");
+      return;
+    }
+
+    try {
+      const res = await fetch("/api/sources/global-batch-update", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          sourceIds: selectedGlobalSourceIds,
+          isp: batchGlobalSourceForm.isp,
+          province: batchGlobalSourceForm.province,
+          status: batchGlobalSourceForm.status
+        })
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        showFeedback("success", `成功跨频道更新了 ${data.count} 条直播线路的属性配置`);
+        setIsBatchGlobalSourceModalOpen(false);
+        setSelectedGlobalSourceIds([]);
+        fetchData();
+      } else {
+        const err = await res.json();
+        showFeedback("error", err.error || "全域批量更新失败");
+      }
+    } catch (e) {
+      showFeedback("error", "网络连接故障");
+    }
+  };
+
+  const handleGlobalBatchTest = async () => {
+    if (selectedGlobalSourceIds.length === 0) {
+      showFeedback("info", "请先选择需要测速的线路");
+      return;
+    }
+    try {
+      const res = await fetch("/api/sources/test", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sourceIds: selectedGlobalSourceIds })
+      });
+      if (res.ok) {
+        showFeedback("success", `已成功对已选的 ${selectedGlobalSourceIds.length} 条全球线路启动多线程测速排队中`);
+        setSelectedGlobalSourceIds([]);
+      } else {
+        const err = await res.json();
+        showFeedback("error", err.error || "测速任务提交失败");
+      }
+    } catch (e) {
+      showFeedback("error", "发起测速请求异常");
+    }
+  };
+
   const openChannelCreate = () => {
     setEditingChannel(null);
     setChannelForm({
@@ -1176,9 +1335,20 @@ export default function App() {
                   <Layers className="w-3.5 h-3.5" />
                   分组/分类管理 (多对多)
                 </button>
+                <button
+                  onClick={() => setChannelSubTab("sources")}
+                  className={`px-4 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
+                    channelSubTab === "sources"
+                    ? "bg-slate-800 text-white shadow-md shadow-slate-900/10"
+                    : "bg-white text-slate-500 hover:text-slate-800 hover:bg-slate-50 border border-slate-200"
+                  }`}
+                >
+                  <Compass className="w-3.5 h-3.5" />
+                  全局线路与批量管理
+                </button>
               </div>
 
-              {channelSubTab === "groups" ? (
+              {channelSubTab === "groups" && (
                 <div className="bg-white rounded-2xl border border-slate-200 p-6 space-y-6 animate-fade-in" id="groups_manager_container">
                   <div className="max-w-md space-y-3">
                     <h3 className="font-bold text-slate-800 text-sm">👥 新建或编辑分组/分类</h3>
@@ -1302,8 +1472,10 @@ export default function App() {
                     </div>
                   </div>
                 </div>
-              ) : (
-                <div className="space-y-6" id="groups_inner_channels_pane">
+              )}
+
+              {channelSubTab === "channels" && (
+                <div className="space-y-6 animate-fade-in" id="groups_inner_channels_pane">
                   {/* Filter tools and Header bar */}
                   <div className="flex flex-col md:flex-row gap-4 justify-between" id="channel_filter_panel">
                 <div className="flex flex-1 flex-wrap gap-2.5">
@@ -1737,6 +1909,395 @@ export default function App() {
 
               </div>
               </div>
+              )}
+
+              {channelSubTab === "sources" && (
+                <div className="space-y-6 animate-fade-in" id="global_sources_pane">
+                  {/* Top Stats Cards */}
+                  <div className="grid grid-cols-1 sm:grid-cols-4 gap-4" id="global_sources_stats">
+                    <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs flex items-center justify-between">
+                      <div>
+                        <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">当前匹配总线路</span>
+                        <div className="text-xl font-black text-slate-800 mt-1 font-mono">{filteredGlobalSources.length} <span className="text-xs text-slate-500 font-sans">条</span></div>
+                      </div>
+                      <div className="w-10 h-10 rounded-xl bg-slate-50 text-slate-600 flex items-center justify-center border border-slate-100">
+                        <Compass className="w-5 h-5" />
+                      </div>
+                    </div>
+                    <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs flex items-center justify-between">
+                      <div>
+                        <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">活跃健康源</span>
+                        <div className="text-xl font-black text-emerald-600 mt-1 font-mono">
+                          {filteredGlobalSources.filter(s => s.status === "active").length} <span className="text-xs text-slate-500 font-sans">条</span>
+                        </div>
+                      </div>
+                      <div className="w-10 h-10 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center border border-emerald-100">
+                        <CheckCircle className="w-5 h-5" />
+                      </div>
+                    </div>
+                    <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs flex items-center justify-between">
+                      <div>
+                        <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">失效/无法连通</span>
+                        <div className="text-xl font-black text-rose-600 mt-1 font-mono">
+                          {filteredGlobalSources.filter(s => s.status === "inactive").length} <span className="text-xs text-slate-500 font-sans">条</span>
+                        </div>
+                      </div>
+                      <div className="w-10 h-10 rounded-xl bg-rose-50 text-rose-600 flex items-center justify-center border border-rose-100">
+                        <XCircle className="w-5 h-5" />
+                      </div>
+                    </div>
+                    <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs flex items-center justify-between">
+                      <div>
+                        <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">检测排队中/未知</span>
+                        <div className="text-xl font-black text-amber-600 mt-1 font-mono">
+                          {filteredGlobalSources.filter(s => s.status === "checking" || s.status === "unknown").length} <span className="text-xs text-slate-500 font-sans">条</span>
+                        </div>
+                      </div>
+                      <div className="w-10 h-10 rounded-xl bg-amber-50 text-amber-600 flex items-center justify-center border border-amber-100">
+                        <Activity className="w-5 h-5" />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Multi-Dimensional Filters Card */}
+                  <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-xs space-y-4" id="global_sources_filters_card">
+                    <div className="flex items-center justify-between">
+                      <div className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
+                        <Filter className="w-4 h-4 text-indigo-505" />
+                        全域线路多维智能过滤器 & 全天候排查
+                      </div>
+                      <span className="text-[10px] bg-indigo-50 text-indigo-700 px-2.5 py-0.5 rounded-full font-bold">
+                        覆盖全站 {channels.reduce((acc, c) => acc + (c.sources ? c.sources.length : 0), 0)} 条活跃广播流
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                      <div className="space-y-1.5">
+                        <label className="text-[10px] uppercase font-bold text-slate-400 block">搜索频道或流链接</label>
+                        <div className="relative">
+                          <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                          <input 
+                            type="text"
+                            value={globalSourceSearch}
+                            onChange={(e) => setGlobalSourceSearch(e.target.value)}
+                            placeholder="如: cctv, m3u8, rst..."
+                            className="w-full text-xs pl-8 pr-3 p-2.5 border border-slate-200 rounded-xl bg-slate-50 focus:outline-none focus:border-indigo-500"
+                          />
+                        </div>
+                      </div>
+                      <div className="space-y-1.5">
+                        <label className="text-[10px] uppercase font-bold text-slate-400 block">按归属运营商 (ISP)</label>
+                        <select
+                          value={globalSourceIsp}
+                          onChange={(e) => setGlobalSourceIsp(e.target.value)}
+                          className="w-full text-xs p-2.5 border border-slate-200 rounded-xl bg-slate-50 focus:outline-none focus:border-indigo-500 font-bold"
+                        >
+                          <option value="all">所有运营商类型 (不限)</option>
+                          <option value="电信">🟢 中国电信 (Telecom)</option>
+                          <option value="联通">🔴 中国联通 (Unicom)</option>
+                          <option value="移动">🔵 中国移动 (Mobile)</option>
+                          <option value="广电">🟣 中国广电 (Broadcast)</option>
+                          <option value="BGP">🌐 多线 BGP 专网</option>
+                          {allUniqueIspOptions.filter(x => !["电信", "联通", "移动", "广电", "BGP"].includes(x)).map(x => (
+                            <option key={x} value={x}>{x}</option>
+                          ))}
+                        </select>
+                      </div>
+                      <div className="space-y-1.5">
+                        <label className="text-[10px] uppercase font-bold text-slate-400 block">地区分区政企段 (Province)</label>
+                        <select
+                          value={globalSourceProvince}
+                          onChange={(e) => setGlobalSourceProvince(e.target.value)}
+                          className="w-full text-xs p-2.5 border border-slate-200 rounded-xl bg-slate-50 focus:outline-none focus:border-indigo-500 font-bold"
+                        >
+                          <option value="all">所有省份地区 (不限)</option>
+                          <option value="全国">⭐ 全国通用</option>
+                          {allUniqueProvinceOptions.filter(x => x !== "全国" && x !== "全国通用").map(x => (
+                            <option key={x} value={x}>{x}</option>
+                          ))}
+                        </select>
+                      </div>
+                      <div className="space-y-1.5">
+                        <label className="text-[10px] uppercase font-bold text-slate-400 block">物理线路网络状态</label>
+                        <select
+                          value={globalSourceStatus}
+                          onChange={(e) => setGlobalSourceStatus(e.target.value)}
+                          className="w-full text-xs p-2.5 border border-slate-200 rounded-xl bg-slate-50 focus:outline-none focus:border-indigo-500 font-bold"
+                        >
+                          <option value="all">全部网络状态 (不限)</option>
+                          <option value="active">🟢 稳定连通/活跃 (Active)</option>
+                          <option value="inactive">🔴 故障断连/失效 (Inactive)</option>
+                          <option value="checking">🟡 正在测试延迟 (Checking)</option>
+                          <option value="unknown">⚪ 未匹配测速 (Unknown)</option>
+                        </select>
+                      </div>
+                    </div>
+
+                    {(globalSourceSearch || globalSourceIsp !== "all" || globalSourceProvince !== "all" || globalSourceStatus !== "all") && (
+                      <div className="flex justify-between items-center pt-2 border-t border-slate-100">
+                        <span className="text-[10px] text-slate-400 font-semibold">🔍 当前筛选出 {filteredGlobalSources.length} 条符合物理描述的直播源</span>
+                        <button 
+                          onClick={() => {
+                            setGlobalSourceSearch("");
+                            setGlobalSourceIsp("all");
+                            setGlobalSourceProvince("all");
+                            setGlobalSourceStatus("all");
+                          }}
+                          className="text-xs font-bold text-slate-500 hover:text-indigo-650 flex items-center gap-1.5 transition-all cursor-pointer"
+                        >
+                          <RefreshCw className="w-3.5 h-3.5" />
+                          清空当前过滤条件
+                        </button>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Batch Actions Bar for Global Sources */}
+                  {selectedGlobalSourceIds.length > 0 && (
+                    <div className="bg-indigo-50/50 border border-indigo-100 p-5 rounded-2xl flex flex-col md:flex-row gap-4 items-center justify-between shadow-xs animate-slide-in" id="global_sources_batch_bar">
+                      <div className="flex items-center gap-3">
+                        <div className="w-10 h-10 rounded-xl bg-indigo-600 text-white flex items-center justify-center font-bold font-mono shadow-md shadow-indigo-650/10">
+                          {selectedGlobalSourceIds.length}
+                        </div>
+                        <div>
+                          <div className="text-xs font-black text-indigo-950">跨频道批量操控生效中</div>
+                          <p className="text-[10px] text-indigo-700 font-semibold mt-0.5">您已选定了多个电视频道的直播拉流。您可以将其一键删除、跨地域归属修改或调度测速。</p>
+                        </div>
+                      </div>
+
+                      <div className="flex flex-wrap gap-2">
+                        <button
+                          onClick={() => {
+                            setBatchGlobalSourceForm({ isp: "", province: "", status: "" });
+                            setIsBatchGlobalSourceModalOpen(true);
+                          }}
+                          className="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold px-4 py-2.5 rounded-xl transition shadow-md shadow-indigo-500/10 cursor-pointer flex items-center gap-1.5"
+                        >
+                          <Layers className="w-3.5 h-3.5" />
+                          批量套用属性
+                        </button>
+                        <button
+                          onClick={handleGlobalBatchTest}
+                          className="bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold px-4 py-2.5 rounded-xl transition shadow-md shadow-blue-500/10 cursor-pointer flex items-center gap-1.5"
+                        >
+                          <Zap className="w-3.5 h-3.5" />
+                          对齐多线程测速
+                        </button>
+                        <button
+                          onClick={handleGlobalBatchDelete}
+                          className="bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold px-4 py-2.5 rounded-xl transition shadow-md shadow-rose-500/10 cursor-pointer flex items-center gap-1.5"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                          一键批量强制清空
+                        </button>
+                        <button
+                          onClick={() => setSelectedGlobalSourceIds([])}
+                          className="bg-white border border-slate-200 hover:bg-slate-50 text-slate-500 text-xs font-bold px-4 py-2.5 rounded-xl transition-all cursor-pointer shadow-xs"
+                        >
+                          取消选择
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* List / Table of Global Sources */}
+                  <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden" id="global_sources_list_card">
+                    {filteredGlobalSources.length === 0 ? (
+                      <div className="text-center py-20 bg-slate-50/20 m-4 rounded-xl border-2 border-dashed border-slate-100 flex flex-col items-center justify-center">
+                        <Compass className="w-12 h-12 text-slate-300 stroke-[1.2] mb-3" />
+                        <h4 className="font-bold text-slate-800 text-sm">未能找到匹配任何流媒体线路</h4>
+                        <p className="text-[11px] text-slate-400 mt-1 max-w-sm leading-relaxed font-semibold">无满足当前运营商、省份、连通性及搜素输入限制的物理线路，请清理当前过滤器重试。</p>
+                      </div>
+                    ) : (
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-left border-collapse" id="global_sources_table">
+                          <thead>
+                            <tr className="border-b border-slate-100 bg-slate-50/60 text-[10px] uppercase font-bold text-slate-400 tracking-wider">
+                              <th className="py-4 px-4 w-12 text-center">
+                                <input 
+                                  type="checkbox"
+                                  className="w-4 h-4 text-indigo-650 border-slate-300 rounded focus:ring-indigo-500 cursor-pointer"
+                                  checked={filteredGlobalSources.length > 0 && filteredGlobalSources.every(s => selectedGlobalSourceIds.includes(s.id))}
+                                  onChange={(e) => {
+                                    if (e.target.checked) {
+                                      const allIds = filteredGlobalSources.map(s => s.id);
+                                      setSelectedGlobalSourceIds(prev => Array.from(new Set([...prev, ...allIds])));
+                                    } else {
+                                      const allIds = filteredGlobalSources.map(s => s.id);
+                                      setSelectedGlobalSourceIds(prev => prev.filter(id => !allIds.includes(id)));
+                                    }
+                                  }}
+                                />
+                              </th>
+                              <th className="py-4 px-3 w-48">所属电视频道</th>
+                              <th className="py-4 px-3">全量播放播放源链接</th>
+                              <th className="py-4 px-3 w-32">运营商 (ISP)</th>
+                              <th className="py-4 px-3 w-32">地区省份</th>
+                              <th className="py-4 px-3 w-32">网络连通状态</th>
+                              <th className="py-4 px-4 w-32 text-right">线路日常管理</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100 text-xs text-slate-650">
+                            {filteredGlobalSources.map((item) => {
+                              const isChecked = selectedGlobalSourceIds.includes(item.id);
+                              return (
+                                <tr key={item.id} className={`hover:bg-slate-50/50 transition-colors ${isChecked ? "bg-indigo-50/20" : ""}`}>
+                                  <td className="py-3.5 px-4 text-center">
+                                    <input 
+                                      type="checkbox"
+                                      className="w-4 h-4 text-indigo-650 border-slate-300 rounded focus:ring-indigo-500 cursor-pointer"
+                                      checked={isChecked}
+                                      onChange={(e) => {
+                                        if (e.target.checked) {
+                                          setSelectedGlobalSourceIds(prev => [...prev, item.id]);
+                                        } else {
+                                          setSelectedGlobalSourceIds(prev => prev.filter(id => id !== item.id));
+                                        }
+                                      }}
+                                    />
+                                  </td>
+                                  <td className="py-3.5 px-3">
+                                    <div className="flex items-center gap-2">
+                                      {item.channelLogo ? (
+                                        <img src={item.channelLogo} alt={item.channelName} className="w-5.5 h-5.5 object-contain bg-slate-50 rounded border border-slate-100 p-0.5 shrink-0" referrerPolicy="no-referrer" />
+                                      ) : (
+                                        <div className="w-5.5 h-5.5 rounded bg-slate-100 text-[10px] font-black flex items-center justify-center text-slate-400 font-mono p-0.5">TV</div>
+                                      )}
+                                      <div className="truncate max-w-[140px]">
+                                        <span className="font-extrabold text-slate-800 text-xs block truncate" title={item.channelName}>{item.channelName}</span>
+                                      </div>
+                                    </div>
+                                  </td>
+                                  <td className="py-3.5 px-3 font-mono">
+                                    <div className="flex items-center gap-2">
+                                      <span className="truncate max-w-sm block text-slate-500 select-all font-semibold" title={item.url}>{item.url}</span>
+                                      <button 
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          navigator.clipboard.writeText(item.url);
+                                          showFeedback("success", "直播源拉流链接已拷贝！");
+                                        }}
+                                        className="p-1 hover:bg-slate-100 text-slate-400 hover:text-slate-700 rounded transition"
+                                        title="拷贝流地址"
+                                      >
+                                        <Copy className="w-3.5 h-3.5" />
+                                      </button>
+                                    </div>
+                                  </td>
+                                  <td className="py-3.5 px-3">
+                                    <span className={`inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-black border ${
+                                      item.isp === "电信" ? "bg-sky-50 text-sky-700 border-sky-100" :
+                                      item.isp === "联通" ? "bg-orange-50 text-orange-700 border-orange-100" :
+                                      item.isp === "移动" ? "bg-emerald-50 text-emerald-700 border-emerald-100" :
+                                      item.isp === "广电" ? "bg-purple-50 text-purple-700 border-purple-100" : "bg-slate-50 text-slate-600 border-slate-150"
+                                    }`}>
+                                      {item.isp || "BGP"}
+                                    </span>
+                                  </td>
+                                  <td className="py-3.5 px-3">
+                                    <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-extrabold bg-slate-100 text-slate-700 border border-slate-200">
+                                      {item.province || "全国"}
+                                    </span>
+                                  </td>
+                                  <td className="py-3.5 px-3">
+                                    <div className="flex items-center gap-2">
+                                      <span className={`w-2 h-2 rounded-full ${
+                                        item.status === "active" ? "bg-emerald-500 shadow-xs shadow-emerald-500" :
+                                        item.status === "inactive" ? "bg-rose-500 shadow-xs shadow-rose-500" :
+                                        item.status === "checking" ? "bg-amber-500 animate-pulse shadow-xs shadow-amber-500" : "bg-slate-350"
+                                      }`} />
+                                      <span className="font-extrabold text-slate-700">
+                                        {item.status === "active" ? "极速/可用" :
+                                         item.status === "inactive" ? "不可连通/离线" :
+                                         item.status === "checking" ? "正在探测延迟" : "未测速/未知"}
+                                      </span>
+                                      {item.latency !== undefined && (
+                                        <span className="text-[10px] text-slate-400 font-black font-mono">({item.latency}ms)</span>
+                                      )}
+                                    </div>
+                                  </td>
+                                  <td className="py-3.5 px-4 text-right space-x-2.5">
+                                    <button 
+                                      onClick={async (e) => {
+                                        e.stopPropagation();
+                                        try {
+                                          const res = await fetch("/api/sources/test", {
+                                            method: "POST",
+                                            headers: { "Content-Type": "application/json" },
+                                            body: JSON.stringify({ sourceIds: [item.id] })
+                                          });
+                                          if (res.ok) {
+                                            showFeedback("success", "已向后台提交独立测速...");
+                                            fetchData();
+                                          } else {
+                                            showFeedback("error", "测速指令异常");
+                                          }
+                                        } catch (_) {
+                                          showFeedback("error", "连接通信故障");
+                                        }
+                                      }}
+                                      className="text-[11px] font-bold text-indigo-600 hover:text-indigo-800 hover:underline cursor-pointer transition-all"
+                                    >
+                                      测速
+                                    </button>
+                                    <button 
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        const c = channels.find(ch => ch.id === item.channelId);
+                                        if (c) {
+                                          setSelectedChannel(c);
+                                          setEditingSource(item);
+                                          setSourceForm({
+                                            url: item.url,
+                                            province: item.province || "全国",
+                                            isp: item.isp || "BGP"
+                                          });
+                                          setIsSourceModalOpen(true);
+                                        }
+                                      }}
+                                      className="text-[11px] font-bold text-blue-600 hover:text-blue-800 hover:underline cursor-pointer transition-all"
+                                    >
+                                      编辑
+                                    </button>
+                                    <button 
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        const c = channels.find(ch => ch.id === item.channelId);
+                                        if (!c) return;
+                                        triggerConfirm(
+                                          "删除直播流线路",
+                                          `您即将从电视频道 [${c.name}] 中永久物理删除此条拉流线路。确认后数据无法撤回！`,
+                                          async () => {
+                                            try {
+                                              const res = await fetch(`/api/channels/${c.id}/sources/${item.id}`, {
+                                                method: "DELETE"
+                                              });
+                                              if (res.ok) {
+                                                showFeedback("success", "直播线路已断开连接并物理移除");
+                                                fetchData();
+                                              } else {
+                                                showFeedback("error", "移除直播线路失败");
+                                              }
+                                            } catch (_) {
+                                              showFeedback("error", "连接通信失效");
+                                            }
+                                          }
+                                        );
+                                      }}
+                                      className="text-[11px] font-bold text-rose-500 hover:text-rose-700 hover:underline cursor-pointer transition-all"
+                                    >
+                                      删除
+                                    </button>
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </div>
+                </div>
               )}
             </div>
           )}
@@ -2743,6 +3304,91 @@ export default function App() {
           </div>
         </div>
       )}
+
+      {/* 3.3. Modal Dialog: Global Batch Update Playback Sources ISP / Province / Status */}
+      {isBatchGlobalSourceModalOpen && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 font-sans" id="batch_global_source_modal">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-100 space-y-5 flex flex-col animate-fade-in">
+            <div className="flex justify-between items-center">
+              <h3 className="text-sm font-bold text-slate-800">全域批量修改 {selectedGlobalSourceIds.length} 条播放线路属性</h3>
+              <button 
+                className="text-slate-400 hover:text-slate-600 font-bold" 
+                onClick={() => setIsBatchGlobalSourceModalOpen(false)}
+              >
+                ✕
+              </button>
+            </div>
+            
+            <form onSubmit={handleGlobalBatchUpdateSubmit} className="space-y-4 text-xs font-semibold text-slate-600">
+              <div className="space-y-3">
+                <div className="space-y-1.5">
+                  <label className="text-slate-700 block">目标运营商 (ISP)</label>
+                  <select
+                    value={batchGlobalSourceForm.isp}
+                    onChange={(e) => setBatchGlobalSourceForm({ ...batchGlobalSourceForm, isp: e.target.value })}
+                    className="w-full text-xs p-2.5 border border-slate-200 rounded-xl bg-slate-50 focus:outline-none focus:border-indigo-500 font-bold"
+                  >
+                    <option value="">-- 保持原样 (不作修改) --</option>
+                    <option value="电信">中国电信</option>
+                    <option value="联通">中国联通</option>
+                    <option value="移动">中国移动</option>
+                    <option value="广电">中国广电</option>
+                    <option value="BGP">多线 BGP 专线</option>
+                    <option value="其它">其它</option>
+                  </select>
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="text-slate-700 block">省份归属 (Province)</label>
+                  <input 
+                    type="text"
+                    value={batchGlobalSourceForm.province}
+                    onChange={(e) => setBatchGlobalSourceForm({ ...batchGlobalSourceForm, province: e.target.value })}
+                    placeholder="如：浙江、北京、全国 (留空代表：保持原样/不作处理)"
+                    className="w-full text-xs p-2.5 border border-slate-200 rounded-xl focus:border-indigo-500 bg-slate-50 focus:outline-none font-bold"
+                  />
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="text-slate-700 block">线路可用状态 (Status)</label>
+                  <select
+                    value={batchGlobalSourceForm.status}
+                    onChange={(e) => setBatchGlobalSourceForm({ ...batchGlobalSourceForm, status: e.target.value })}
+                    className="w-full text-xs p-2.5 border border-slate-200 rounded-xl bg-slate-50 focus:outline-none focus:border-indigo-500 font-bold"
+                  >
+                    <option value="">-- 保持原样 (不作修改) --</option>
+                    <option value="active">🟢 保持健康/活跃 (Active)</option>
+                    <option value="inactive">🔴 设为故障/失效 (Inactive)</option>
+                    <option value="checking">🟡 设为正在测速中 (Checking)</option>
+                    <option value="unknown">⚪ 设为未知状态 (Unknown)</option>
+                  </select>
+                </div>
+                
+                <p className="text-[10px] text-slate-400 font-medium font-sans mt-2 leading-relaxed">
+                  提示：留空或选择默认选项的属性将不会覆盖原有信息，只有指定好的属性值才会批量应用覆盖到所有选定线路。
+                </p>
+              </div>
+
+              <div className="flex gap-3 pt-3">
+                <button 
+                  type="button" 
+                  onClick={() => setIsBatchGlobalSourceModalOpen(false)}
+                  className="w-1/3 py-2.5 border border-slate-200 hover:bg-slate-50 text-slate-605 rounded-xl cursor-pointer text-center font-bold"
+                >
+                  取消
+                </button>
+                <button 
+                  type="submit" 
+                  className="w-2/3 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-slate-50 rounded-xl cursor-pointer text-center font-bold shadow-md shadow-indigo-150"
+                >
+                  确认批量应用修改
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
       {confirmModal && confirmModal.isOpen && (
         <div className="fixed inset-0 z-[100] bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4" id="confirm_modal_popup">
           <div className="bg-white rounded-2xl max-w-sm w-full p-6 shadow-2xl border border-slate-150 space-y-4 flex flex-col animate-fade-in animate-duration-200">
