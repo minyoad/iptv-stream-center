@@ -1,0 +1,13 @@
+services:
+  iptv-manager:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: iptv-channel-manager
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=production

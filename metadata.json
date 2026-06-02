@@ -1,0 +1,6 @@
+{
+  "name": "IPTV Channel & Source Manager",
+  "description": "一个功能齐全的IPTV渠道和直播源管理系统，支持一键并发测速、M3U/TXT自动导入、GitHub定时同步、EPG频道元数据匹配，并提供自定义播放接口和Web编辑导出功能。",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
