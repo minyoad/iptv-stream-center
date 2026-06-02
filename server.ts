@@ -12,6 +12,8 @@ interface LiveSource {
   status: "active" | "inactive" | "unknown" | "checking";
   latency?: number;
   lastChecked?: string;
+  clientIspReported?: string;
+  clientProvinceReported?: string;
 }
 
 interface Group {
@@ -1590,7 +1592,7 @@ async function startServer() {
 
   // Link validation & latency speed checking triggered by browser
   app.post("/api/sources/test", (req, res) => {
-    const { sourceIds, channelIds, concurrency } = req.body;
+    const { sourceIds, channelIds, concurrency, isp, province, status } = req.body;
 
     if (testStatus.status === "running") {
       return res.status(400).json({ error: "已有正在运行的批量测速任务" });
@@ -1602,7 +1604,12 @@ async function startServer() {
     channels.forEach((channel) => {
       if (channelIds && !channelIds.includes(channel.id)) return;
       channel.sources.forEach((source) => {
+        // Apply filter constraints if specified
         if (sourceIds && !sourceIds.includes(source.id)) return;
+        if (isp && isp !== "all" && source.isp !== isp) return;
+        if (province && province !== "all" && source.province !== province) return;
+        if (status && status !== "all" && source.status !== status) return;
+
         targetSources.push({
           id: source.id,
           channelId: channel.id,
@@ -1612,7 +1619,7 @@ async function startServer() {
     });
 
     if (targetSources.length === 0) {
-      return res.status(400).json({ error: "未选择可用的直播源进行测试" });
+      return res.status(400).json({ error: "未选择或未检索到符合过滤条件的直播源进行测试" });
     }
 
     // Run task asynchronously
@@ -1627,6 +1634,41 @@ async function startServer() {
         status: "running"
       }
     });
+  });
+
+  // Option 2: Endpoint for client-side/browser speed test report submission
+  app.post("/api/sources/client-test-results", (req, res) => {
+    const { results, clientIsp, clientProvince } = req.body;
+    if (!Array.isArray(results) || results.length === 0) {
+      return res.status(400).json({ error: "请提供有效的客户端代测结果报告数据" });
+    }
+
+    let updatedCount = 0;
+    results.forEach((r: any) => {
+      const { sourceId, channelId, status, latency } = r;
+      if (!sourceId || !status) return;
+
+      channels.forEach((c) => {
+        if (channelId && c.id !== channelId) return;
+        const src = c.sources.find((s) => s.id === sourceId);
+        if (src) {
+          src.status = status;
+          if (latency !== undefined) {
+            src.latency = latency;
+          }
+          src.lastChecked = new Date().toISOString();
+          // Annotate that it's validated by local client ISP
+          src.clientIspReported = clientIsp || "宿主";
+          src.clientProvinceReported = clientProvince || "本地";
+          updatedCount++;
+        }
+      });
+    });
+
+    if (updatedCount > 0) {
+      saveData();
+    }
+    res.json({ success: true, count: updatedCount });
   });
 
   app.get("/api/sources/test-status", (req, res) => {

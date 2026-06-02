@@ -112,6 +112,16 @@ export default function App() {
     status: ""
   });
 
+  // Option 2 Client Local Speed Test engine and dynamic state
+  const [isClientTesting, setIsClientTesting] = useState(false);
+  const [clientTestProgress, setClientTestProgress] = useState(0);
+  const [clientTestTotal, setClientTestTotal] = useState(0);
+  const [clientTestResults, setClientTestResults] = useState<{ sourceId: string; channelId: string; url: string; status: "active" | "inactive"; latency: number }[]>([]);
+  const [clientTestIsp, setClientTestIsp] = useState("电信");
+  const [clientTestProvince, setClientTestProvince] = useState("上海");
+  const [showApiDoc, setShowApiDoc] = useState(false);
+  const [clientThreadCount, setClientThreadCount] = useState(4); // concurrent threads for client probe testing
+
   // Custom iframe-safe Confirmation Modal state
   const [confirmModal, setConfirmModal] = useState<{
     isOpen: boolean;
@@ -817,6 +827,114 @@ export default function App() {
       }
     } catch (e) {
       showFeedback("error", "发起测速请求异常");
+    }
+  };
+
+  const runClientSideProbeTest = async () => {
+    const listToTest = selectedGlobalSourceIds.length > 0
+      ? filteredGlobalSources.filter((s) => selectedGlobalSourceIds.includes(s.id))
+      : filteredGlobalSources;
+
+    if (listToTest.length === 0) {
+      showFeedback("info", "当前匹配的可测速线路为空");
+      return;
+    }
+
+    setIsClientTesting(true);
+    setClientTestProgress(0);
+    setClientTestTotal(listToTest.length);
+    setClientTestResults([]);
+
+    const queue = [...listToTest];
+    const resultsTemp: { sourceId: string; channelId: string; url: string; status: "active" | "inactive"; latency: number }[] = [];
+    let processedCount = 0;
+
+    const runWorker = async () => {
+      while (queue.length > 0) {
+        const item = queue.shift();
+        if (!item) continue;
+
+        const startTime = Date.now();
+        const controller = new AbortController();
+        const timer = setTimeout(() => {
+          controller.abort();
+        }, 2500); // 2.5s Timeout limit to keep feedback fast
+
+        let status: "active" | "inactive" = "inactive";
+        let latency = 9999;
+
+        try {
+          // Bypassing cors errors for active checking
+          await fetch(item.url, {
+            method: "GET",
+            mode: "no-cors",
+            cache: "no-cache",
+            signal: controller.signal
+          });
+          clearTimeout(timer);
+          latency = Date.now() - startTime;
+          status = "active";
+        } catch (err: any) {
+          clearTimeout(timer);
+          // If the request was aborted, it means true offline/timeout.
+          // But if error is raised due to CORS restriction, it means the host responded fine!
+          if (err && err.name !== "AbortError") {
+            latency = Date.now() - startTime;
+            status = "active";
+          }
+        }
+
+        resultsTemp.push({
+          sourceId: item.id,
+          channelId: item.channelId,
+          url: item.url,
+          status,
+          latency: status === "active" ? latency : 9999
+        });
+
+        processedCount++;
+        setClientTestProgress(processedCount);
+        setClientTestResults([...resultsTemp]);
+      }
+    };
+
+    const countOfThreads = Math.min(clientThreadCount, listToTest.length);
+    const pool = Array.from({ length: countOfThreads }, runWorker);
+    await Promise.all(pool);
+
+    setIsClientTesting(false);
+    showFeedback("success", `本地局域网探针测速完成！共评估出 ${resultsTemp.filter(r => r.status === "active").length} 条活跃源。请点按 [同步本地评估报告到云端] 按钮使生效！`);
+  };
+
+  const submitClientSideProbeTest = async () => {
+    if (clientTestResults.length === 0) {
+      showFeedback("error", "暂无可用于同步的测试结果");
+      return;
+    }
+
+    try {
+      const res = await fetch("/api/sources/client-test-results", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          results: clientTestResults,
+          clientIsp: clientTestIsp,
+          clientProvince: clientTestProvince
+        })
+      });
+
+      if (res.ok) {
+        showFeedback("success", `已完美回传 ${clientTestResults.length} 条本地探针检测性能到主服务器，直播源数据库配置已完成热更新`);
+        setClientTestResults([]);
+        setClientTestProgress(0);
+        setClientTestTotal(0);
+        fetchData();
+      } else {
+        const err = await res.json();
+        showFeedback("error", err.error || "回传测试数据被拒绝");
+      }
+    } catch (_) {
+      showFeedback("error", "无法连接远端云服务器接口");
     }
   };
 
@@ -1958,6 +2076,274 @@ export default function App() {
                       </div>
                     </div>
                   </div>
+
+                  {/* 双驱多维度 ISP 测速工作区 */}
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 bg-slate-50 p-6 rounded-2xl border border-slate-200" id="double_speed_test_center">
+                    
+                    {/* 方案一 Column: 服务端极速多线程测速 */}
+                    <div className="bg-white p-5 rounded-xl border border-slate-150 shadow-xs flex flex-col justify-between space-y-4" id="server_side_test_scheme">
+                      <div className="space-y-2">
+                        <div className="flex items-center gap-2">
+                          <span className="w-6 h-6 rounded-lg bg-indigo-50 text-indigo-600 flex items-center justify-center font-bold text-xs font-mono">①</span>
+                          <h4 className="font-extrabold text-slate-800 text-sm flex items-center gap-1.5 leading-snug">
+                            <Layers className="w-4 h-4 text-indigo-550 shrink-0" />
+                            方案一：服务端全网异步多线程测速（默认云端策略）
+                          </h4>
+                        </div>
+                        <p className="text-[11px] text-slate-500 leading-relaxed font-semibold">
+                          利用云端高带宽服务器容器，直接下发全局异步并发测速任务。可以通过下方的高级过滤器或选择列表精确隔离某一特定 ISP 线路进行分类发起！
+                        </p>
+                      </div>
+
+                      <div className="bg-slate-50/60 p-4 rounded-xl space-y-3.5 border border-slate-100 text-xs text-slate-650">
+                        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1.5">
+                          <span className="font-bold text-[11px] text-slate-600">并发线程数 (Concurrency)：</span>
+                          <div className="flex gap-1 shrink-0">
+                            {[4, 8, 16, 24, 32].map((num) => (
+                              <button
+                                key={num}
+                                onClick={() => setClientThreadCount(num)}
+                                className={`px-2 py-0.5 rounded text-[10px] font-black transition cursor-pointer ${
+                                  clientThreadCount === num ? "bg-indigo-600 text-white" : "bg-white text-slate-500 border border-slate-200 hover:bg-slate-50"
+                                }`}
+                              >
+                                {num}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+
+                        {testingStatus.status === "running" ? (
+                          <div className="space-y-2 py-1 animate-pulse">
+                            <div className="flex justify-between items-center text-[10px] font-black text-indigo-700">
+                              <span className="flex items-center gap-1">
+                                <Activity className="w-3.5 h-3.5 animate-spin text-indigo-550" />
+                                正在执行后端云测速中...
+                              </span>
+                              <span>{testingStatus.checked} / {testingStatus.total} ({Math.round((testingStatus.checked / (testingStatus.total || 1)) * 100)}%)</span>
+                            </div>
+                            <div className="w-full bg-slate-200 h-2 rounded-full overflow-hidden">
+                              <div 
+                                className="bg-indigo-600 h-full rounded-full transition-all duration-300"
+                                style={{ width: `${(testingStatus.checked / (testingStatus.total || 1)) * 100}%` }}
+                              />
+                            </div>
+                            <button
+                              onClick={async () => {
+                                try {
+                                  const res = await fetch("/api/sources/test-cancel", { method: "POST" });
+                                  if (res.ok) showFeedback("success", "已向后台终止测速");
+                                } catch (_) {}
+                              }}
+                              className="w-full py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-600 text-[10px] font-black rounded-lg transition text-center cursor-pointer"
+                            >
+                              🛑 强行终止云测速任务
+                            </button>
+                          </div>
+                        ) : (
+                          <div className="flex flex-col gap-2 pt-1">
+                            <button
+                              onClick={async () => {
+                                try {
+                                  const res = await fetch("/api/sources/test", {
+                                    method: "POST",
+                                    headers: { "Content-Type": "application/json" },
+                                    body: JSON.stringify({
+                                      concurrency: clientThreadCount,
+                                      isp: globalSourceIsp,
+                                      province: globalSourceProvince,
+                                      status: globalSourceStatus,
+                                      sourceIds: selectedGlobalSourceIds.length > 0 ? selectedGlobalSourceIds : undefined
+                                    })
+                                  });
+                                  if (res.ok) {
+                                    showFeedback("success", "已成功向后台发送过滤线路并发测速命令！");
+                                    setSelectedGlobalSourceIds([]);
+                                  } else {
+                                    const err = await res.json();
+                                    showFeedback("error", err.error || "提发测速失败");
+                                  }
+                                } catch (_) {
+                                  showFeedback("error", "连接故障");
+                                }
+                              }}
+                              className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold text-xs rounded-xl transition cursor-pointer shadow-md shadow-indigo-150 flex items-center justify-center gap-1.5"
+                            >
+                              <Zap className="w-4 h-4" />
+                              {selectedGlobalSourceIds.length > 0 
+                                ? `针对已选 ${selectedGlobalSourceIds.length} 条线路发起服务端测速` 
+                                : "针对当前过滤器匹配的所有线路下发测速"}
+                            </button>
+                            <p className="text-[10px] text-slate-400 font-medium leading-relaxed">
+                              💡 高频技巧：通过下方过滤器框选特定运营商或特定地域省份后，点按此按钮将只对该子类别的线路执行云测试。
+                            </p>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* 方案二 Column: 客户端浏览器探针代测 */}
+                    <div className="bg-white p-5 rounded-xl border border-slate-150 shadow-xs flex flex-col justify-between space-y-4" id="client_side_test_scheme">
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <span className="w-6 h-6 rounded-lg bg-sky-50 text-sky-600 flex items-center justify-center font-bold text-xs font-mono">②</span>
+                            <h4 className="font-extrabold text-slate-800 text-sm flex items-center gap-1.5 leading-snug">
+                              <Compass className="w-4 h-4 text-sky-500 shrink-0" />
+                              方案二：本地浏览器探针代测（极星边缘探测网络）
+                            </h4>
+                          </div>
+                          <span className="text-[9px] bg-sky-100 text-sky-700 px-2 py-0.5 rounded-full font-bold">100% 契合播本地</span>
+                        </div>
+                        <p className="text-[11px] text-slate-500 leading-relaxed font-semibold">
+                          在您的本地电脑/播放器上直接发起底层探测，完美测量您的家庭宽带（或特定城市段）向对端 IPTV 源的真实握手延迟。支持一键上报云端同步使生效。
+                        </p>
+                      </div>
+
+                      <div className="bg-slate-50/60 p-4 rounded-xl space-y-3.5 border border-slate-100 text-xs text-slate-650" id="client_engine_console">
+                        <div className="grid grid-cols-2 gap-3">
+                          <div className="space-y-1">
+                            <label className="text-[10px] font-black text-slate-400 block pb-0.5">本地宽带所属运营商</label>
+                            <select
+                              value={clientTestIsp}
+                              onChange={(e) => setClientTestIsp(e.target.value)}
+                              className="w-full text-xs p-2 border border-slate-200 rounded-lg bg-white focus:outline-none focus:border-sky-500 font-bold text-slate-700"
+                            >
+                              <option value="电信">中国电信 (Telecom)</option>
+                              <option value="联通">中国联通 (Unicom)</option>
+                              <option value="移动">中国移动 (Mobile)</option>
+                              <option value="广电">中国广电 (Broadcast)</option>
+                              <option value="BGP">三线 BGP 专线</option>
+                              <option value="其它">其它网络</option>
+                            </select>
+                          </div>
+                          <div className="space-y-1">
+                            <label className="text-[10px] font-black text-slate-400 block pb-0.5">探针物理省份/归属</label>
+                            <input
+                              type="text"
+                              value={clientTestProvince}
+                              onChange={(e) => setClientTestProvince(e.target.value)}
+                              placeholder="如：杭州、北京、四川"
+                              className="w-full text-xs p-2 border border-slate-200 rounded-lg bg-white focus:outline-none focus:border-sky-500 font-bold text-slate-700"
+                            />
+                          </div>
+                        </div>
+
+                        {isClientTesting ? (
+                          <div className="space-y-2 py-1">
+                            <div className="flex justify-between items-center text-[10px] font-black text-sky-700">
+                              <span className="flex items-center gap-1 animate-pulse">
+                                <Activity className="w-3.5 h-3.5 animate-spin text-sky-500" />
+                                浏览器探针深度评估中...
+                              </span>
+                              <span>{clientTestProgress} / {clientTestTotal} ({Math.round((clientTestProgress / (clientTestTotal || 1)) * 100)}%)</span>
+                            </div>
+                            <div className="w-full bg-slate-200 h-2 rounded-full overflow-hidden">
+                              <div 
+                                className="bg-sky-550 h-full rounded-full transition-all duration-300"
+                                style={{ width: `${(clientTestProgress / (clientTestTotal || 1)) * 100}%` }}
+                              />
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="flex flex-col gap-2 pt-1">
+                            <div className="flex gap-2">
+                              <button
+                                onClick={runClientSideProbeTest}
+                                className="flex-1 py-2.5 bg-sky-600 hover:bg-sky-700 text-white font-extrabold text-[11px] rounded-xl transition cursor-pointer flex items-center justify-center gap-1.5 shrink-0"
+                              >
+                                <Play className="w-3.5 h-3.5" />
+                                {selectedGlobalSourceIds.length > 0 
+                                  ? `运行已选 ${selectedGlobalSourceIds.length} 条代测` 
+                                  : "启动当前匹配项代测"}
+                              </button>
+                              
+                              {clientTestResults.length > 0 && (
+                                <button
+                                  onClick={submitClientSideProbeTest}
+                                  className="flex-1 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-[11px] rounded-xl transition cursor-pointer flex items-center justify-center gap-1.5 shadow-md shadow-emerald-100 shrink-0"
+                                >
+                                  <UploadCloud className="w-3.5 h-3.5" />
+                                  同步评估报告 ({clientTestResults.length})
+                                </button>
+                              )}
+                            </div>
+
+                            <div className="flex justify-between items-center pt-1 leading-snug">
+                              <span className="text-[10px] text-slate-400 font-bold truncate max-w-[150px]">
+                                {clientTestResults.length > 0 
+                                  ? `已采集: ${clientTestResults.filter(k => k.status === 'active').length} 条健康` 
+                                  : "等待触发检测"}
+                              </span>
+                              
+                              <button
+                                onClick={() => setShowApiDoc(!showApiDoc)}
+                                className="text-[10px] text-indigo-600 hover:underline hover:text-indigo-800 font-bold flex items-center gap-1 cursor-pointer"
+                              >
+                                <FileText className="w-3 h-3" />
+                                {showApiDoc ? "关闭 API 文档说明" : "阅读 API 接口定义文档"}
+                              </button>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                  </div>
+
+                  {/* 针对方案二的可扩展报告开放接口说明书 Accordion */}
+                  {showApiDoc && (
+                    <div className="bg-slate-900 text-slate-100 p-6 rounded-2xl border border-slate-800 space-y-4 shadow-2xl animate-fade-in font-mono text-xs" id="api_developer_docs_panel">
+                      <div className="flex justify-between items-center pb-2 border-b border-slate-800">
+                        <div className="flex items-center gap-1.5 text-indigo-400 font-black text-xs">
+                          <Database className="w-4 h-4 text-indigo-400" />
+                          方案二：客户端/边缘硬件探针接口文档 (CLIENT PROBE SUBMISSION PROTOCOL)
+                        </div>
+                        <button 
+                          onClick={() => setShowApiDoc(false)} 
+                          className="bg-slate-800 hover:bg-slate-700 text-slate-450 hover:text-slate-100 px-3 py-1 bg-slate-850 rounded text-[10px] font-black cursor-pointer"
+                        >
+                          ✕ 关闭文档
+                        </button>
+                      </div>
+
+                      <div className="space-y-3.5 text-slate-300 leading-relaxed font-sans shrink-0">
+                        <p className="text-xs font-semibold">
+                          我们提供高标准的开放 API 接口。任何外界硬件探针、机顶盒或定时脚本（如 Cron 命令行代测、Kodi 测速插件、TvBox 本地测速包）均可直接批量向该网关发送性能报告，自动重洗对应的健康度和延迟值！
+                        </p>
+
+                        <div className="space-y-1 bg-slate-950 p-3 rounded-xl border border-slate-800 text-[11px] font-mono">
+                          <span className="text-emerald-400 font-bold block pb-1">1. 接口网关地址 (URI Endpoint)：</span>
+                          <span className="text-white font-extrabold pr-2">POST</span>
+                          <span className="text-indigo-300 select-all">/api/sources/client-test-results</span>
+                        </div>
+
+                        <div className="space-y-1 bg-slate-950 p-3 rounded-xl border border-slate-800 text-[11px] font-mono">
+                          <span className="text-emerald-400 font-bold block pb-1">2. 协议 Payload 结构体 (Request Body JSON Schema)：</span>
+                          <pre className="text-indigo-300 leading-snug overflow-x-auto select-all text-[10.5px]">
+{`{
+  "clientIsp": "中国电信",      // [必填] 本次测速探针网络的归属运营商名称
+  "clientProvince": "广东",     // [选填] 代测网络省市归属
+  "results": [                 // [必填] 测速实体报告数据数组
+    {
+      "sourceId": "src_8f2a10",         // 直播源线路物理唯一 ID
+      "channelId": "ch_cctv1",          // 对应电视频道 ID
+      "status": "active",               // 可用状态: "active"(可用) / "inactive"(断流/故障)
+      "latency": 154                    // 测试得出的延迟，单位 ms
+    }
+  ]
+}`}
+                          </pre>
+                        </div>
+
+                        <div className="space-y-2 bg-slate-950 p-3 rounded-xl border border-slate-800 text-[11px] font-mono">
+                          <span className="text-emerald-400 font-bold block pb-1">3. 云端返回体样例 (Response Code & Format)：</span>
+                          <span className="text-slate-400 leading-snug font-sans block">完成更新后返回 200 OK 实有更新数：</span>
+                          <span className="text-emerald-300 block select-all">{`{"success": true, "count": 1}`}</span>
+                        </div>
+                      </div>
+                    </div>
+                  )}
 
                   {/* Multi-Dimensional Filters Card */}
                   <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-xs space-y-4" id="global_sources_filters_card">

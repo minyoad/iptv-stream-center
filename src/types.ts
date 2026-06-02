@@ -6,6 +6,8 @@ export interface LiveSource {
   status: "active" | "inactive" | "unknown" | "checking";
   latency?: number;
   lastChecked?: string;
+  clientIspReported?: string;
+  clientProvinceReported?: string;
 }
 
 export interface Group {
