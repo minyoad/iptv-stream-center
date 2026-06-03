@@ -1675,6 +1675,61 @@ async function startServer() {
     res.json(testStatus);
   });
 
+  // Detect client IP information (ISP and Province)
+  app.get("/api/sources/detect-ip", async (req, res) => {
+    try {
+      let clientIp = req.headers["x-forwarded-for"] || req.socket.remoteAddress || "127.0.0.1";
+      if (Array.isArray(clientIp)) {
+        clientIp = clientIp[0];
+      }
+      if (typeof clientIp === "string" && clientIp.includes(",")) {
+        clientIp = clientIp.split(",")[0].trim();
+      }
+      
+      if (clientIp === "::1" || clientIp === "::ffff:127.0.0.1") {
+        clientIp = "127.0.0.1";
+      }
+
+      let detectedIp = clientIp as string;
+      let province = "北京";
+      let isp = "电信";
+
+      const queryIp = detectedIp === "127.0.0.1" ? "" : detectedIp;
+      const url = `http://ip-api.com/json/${queryIp}?lang=zh-CN`;
+      const response = await fetch(url);
+      if (response.ok) {
+        const data = await response.json() as any;
+        if (data && data.status === "success") {
+          detectedIp = data.query || detectedIp;
+          if (data.regionName) {
+            province = data.regionName.replace(/(省|市|特别行政区|自治区|壮族自治区|回族自治区|维吾尔自治区|盟)/g, "");
+          }
+          const rawIsp = (data.isp || data.org || "").toLowerCase();
+          if (rawIsp.includes("telecom") || rawIsp.includes("chinanet") || rawIsp.includes("电信")) {
+            isp = "电信";
+          } else if (rawIsp.includes("unicom") || rawIsp.includes("联通")) {
+            isp = "联通";
+          } else if (rawIsp.includes("mobile") || rawIsp.includes("cmcc") || rawIsp.includes("移动")) {
+            isp = "移动";
+          } else if (rawIsp.includes("broadband") || rawIsp.includes("cable") || rawIsp.includes("广电") || rawIsp.includes("wasu")) {
+            isp = "广电";
+          } else {
+            // Check for names like 'china mobile' directly
+            if (rawIsp.includes("china mobile")) isp = "移动";
+            else if (rawIsp.includes("china unicom")) isp = "联通";
+            else if (rawIsp.includes("china telecom")) isp = "电信";
+            else isp = "其它";
+          }
+        }
+      }
+      
+      res.json({ ip: detectedIp, province, isp });
+    } catch (err: any) {
+      console.error("[IP Detect ERROR]:", err.message);
+      res.json({ ip: "127.0.0.1", province: "北京", isp: "电信" });
+    }
+  });
+
   // Stop running batch test
   app.post("/api/sources/test-cancel", (req, res) => {
     if (testStatus.status === "running") {

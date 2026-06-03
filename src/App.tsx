@@ -121,6 +121,8 @@ export default function App() {
   const [clientTestProvince, setClientTestProvince] = useState("上海");
   const [showApiDoc, setShowApiDoc] = useState(false);
   const [clientThreadCount, setClientThreadCount] = useState(4); // concurrent threads for client probe testing
+  const [isDetectingIp, setIsDetectingIp] = useState(false);
+  const [detectedIp, setDetectedIp] = useState("");
 
   // Custom iframe-safe Confirmation Modal state
   const [confirmModal, setConfirmModal] = useState<{
@@ -429,6 +431,41 @@ export default function App() {
       isMounted = false;
       if (timerId) clearTimeout(timerId);
     };
+  }, []);
+
+  const detectClientIpInfo = async (silent = false) => {
+    setIsDetectingIp(true);
+    try {
+      const res = await fetch("/api/sources/detect-ip");
+      if (res.ok) {
+        const info = await res.json();
+        if (info.ip) setDetectedIp(info.ip);
+        if (info.isp) {
+          const recognizedIsps = ["电信", "联通", "移动", "广电", "BGP"];
+          if (recognizedIsps.includes(info.isp)) {
+            setClientTestIsp(info.isp);
+          } else {
+            setClientTestIsp("其它");
+          }
+        }
+        if (info.province) {
+          setClientTestProvince(info.province);
+        }
+        if (!silent) {
+          showFeedback("success", `智能识别本地网络成功！检测到 IP: ${info.ip}，网络归属 [${info.province || ""}${info.isp || ""}]`);
+        }
+      } else {
+        if (!silent) showFeedback("error", "智能网络感探测接口被拒绝");
+      }
+    } catch (e) {
+      if (!silent) showFeedback("error", "无法自动匹配当前设备本地的省份/运营商线路，本轮请手动选择");
+    } finally {
+      setIsDetectingIp(false);
+    }
+  };
+
+  useEffect(() => {
+    detectClientIpInfo(true);
   }, []);
 
   const showFeedback = (type: "success" | "error" | "info", text: string) => {
@@ -2227,6 +2264,21 @@ export default function App() {
                               className="w-full text-xs p-2 border border-slate-200 rounded-lg bg-white focus:outline-none focus:border-sky-500 font-bold text-slate-700"
                             />
                           </div>
+                        </div>
+
+                        {/* 智能网络感知归属探测行 */}
+                        <div className="flex items-center justify-between text-[10.5px] text-slate-500 bg-slate-100/50 px-3 py-2 rounded-lg border border-slate-200/60 font-sans">
+                          <span className="font-bold flex items-center gap-1 text-slate-600">
+                            🌐 本地公网真实 IP: <span className="font-mono text-sky-650 font-black select-all">{detectedIp || "识别中..."}</span>
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => detectClientIpInfo(false)}
+                            disabled={isDetectingIp}
+                            className={`px-2.5 py-1 bg-white hover:bg-sky-50 hover:text-sky-700 border border-slate-200 hover:border-sky-300 rounded-md text-sky-600 font-black cursor-pointer transition flex items-center gap-1 text-[10px] ${isDetectingIp ? "animate-pulse" : ""}`}
+                          >
+                            {isDetectingIp ? "🎯 探测中..." : "🔄 自动感应本地网络"}
+                          </button>
                         </div>
 
                         {isClientTesting ? (
