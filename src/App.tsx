@@ -27,7 +27,7 @@ import {
   Database,
   Shield
 } from "lucide-react";
-import { Channel, LiveSource, SyncConfig, TestStatus, EpgGuide, Group } from "./types";
+import { Channel, LiveSource, SyncConfig, TestStatus, EpgGuide, Group, EpgSource } from "./types";
 import DashboardView from "./components/DashboardView";
 
 export default function App() {
@@ -37,6 +37,12 @@ export default function App() {
   const [githubProxy, setGithubProxy] = useState("");
   const [githubProxyInput, setGithubProxyInput] = useState("");
   const [isSavingProxy, setIsSavingProxy] = useState(false);
+  const [epgSources, setEpgSources] = useState<EpgSource[]>([]);
+  const [isEpgLoading, setIsEpgLoading] = useState(false);
+  const [epgForm, setEpgForm] = useState({ id: "", name: "", url: "", active: true });
+  const [isEpgFormOpen, setIsEpgFormOpen] = useState(false);
+  const [syncingEpgId, setSyncingEpgId] = useState<string | null>(null);
+  const [isSyncingAllEpg, setIsSyncingAllEpg] = useState(false);
   const [testingStatus, setTestingStatus] = useState<TestStatus>({ status: "idle", total: 0, checked: 0, results: [] });
   const [activeTab, setActiveTab] = useState<string>("dashboard"); // dashboard, channels, sync, export, epg
   const [channelSubTab, setChannelSubTab] = useState<"channels" | "groups" | "sources">("channels");
@@ -404,11 +410,29 @@ export default function App() {
         setGithubProxy(settingsData.githubProxy || "");
         setGithubProxyInput(settingsData.githubProxy || "");
       }
+      await fetchEpgSourcesInternal();
     } catch (err) {
       showFeedback("error", "连接服务器读取数据失败");
     } finally {
       setLoading(false);
     }
+  };
+
+  const fetchEpgSourcesInternal = async () => {
+    try {
+      const res = await fetch("/api/epg-sources");
+      if (res.ok) {
+        setEpgSources(await res.json());
+      }
+    } catch (err) {
+      console.error("Failed to load EPG sources", err);
+    }
+  };
+
+  const fetchEpgSources = async () => {
+    setIsEpgLoading(true);
+    await fetchEpgSourcesInternal();
+    setIsEpgLoading(false);
   };
 
   // Adaptive, resilient polling for testing status
@@ -1597,6 +1621,22 @@ export default function App() {
           </button>
 
           <button 
+            onClick={() => {
+              setActiveTab("epg");
+              fetchEpgSources();
+            }}
+            className={`w-full flex items-center gap-3.5 px-4 py-3 rounded-xl transition text-xs font-semibold ${
+              activeTab === "epg" 
+              ? "bg-blue-50/75 text-blue-700 font-bold" 
+              : "text-slate-500 hover:bg-slate-50 hover:text-slate-800"
+            }`}
+            id="nav_epg"
+          >
+            <Calendar className="w-4 h-4" />
+            EPG 节目单同步整合
+          </button>
+
+          <button 
             onClick={() => setActiveTab("backup")}
             className={`w-full flex items-center gap-3.5 px-4 py-3 rounded-xl transition text-xs font-semibold ${
               activeTab === "backup" 
@@ -1676,6 +1716,7 @@ export default function App() {
               {activeTab === "channels" && "频道列表与线路维护中心"}
               {activeTab === "sync" && "M3U / TXT 网络同步订阅与自定义文件导入"}
               {activeTab === "export" && "播放接口配置生成工具"}
+              {activeTab === "epg" && "EPG XML 国际电视频道节目单同步与多源整合合并中心"}
               {activeTab === "backup" && "数据备份与系统完整恢复"}
             </h1>
           </div>
@@ -3426,6 +3467,330 @@ export default function App() {
                 </div>
 
               </div>
+            </div>
+          )}
+
+          {/* VIEW: EPG MANAGEMENT & COLLOCATION */}
+          {activeTab === "epg" && (
+            <div className="space-y-8 animate-fade-in" id="tab_epg_view">
+              
+              {/* Header card explaining output and giving copyable output url */}
+              <div className="bg-slate-900 border border-slate-800 p-6 rounded-2xl text-white space-y-4" id="epg_header_info">
+                <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+                  <div className="space-y-1">
+                    <h4 className="font-bold text-sm flex items-center text-blue-400">
+                      <Calendar className="w-4 h-4 mr-2" /> EPG 节目单智能同步与全网整合合并服务
+                    </h4>
+                    <p className="text-xs text-slate-400 max-w-2xl">
+                      您可以添加多个外部 XMLTV/EPG 节目单来源。系统将自动批量拉取并将其解析为本地高速 JSON 缓存。在导出或查看 EPG 时，系统将会根据您频道的 EPG 标识符 (epgId) 智能交叉匹配、合并并合成最终独一无二的高速 EPG Feeds。
+                    </p>
+                  </div>
+                  <button
+                    onClick={async () => {
+                      setIsSyncingAllEpg(true);
+                      try {
+                        const res = await fetch("/api/epg-sources/sync-all", { method: "POST" });
+                        if (res.ok) {
+                          const data = await res.json();
+                          showFeedback("success", `合并成功！共对 ${data.count} 个源进行解析，其中 ${data.successCount} 个成功。`);
+                          fetchEpgSources();
+                        }
+                      } catch (err) {
+                        showFeedback("error", "一键拉取合并失败");
+                      } finally {
+                        setIsSyncingAllEpg(false);
+                      }
+                    }}
+                    disabled={isSyncingAllEpg}
+                    className="flex-shrink-0 flex items-center justify-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:bg-blue-800/80 disabled:text-slate-300 rounded-xl text-xs font-bold transition cursor-pointer text-white"
+                  >
+                    {isSyncingAllEpg ? (
+                      <>
+                        <span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin"></span>
+                        <span>正在拉取外部源并合并...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Zap className="w-3.5 h-3.5" />
+                        <span>一键全网同步合并所有激活源</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+
+                <div className="pt-4 border-t border-slate-800 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+                  <div className="space-y-0.5">
+                    <span className="text-[10px] text-slate-500 font-mono uppercase tracking-wider">整合输出 XMLTV EPG 接口</span>
+                    <p className="text-xs font-mono text-emerald-400">{getFullHostUrl()}/api/export/epg.xml</p>
+                  </div>
+                  <button
+                    onClick={() => {
+                      copyTextToClipboard(`${getFullHostUrl()}/api/export/epg.xml`);
+                      showFeedback("success", "已复制 EPG 输出接口链接");
+                    }}
+                    className="px-3.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold rounded-lg cursor-pointer transition"
+                  >
+                    复制最终聚合 EPG 链接
+                  </button>
+                </div>
+              </div>
+
+              {/* Source list management */}
+              <div className="space-y-4">
+                <div className="flex justify-between items-center bg-slate-50/85 p-4 rounded-xl border border-slate-100">
+                  <div>
+                    <h3 className="text-xs font-bold text-slate-700">EPG 节目单来源配置列表 ({epgSources.length})</h3>
+                    <p className="text-[10px] text-slate-400 mt-0.5">激活的 EPG 会在执行后台/手动同步时自动拉取。系统根据频道 EPG ID 自动匹配它们。</p>
+                  </div>
+                  <button
+                    onClick={() => {
+                      setEpgForm({ id: "", name: "", url: "", active: true });
+                      setIsEpgFormOpen(true);
+                    }}
+                    className="px-2.5 py-1.5 bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold rounded-xl transition cursor-pointer"
+                  >
+                    添加外部 EPG 来源
+                  </button>
+                </div>
+
+                {isEpgLoading ? (
+                  <div className="flex flex-col items-center justify-center py-12 gap-2 text-xs text-slate-400 bg-slate-50 border border-slate-100 rounded-xl">
+                    <span className="w-6 h-6 border-2 border-slate-200 border-t-slate-500 rounded-full animate-spin"></span>
+                    <span>正在加载 EPG 数据列表...</span>
+                  </div>
+                ) : epgSources.length === 0 ? (
+                  <div className="text-center py-12 text-xs text-slate-400 bg-slate-50/50 border border-slate-100 border-dashed rounded-xl">
+                    当前暂未配置任何外部 EPG 来源。
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {epgSources.map((source) => (
+                      <div key={source.id} className="bg-white border border-slate-200/80 rounded-2xl p-5 hover:border-slate-300 text-xs flex flex-col justify-between space-y-4 shadow-sm relative">
+                        <div className="space-y-2">
+                          <div className="flex justify-between items-start gap-2">
+                            <div className="space-y-1">
+                              <span className="font-bold text-slate-800 text-sm flex items-center gap-1.5">
+                                {source.name}
+                                {!source.active && (
+                                  <span className="text-[10px] bg-slate-100 text-slate-500 px-1.5 py-0.5 rounded-md font-medium">已禁用</span>
+                                )}
+                              </span>
+                              <p className="text-[10px] font-mono text-slate-400 break-all">{source.url}</p>
+                            </div>
+
+                            {/* Toggle switch directly */}
+                            <button
+                              onClick={async () => {
+                                try {
+                                  const res = await fetch(`/api/epg-sources/${source.id}`, {
+                                    method: "PUT",
+                                    headers: { "Content-Type": "application/json" },
+                                    body: JSON.stringify({ active: !source.active }),
+                                  });
+                                  if (res.ok) {
+                                    fetchEpgSources();
+                                  }
+                                } catch (_) {}
+                              }}
+                              className={`w-9 h-5 rounded-full p-0.5 transition-colors cursor-pointer ${source.active ? "bg-blue-600" : "bg-slate-200"}`}
+                            >
+                              <div className={`bg-white w-4 h-4 rounded-full shadow-sm transform transition-transform duration-200 ${source.active ? "translate-x-4" : "translate-x-0"}`} />
+                            </button>
+                          </div>
+
+                          {/* Last synced status */}
+                          <div className="p-3 bg-slate-50 rounded-xl border border-slate-100 space-y-1">
+                            <div className="flex items-center gap-1.5">
+                              <span className={`w-2 h-2 rounded-full ${
+                                source.status === "success" ? "bg-emerald-500" :
+                                source.status === "failed" ? "bg-rose-500" : "bg-amber-400"
+                              }`} />
+                              <span className="font-bold text-slate-700">
+                                {source.status === "success" ? "同步成功" :
+                                 source.status === "failed" ? "同步失败" : "尚未拉取同步"}
+                              </span>
+                            </div>
+                            {source.message && <p className="text-[10px] text-slate-500 leading-normal">{source.message}</p>}
+                            {source.lastSynced && (
+                              <p className="text-[9px] text-slate-400 font-mono">上次运行: {new Date(source.lastSynced).toLocaleString()}</p>
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="flex justify-between items-center pt-2 border-t border-slate-100 gap-2">
+                          <div className="flex gap-1">
+                            <button
+                              onClick={() => {
+                                setEpgForm({ id: source.id, name: source.name, url: source.url, active: source.active });
+                                setIsEpgFormOpen(true);
+                              }}
+                              className="px-2.5 py-1.5 text-slate-600 hover:text-slate-800 bg-slate-100 hover:bg-slate-200 text-[10px] font-bold rounded-lg cursor-pointer transition"
+                            >
+                              编辑配置
+                            </button>
+                            <button
+                              onClick={async () => {
+                                if (window.confirm("确定删除该 EPG 源及对应缓存吗？")) {
+                                  try {
+                                    const res = await fetch(`/api/epg-sources/${source.id}`, { method: "DELETE" });
+                                    if (res.ok) {
+                                      showFeedback("success", "删除 EPG 来源成功");
+                                      fetchEpgSources();
+                                    }
+                                  } catch (_) {
+                                    showFeedback("error", "删除失败");
+                                  }
+                                }
+                              }}
+                              className="px-2.5 py-1.5 text-rose-600 hover:text-rose-800 bg-rose-50 hover:bg-rose-100 text-[10px] font-bold rounded-lg cursor-pointer transition"
+                            >
+                              删除源
+                            </button>
+                          </div>
+
+                          <button
+                            onClick={async () => {
+                              setSyncingEpgId(source.id);
+                              try {
+                                const res = await fetch(`/api/epg-sources/${source.id}/sync`, { method: "POST" });
+                                if (res.ok) {
+                                  const data = await res.json();
+                                  if (data.success) {
+                                    showFeedback("success", "EPG 数据拉取并缓存成功！");
+                                  } else {
+                                    showFeedback("error", `同步失败: ${data.source.message || "未知原因"}`);
+                                  }
+                                  fetchEpgSources();
+                                }
+                              } catch (err) {
+                                showFeedback("error", "外部网络异常或XML数据源不匹配");
+                              } finally {
+                                setSyncingEpgId(null);
+                              }
+                            }}
+                            disabled={syncingEpgId === source.id}
+                            className="px-3 py-1.5 bg-blue-50 text-blue-700 hover:bg-blue-100 disabled:bg-slate-100 disabled:text-slate-400 text-[10px] font-bold rounded-lg flex items-center gap-1.5 transition cursor-pointer"
+                          >
+                            {syncingEpgId === source.id ? (
+                              <>
+                                <span className="w-2.5 h-2.5 border-2 border-blue-600/30 border-t-blue-600 rounded-full animate-spin"></span>
+                                <span>同步中...</span>
+                              </>
+                            ) : (
+                              <>
+                                <UploadCloud className="w-3 h-3" />
+                                <span>立即全量拉取同步</span>
+                              </>
+                            )}
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Form Modal for Add/Edit */}
+              {isEpgFormOpen && (
+                <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-fade-in" id="epg_modal_overlay">
+                  <div className="bg-white rounded-3xl w-full max-w-lg p-6 shadow-2xl relative border border-slate-100 space-y-5 animate-slide-up" id="epg_modal_box">
+                    <div className="flex justify-between items-start pb-3 border-b border-slate-100">
+                      <div>
+                        <h3 className="font-bold text-slate-800 text-sm">{epgForm.id ? "编辑 EPG 来源" : "添加外部 EPG 节目单来源"}</h3>
+                        <p className="text-[10px] text-slate-400 mt-0.5">节目单应当是符合 .xml 格式且内嵌 &lt;tv&gt; 的 XMLTV 文件</p>
+                      </div>
+                      <button
+                        onClick={() => setIsEpgFormOpen(false)}
+                        className="text-slate-400 hover:text-slate-600 text-lg cursor-pointer"
+                      >
+                        &times;
+                      </button>
+                    </div>
+
+                    <form
+                      onSubmit={async (e) => {
+                        e.preventDefault();
+                        if (!epgForm.name || !epgForm.url) return;
+                        setIsEpgLoading(true);
+                        try {
+                          const urlStr = epgForm.id ? `/api/epg-sources/${epgForm.id}` : "/api/epg-sources";
+                          const method = epgForm.id ? "PUT" : "POST";
+                          const res = await fetch(urlStr, {
+                            method,
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify(epgForm),
+                          });
+                          if (res.ok) {
+                            showFeedback("success", epgForm.id ? "更新成功" : "添加成功");
+                            setIsEpgFormOpen(false);
+                            fetchEpgSources();
+                          } else {
+                            const errData = await res.json();
+                            showFeedback("error", errData.error || "操作失败");
+                          }
+                        } catch (_) {
+                          showFeedback("error", "网络连接失败");
+                        } finally {
+                          setIsEpgLoading(false);
+                        }
+                      }}
+                      className="space-y-4 text-xs"
+                    >
+                      <div className="space-y-1">
+                        <label className="block text-[11px] font-bold text-slate-600 mb-1">EPG 源名称 <span className="text-rose-500">*</span></label>
+                        <input
+                          type="text"
+                          required
+                          value={epgForm.name}
+                          onChange={(e) => setEpgForm({ ...epgForm, name: e.target.value })}
+                          placeholder="例如: 51zmt 电视频道指南"
+                          className="w-full px-3.5 py-2 rounded-xl bg-slate-50 border border-slate-200 focus:outline-none focus:border-blue-500"
+                        />
+                      </div>
+
+                      <div className="space-y-1">
+                        <label className="block text-[11px] font-bold text-slate-600 mb-1">XML 节目源 URL <span className="text-rose-500">*</span></label>
+                        <input
+                          type="url"
+                          required
+                          value={epgForm.url}
+                          onChange={(e) => setEpgForm({ ...epgForm, url: e.target.value })}
+                          placeholder="http://epg.51zmt.top:12182/xml/chinas.xml"
+                          className="w-full px-3.5 py-2 rounded-xl bg-slate-50 border border-slate-200 focus:outline-none focus:border-blue-500"
+                        />
+                      </div>
+
+                      <div className="flex items-center gap-2 pt-2">
+                        <input
+                          type="checkbox"
+                          id="epg_active_cb"
+                          checked={epgForm.active}
+                          onChange={(e) => setEpgForm({ ...epgForm, active: e.target.checked })}
+                          className="rounded text-blue-600 focus:ring-blue-500"
+                        />
+                        <label htmlFor="epg_active_cb" className="font-bold text-slate-600 cursor-pointer text-[11px]">激活此 EPG，并列入全局自动化拉取和交叉编译范畴</label>
+                      </div>
+
+                      <div className="pt-4 border-t border-slate-100 flex justify-end gap-2.5">
+                        <button
+                          type="button"
+                          onClick={() => setIsEpgFormOpen(false)}
+                          className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold rounded-xl cursor-pointer transition"
+                        >
+                          取消
+                        </button>
+                        <button
+                          type="submit"
+                          className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded-xl cursor-pointer transition"
+                        >
+                          确认保存
+                        </button>
+                      </div>
+                    </form>
+                  </div>
+                </div>
+              )}
+
             </div>
           )}
 

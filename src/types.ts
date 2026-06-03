@@ -37,6 +37,16 @@ export interface SyncConfig {
   message?: string;
 }
 
+export interface EpgSource {
+  id: string;
+  name: string;
+  url: string;
+  active: boolean;
+  lastSynced?: string;
+  status: "success" | "failed" | "never";
+  message?: string;
+}
+
 export interface TestStatus {
   status: "idle" | "running";
   total: number;

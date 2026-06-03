@@ -3,6 +3,8 @@ import path from "path";
 import fs from "fs";
 import { createServer as createViteServer } from "vite";
 import net from "net";
+import { XMLParser } from "fast-xml-parser";
+import zlib from "zlib";
 
 interface LiveSource {
   id: string;
@@ -43,6 +45,16 @@ interface SyncConfig {
   message?: string;
 }
 
+interface EpgSource {
+  id: string;
+  name: string;
+  url: string;
+  active: boolean;
+  lastSynced?: string;
+  status: "success" | "failed" | "never";
+  message?: string;
+}
+
 interface TestStatus {
   status: "idle" | "running";
   total: number;
@@ -68,8 +80,17 @@ if (!fs.existsSync(DATA_DIR)) {
 let groups: Group[] = [];
 let channels: Channel[] = [];
 let syncConfigs: SyncConfig[] = [];
+let epgSources: EpgSource[] = [];
 let adminPassword = process.env.ADMIN_PASSWORD || "";
 let githubProxy = "";
+
+const EPG_CACHE_DIR = path.join(DATA_DIR, "epg_cache_sources");
+if (!fs.existsSync(EPG_CACHE_DIR)) {
+  fs.mkdirSync(EPG_CACHE_DIR, { recursive: true });
+}
+
+// In-Memory cache for loaded EPG configurations to avoid reading from disk on every route hit
+const loadedEpgCaches: Record<string, Record<string, { displayNames: string[], programs: { start: string, stop: string, title: string, desc: string }[] }>> = {};
 const testStatus: TestStatus = {
   status: "idle",
   total: 0,
@@ -312,16 +333,54 @@ function loadData() {
       channels = parsed.channels || [];
       syncConfigs = parsed.syncConfigs || [];
       groups = parsed.groups || [];
+      epgSources = parsed.epgSources || [];
       if (parsed.adminPassword !== undefined) {
         adminPassword = parsed.adminPassword;
       }
       if (parsed.githubProxy !== undefined) {
         githubProxy = parsed.githubProxy;
       }
+
+      // Auto-seed default EPG sources if empty
+      if (epgSources.length === 0) {
+        epgSources = [
+          {
+            id: "epg_fanmingming",
+            name: "Fanmingming 高速公开 EPG XML 源",
+            url: "https://live.fanmingming.com/e.xml",
+            active: true,
+            status: "never",
+          },
+          {
+            id: "epg_51zmt",
+            name: "51zmt 经典公开 EPG XML 源",
+            url: "http://epg.51zmt.top:11111/e.xml",
+            active: true,
+            status: "never",
+          }
+        ];
+        saveData();
+      }
     } else {
       channels = DEFAULT_CHANNELS;
       syncConfigs = DEFAULT_SYNC_CONFIGS;
       groups = DEFAULT_GROUPS;
+      epgSources = [
+        {
+          id: "epg_fanmingming",
+          name: "Fanmingming 高速公开 EPG XML 源",
+          url: "https://live.fanmingming.com/e.xml",
+          active: true,
+          status: "never",
+        },
+        {
+          id: "epg_51zmt",
+          name: "51zmt 经典公开 EPG XML 源",
+          url: "http://epg.51zmt.top:11111/e.xml",
+          active: true,
+          status: "never",
+        }
+      ];
       saveData();
     }
 
@@ -386,6 +445,7 @@ function saveData() {
       groups,
       channels,
       syncConfigs,
+      epgSources,
       adminPassword,
       githubProxy,
     };
@@ -640,6 +700,195 @@ function updateSourceDbStatus(channelId: string, sourceId: string, status: "acti
       }
       source.lastChecked = new Date().toISOString();
     }
+  }
+}
+
+function ensureArray<T>(val: any): T[] {
+  if (!val) return [];
+  if (Array.isArray(val)) return val;
+  return [val];
+}
+
+function getText(node: any): string {
+  if (!node) return "";
+  if (typeof node === "string") return node;
+  if (typeof node === "number") return String(node);
+  if (typeof node === "object") {
+    if (node["#text"] !== undefined) return String(node["#text"]);
+    if (node.text !== undefined) return String(node.text);
+    for (const key in node) {
+      if (typeof node[key] === "string" && key !== "lang") {
+        return node[key];
+      }
+    }
+  }
+  return "";
+}
+
+function parseXmltvTime(timeStr: string): { dateStr: string, timeStr: string } {
+  if (!timeStr) return { dateStr: "", timeStr: "" };
+  const match = timeStr.trim().match(/^(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})/);
+  if (match) {
+    const [_, y, m, d, hh, mm, ss] = match;
+    return {
+      dateStr: `${y}-${m}-${d}`,
+      timeStr: `${hh}:${mm}`
+    };
+  }
+  return { dateStr: "", timeStr: "" };
+}
+
+function getEpgCache(sourceId: string) {
+  const cachePath = path.join(EPG_CACHE_DIR, `${sourceId}.json`);
+  if (!fs.existsSync(cachePath)) return null;
+  if (loadedEpgCaches[sourceId]) {
+    return loadedEpgCaches[sourceId];
+  }
+  try {
+    const data = fs.readFileSync(cachePath, "utf-8");
+    loadedEpgCaches[sourceId] = JSON.parse(data);
+    return loadedEpgCaches[sourceId];
+  } catch (err) {
+    console.error(`[EPG CACHE LOAD ERROR] for ${sourceId}:`, err);
+    return null;
+  }
+}
+
+function findMatchingEpgEntry(ch: Channel, channelMap: Record<string, { displayNames: string[], programs: any[] }>) {
+  if (ch.epgId) {
+    if (channelMap[ch.epgId]) return channelMap[ch.epgId];
+    const foundKey = Object.keys(channelMap).find(k => k.toLowerCase() === ch.epgId.toLowerCase());
+    if (foundKey) return channelMap[foundKey];
+  }
+  const chNameNorm = normalizeChannelName(ch.name);
+  const aliasNorms = (ch.alias || []).map(a => normalizeChannelName(a)).filter(Boolean);
+  for (const originalId of Object.keys(channelMap)) {
+    const entry = channelMap[originalId];
+    const originalIdNorm = normalizeChannelName(originalId);
+    if (ch.epgId && originalIdNorm === normalizeChannelName(ch.epgId)) {
+      return entry;
+    }
+    if (originalIdNorm === chNameNorm || aliasNorms.includes(originalIdNorm)) {
+      return entry;
+    }
+    for (const disp of entry.displayNames) {
+      const dispNorm = normalizeChannelName(disp);
+      if (dispNorm === chNameNorm || aliasNorms.includes(dispNorm)) {
+        return entry;
+      }
+    }
+  }
+  return null;
+}
+
+function escapeXml(unsafe: string): string {
+  if (!unsafe) return "";
+  return unsafe.replace(/[<>&'"]/g, (c) => {
+    switch (c) {
+      case "<": return "&lt;";
+      case ">": return "&gt;";
+      case "&": return "&amp;";
+      case "'": return "&apos;";
+      case "\"": return "&quot;";
+      default: return c;
+    }
+  });
+}
+
+async function performEpgSync(source: EpgSource): Promise<boolean> {
+  try {
+    let targetUrl = source.url;
+    if (targetUrl.includes("github.com") && !targetUrl.includes("raw.githubusercontent.com") && !targetUrl.includes("/raw/")) {
+      targetUrl = targetUrl
+        .replace("github.com", "raw.githubusercontent.com")
+        .replace("/blob/", "/");
+    }
+    if (githubProxy && (targetUrl.includes("github.com") || targetUrl.includes("githubusercontent.com"))) {
+      const proxyPrefix = githubProxy.endsWith("/") ? githubProxy : `${githubProxy}/`;
+      targetUrl = `${proxyPrefix}${targetUrl}`;
+    }
+    console.log(`[EPG SYNC] Fetching ${source.name} from: ${targetUrl}`);
+    const res = await fetch(targetUrl, {
+      headers: { "User-Agent": "IPTV-Manager-EPG-Sync-Service" },
+    });
+    if (!res.ok) {
+      throw new Error(`HTTP Error ${res.status}`);
+    }
+    const arrayBuffer = await res.arrayBuffer();
+    const buffer = Buffer.from(arrayBuffer);
+    
+    // Detect gzip format from URL suffix, header or first 2 bytes (0x1f 0x8b)
+    const isGzipped = (targetUrl.toLowerCase().endsWith(".gz") ||
+                     res.headers.get("content-encoding") === "gzip" ||
+                     (buffer.length >= 2 && buffer[0] === 0x1f && buffer[1] === 0x8b));
+                     
+    let xmlText = "";
+    if (isGzipped) {
+      console.log(`[EPG SYNC] Detected Gzip compression for ${source.name}. Decompressing...`);
+      try {
+        const decompressed = zlib.gunzipSync(buffer);
+        xmlText = decompressed.toString("utf-8");
+      } catch (gzErr: any) {
+        throw new Error(`Gzip decompression failed: ${gzErr.message}`);
+      }
+    } else {
+      xmlText = buffer.toString("utf-8");
+    }
+
+    if (!xmlText.trim().startsWith("<?xml") && !xmlText.includes("<tv")) {
+      throw new Error("Invalid EPG XML content, missing <tv> root");
+    }
+    console.log(`[EPG SYNC] Parsing XML of length ${xmlText.length}...`);
+    const parser = new XMLParser({
+      ignoreAttributes: false,
+      attributeNamePrefix: ""
+    });
+    const parsed = parser.parse(xmlText);
+    const channelMap: Record<string, { displayNames: string[], programs: { start: string, stop: string, title: string, desc: string }[] }> = {};
+    const channelsList = ensureArray(parsed?.tv?.channel);
+    for (const ch of channelsList) {
+      const originalId = (ch as any).id;
+      if (!originalId) continue;
+      const displayNamesList = ensureArray((ch as any)["display-name"]).map(d => getText(d).trim()).filter(Boolean);
+      channelMap[originalId] = {
+        displayNames: displayNamesList,
+        programs: []
+      };
+    }
+    const programmesList = ensureArray(parsed?.tv?.programme);
+    for (const prog of programmesList) {
+      const chId = (prog as any).channel;
+      if (!chId) continue;
+      const start = (prog as any).start || "";
+      const stop = (prog as any).stop || "";
+      const title = getText((prog as any).title);
+      const desc = getText((prog as any).desc);
+      if (!channelMap[chId]) {
+        channelMap[chId] = { displayNames: [], programs: [] };
+      }
+      channelMap[chId].programs.push({ start, stop, title, desc });
+    }
+    if (!fs.existsSync(EPG_CACHE_DIR)) {
+      fs.mkdirSync(EPG_CACHE_DIR, { recursive: true });
+    }
+    fs.writeFileSync(
+      path.join(EPG_CACHE_DIR, `${source.id}.json`),
+      JSON.stringify(channelMap, null, 2),
+      "utf-8"
+    );
+    delete loadedEpgCaches[source.id]; // invalidate memory cache
+    source.status = "success";
+    source.lastSynced = new Date().toISOString();
+    source.message = `同步成功，共导入 ${Object.keys(channelMap).length} 个频道节目源`;
+    saveData();
+    return true;
+  } catch (error: any) {
+    console.error(`[EPG SYNC ERROR] ${source.name}:`, error.message);
+    source.status = "failed";
+    source.message = error.message;
+    source.lastSynced = new Date().toISOString();
+    saveData();
+    return false;
   }
 }
 
@@ -1010,6 +1259,81 @@ async function startServer() {
     githubProxy = (proxy || "").trim();
     saveData();
     res.json({ success: true, githubProxy });
+  });
+
+  // EPG Sources REST Endpoints
+  app.get("/api/epg-sources", (req, res) => {
+    res.json(epgSources);
+  });
+
+  app.post("/api/epg-sources", (req, res) => {
+    const { name, url, active } = req.body;
+    if (!name || !url) {
+      return res.status(400).json({ error: "EPG名称和URL不能为空" });
+    }
+    const newSource: EpgSource = {
+      id: "epg_" + Math.random().toString(36).substring(2, 10),
+      name: name.trim(),
+      url: url.trim(),
+      active: active === undefined ? true : !!active,
+      status: "never",
+    };
+    epgSources.push(newSource);
+    saveData();
+    res.json({ success: true, source: newSource });
+  });
+
+  app.put("/api/epg-sources/:id", (req, res) => {
+    const { id } = req.params;
+    const { name, url, active } = req.body;
+    const source = epgSources.find((s) => s.id === id);
+    if (!source) {
+      return res.status(404).json({ error: "未找到该 EPG 源" });
+    }
+    if (name !== undefined) source.name = name.trim();
+    if (url !== undefined) source.url = url.trim();
+    if (active !== undefined) source.active = !!active;
+    saveData();
+    res.json({ success: true, source });
+  });
+
+  app.delete("/api/epg-sources/:id", (req, res) => {
+    const { id } = req.params;
+    const initialLen = epgSources.length;
+    epgSources = epgSources.filter((s) => s.id !== id);
+    if (epgSources.length === initialLen) {
+      return res.status(404).json({ error: "EPG源不存在" });
+    }
+    // Delete cache file if exists
+    try {
+      const cachePath = path.join(EPG_CACHE_DIR, `${id}.json`);
+      if (fs.existsSync(cachePath)) {
+        fs.unlinkSync(cachePath);
+      }
+      delete loadedEpgCaches[id];
+    } catch (_) {}
+    saveData();
+    res.json({ success: true });
+  });
+
+  app.post("/api/epg-sources/:id/sync", async (req, res) => {
+    const { id } = req.params;
+    const source = epgSources.find((s) => s.id === id);
+    if (!source) {
+      return res.status(404).json({ error: "未找到该 EPG 源" });
+    }
+    const success = await performEpgSync(source);
+    res.json({ success, source });
+  });
+
+  app.post("/api/epg-sources/sync-all", async (req, res) => {
+    let successCount = 0;
+    const activeSources = epgSources.filter((s) => s.active);
+    for (const source of activeSources) {
+      const success = await performEpgSync(source);
+      if (success) successCount++;
+    }
+    res.json({ success: true, count: activeSources.length, successCount });
   });
 
   // Group CRUD Endpoints
@@ -1916,6 +2240,33 @@ async function startServer() {
       return programsTemplate;
     };
 
+    const getEpgForChannelAndDate = (ch: Channel) => {
+      const activeEpgSrcs = epgSources.filter(s => s.active);
+      for (const src of activeEpgSrcs) {
+        const cache = getEpgCache(src.id);
+        if (cache) {
+          const entry = findMatchingEpgEntry(ch, cache);
+          if (entry && entry.programs && entry.programs.length > 0) {
+            const filtered = entry.programs.filter((p: any) => {
+              const parsed = parseXmltvTime(p.start);
+              return parsed.dateStr === targetDate;
+            }).map((p: any) => {
+              const parsed = parseXmltvTime(p.start);
+              return {
+                time: parsed.timeStr,
+                title: p.title
+              };
+            });
+            if (filtered.length > 0) {
+              filtered.sort((a: any, b: any) => a.time.localeCompare(b.time));
+              return filtered;
+            }
+          }
+        }
+      }
+      return getSchedulesForChannel(ch.id, ch.name);
+    };
+
     if (channelId) {
       const channel = channels.find((c) => c.id === channelId);
       if (channel) {
@@ -1924,7 +2275,7 @@ async function startServer() {
           channelName: channel.name,
           date: targetDate,
           epgId: channel.epgId,
-          programs: getSchedulesForChannel(channel.id, channel.name),
+          programs: getEpgForChannelAndDate(channel),
         });
       }
     }
@@ -1934,7 +2285,7 @@ async function startServer() {
       channelId: c.id,
       channelName: c.name,
       epgId: c.epgId,
-      programs: getSchedulesForChannel(c.id, c.name),
+      programs: getEpgForChannelAndDate(c),
     }));
 
     res.json({ date: targetDate, guides: guideMap });
@@ -2046,15 +2397,13 @@ async function startServer() {
 <tv generator-info-name="IPTV Channel Manager" generator-info-url="http://localhost:3000/">`;
 
     const channelTags = channels.map((c) => {
-      return `  <channel id="${c.epgId}">
-    <display-name lang="zh">${c.name}</display-name>
-    <icon src="${c.logo}" />
+      const epgIdEscaped = escapeXml(c.epgId || generateDefaultEpgId(c.name));
+      return `  <channel id="${epgIdEscaped}">
+    <display-name lang="zh">${escapeXml(c.name)}</display-name>
+    <icon src="${escapeXml(c.logo)}" />
   </channel>`;
     }).join("\n");
 
-    // Build timeline XML tags
-    const todayStr = new Date().toISOString().split("T")[0].replace(/-/g, "");
-    
     const programTemplates = [
       { start: "000000", stop: "060000", title: "深夜温情院线" },
       { start: "060000", stop: "090000", title: "早晨第一线新闻" },
@@ -2067,13 +2416,42 @@ async function startServer() {
       { start: "223000", stop: "235959", title: "深夜体育与军事视界" },
     ];
 
+    const todayStr = new Date().toISOString().split("T")[0].replace(/-/g, "");
+    const activeEpgSources = epgSources.filter(s => s.active);
+
     const programTags = channels.map((c) => {
-      return programTemplates.map((p) => {
-        return `  <programme start="${todayStr}${p.start} +0800" stop="${todayStr}${p.stop} +0800" channel="${c.epgId}">
-    <title lang="zh">${p.title}</title>
-    <desc lang="zh">由 IPTV 电视服务自动同步 matching epg channel id [${c.epgId}]。</desc>
+      const epgIdEscaped = escapeXml(c.epgId || generateDefaultEpgId(c.name));
+      
+      let matchedPrograms: any[] = [];
+      let found = false;
+
+      for (const source of activeEpgSources) {
+        const cache = getEpgCache(source.id);
+        if (cache) {
+          const entry = findMatchingEpgEntry(c, cache);
+          if (entry && entry.programs && entry.programs.length > 0) {
+            matchedPrograms = entry.programs;
+            found = true;
+            break;
+          }
+        }
+      }
+
+      if (found && matchedPrograms.length > 0) {
+        return matchedPrograms.map((prog: any) => {
+          return `  <programme start="${escapeXml(prog.start)}" stop="${escapeXml(prog.stop)}" channel="${epgIdEscaped}">
+    <title lang="zh">${escapeXml(prog.title)}</title>
+    ${prog.desc ? `<desc lang="zh">${escapeXml(prog.desc)}</desc>` : ""}
   </programme>`;
-      }).join("\n");
+        }).join("\n");
+      } else {
+        return programTemplates.map((p) => {
+          return `  <programme start="${todayStr}${p.start} +0800" stop="${todayStr}${p.stop} +0800" channel="${epgIdEscaped}">
+    <title lang="zh">${escapeXml(p.title)}</title>
+    <desc lang="zh">由 IPTV 电视服务自动同步 matching epg channel id [${epgIdEscaped}]。</desc>
+  </programme>`;
+        }).join("\n");
+      }
     }).join("\n");
 
     const xmlFooter = `</tv>`;
