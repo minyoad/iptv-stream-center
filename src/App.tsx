@@ -1503,6 +1503,31 @@ export default function App() {
     }
   };
 
+  // Safe Client-side Downloader to bypass __cookie_check.html in preview environments
+  const downloadApiFile = async (endpoint: string, filename: string, e?: React.MouseEvent) => {
+    if (e) e.preventDefault();
+    try {
+      showFeedback("info", `准备下载 ${filename}...`);
+      const res = await fetch(endpoint);
+      if (!res.ok) {
+        throw new Error(`连接失败 (HTTP ${res.status})`);
+      }
+      const blob = await res.blob();
+      const blobUrl = window.URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = blobUrl;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(blobUrl);
+      showFeedback("success", `文件 ${filename} 下载启动成功`);
+    } catch (err: any) {
+      console.error("[DOWNLOAD API FILE ERROR]", err);
+      showFeedback("error", `下载文件失败: ${err.message || err}`);
+    }
+  };
+
   // Filtered Channels selection
   const getUniqueCategories = () => {
     return ["all", ...groups.map(g => g.name)];
@@ -3575,14 +3600,12 @@ export default function App() {
                         <span className="font-bold text-slate-800 flex items-center">
                           <CheckCircle className="w-4 h-4 mr-1.5 text-blue-500" /> Standard M3U Playlist API
                         </span>
-                        <a 
-                          href={`${getFullHostUrl()}/api/export/m3u${getExportQueries()}`}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="text-blue-600 hover:text-blue-800 hover:underline flex items-center gap-1 font-bold text-[10px]"
+                        <button 
+                          onClick={(e) => downloadApiFile(`/api/export/m3u${getExportQueries()}`, "iptv_channels.m3u", e)}
+                          className="text-blue-600 hover:text-blue-800 hover:underline flex items-center gap-1 font-bold text-[10px] bg-transparent border-none p-0 cursor-pointer"
                         >
-                          立即下载文件 <ExternalLink className="w-3 h-3" />
-                        </a>
+                          立即下载文件 <Download className="w-3 h-3" />
+                        </button>
                       </div>
                       <div className="flex items-center gap-2">
                         <span className="flex-1 bg-white border border-slate-150 p-2.5 rounded-xl font-mono text-[10px] text-slate-600 truncate">
@@ -3604,14 +3627,12 @@ export default function App() {
                         <span className="font-bold text-slate-800 flex items-center">
                           <FileText className="w-4 h-4 mr-1.5 text-orange-500" /> TVBox (TXT Format) Config API
                         </span>
-                        <a 
-                          href={`${getFullHostUrl()}/api/export/txt${getExportQueries()}`}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="text-orange-600 hover:text-orange-850 hover:underline flex items-center gap-1 font-bold text-[10px]"
+                        <button 
+                          onClick={(e) => downloadApiFile(`/api/export/txt${getExportQueries()}`, "iptv_custom.txt", e)}
+                          className="text-orange-600 hover:text-orange-850 hover:underline flex items-center gap-1 font-bold text-[10px] bg-transparent border-none p-0 cursor-pointer"
                         >
-                          下载 TXT 源文件 <ExternalLink className="w-3 h-3" />
-                        </a>
+                          下载 TXT 源文件 <Download className="w-3 h-3" />
+                        </button>
                       </div>
                       <div className="flex items-center gap-2">
                         <span className="flex-1 bg-white border border-slate-150 p-2.5 rounded-xl font-mono text-[10px] text-slate-600 truncate">
@@ -3635,14 +3656,12 @@ export default function App() {
                           <span className="font-bold text-slate-800 flex items-center">
                             <Calendar className="w-4 h-4 mr-1.5 text-violet-500" /> XMLTV EPG (Electronic Program Guide) Feed
                           </span>
-                          <a 
-                            href={`${getFullHostUrl()}/api/export/epg.xml`}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="text-violet-600 hover:text-violet-800 hover:underline flex items-center gap-1 font-bold text-[10px]"
+                          <button 
+                            onClick={(e) => downloadApiFile("/api/export/epg.xml", "epg.xml", e)}
+                            className="text-violet-600 hover:text-violet-800 hover:underline flex items-center gap-1 font-bold text-[10px] bg-transparent border-none p-0 cursor-pointer"
                           >
-                            打开 XMLTV 文档 <ExternalLink className="w-3 h-3" />
-                          </a>
+                            下载原始 XML 文档 <Download className="w-3 h-3" />
+                          </button>
                         </div>
                         <div className="flex items-center gap-2">
                           <span className="flex-1 bg-white border border-slate-150 p-2.5 rounded-xl font-mono text-[10px] text-slate-600 truncate">
@@ -3663,14 +3682,12 @@ export default function App() {
                           <span className="font-bold text-slate-800 flex items-center">
                             <Calendar className="w-4 h-4 mr-1.5 text-violet-500" /> XMLTV EPG Gzip 压缩源 (.xml.gz 极速反馈)
                           </span>
-                          <a 
-                            href={`${getFullHostUrl()}/api/export/epg.xml.gz`}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="text-violet-600 hover:text-violet-800 hover:underline flex items-center gap-1 font-bold text-[10px]"
+                          <button 
+                            onClick={(e) => downloadApiFile("/api/export/epg.xml.gz", "epg.xml.gz", e)}
+                            className="text-violet-600 hover:text-violet-800 hover:underline flex items-center gap-1 font-bold text-[10px] bg-transparent border-none p-0 cursor-pointer"
                           >
-                            直接下载 EPG.xml.gz <ExternalLink className="w-3 h-3" />
-                          </a>
+                            下载 EPG.xml.gz <Download className="w-3 h-3" />
+                          </button>
                         </div>
                         <div className="flex items-center gap-2">
                           <span className="flex-1 bg-white border border-slate-150 p-2.5 rounded-xl font-mono text-[10px] text-slate-600 truncate">

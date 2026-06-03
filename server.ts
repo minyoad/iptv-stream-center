@@ -2992,10 +2992,7 @@ ${JSON.stringify(scoredList.map(c => ({ epgId: c.epgId, names: c.displayNames, s
             exportMap.set(catName, []);
           }
 
-          const suffix = (source.province && source.province !== "全国") || source.isp
-            ? `#${source.province || ""}${source.isp ? " " + source.isp : ""}`
-            : "";
-          const channelDisplayStr = `${channel.name}${suffix},${source.url}`;
+          const channelDisplayStr = `${channel.name},${source.url}`;
           
           exportMap.get(catName)!.push(channelDisplayStr);
           count++;
