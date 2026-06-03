@@ -34,6 +34,9 @@ export default function App() {
   const [channels, setChannels] = useState<Channel[]>([]);
   const [syncConfigs, setSyncConfigs] = useState<SyncConfig[]>([]);
   const [groups, setGroups] = useState<Group[]>([]);
+  const [githubProxy, setGithubProxy] = useState("");
+  const [githubProxyInput, setGithubProxyInput] = useState("");
+  const [isSavingProxy, setIsSavingProxy] = useState(false);
   const [testingStatus, setTestingStatus] = useState<TestStatus>({ status: "idle", total: 0, checked: 0, results: [] });
   const [activeTab, setActiveTab] = useState<string>("dashboard"); // dashboard, channels, sync, export, epg
   const [channelSubTab, setChannelSubTab] = useState<"channels" | "groups" | "sources">("channels");
@@ -373,10 +376,11 @@ export default function App() {
   // Load Channels, Groups & Configurations
   const fetchData = async () => {
     try {
-      const [resChannels, resSync, resGroups] = await Promise.all([
+      const [resChannels, resSync, resGroups, resSettings] = await Promise.all([
         fetch("/api/channels"),
         fetch("/api/sync-configs"),
-        fetch("/api/groups")
+        fetch("/api/groups"),
+        fetch("/api/settings")
       ]);
       if (resChannels.ok) {
         const data = await resChannels.json();
@@ -394,6 +398,11 @@ export default function App() {
       }
       if (resGroups.ok) {
         setGroups(await resGroups.json());
+      }
+      if (resSettings && resSettings.ok) {
+        const settingsData = await resSettings.json();
+        setGithubProxy(settingsData.githubProxy || "");
+        setGithubProxyInput(settingsData.githubProxy || "");
       }
     } catch (err) {
       showFeedback("error", "连接服务器读取数据失败");
@@ -577,6 +586,31 @@ export default function App() {
       }
     } catch (e) {
       setAuthError("无法连接到主服务器，请检查网络后再试");
+    }
+  };
+
+  const saveGithubProxy = async () => {
+    setIsSavingProxy(true);
+    try {
+      const res = await fetch("/api/settings", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ githubProxy: githubProxyInput })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setGithubProxy(data.githubProxy || "");
+        setGithubProxyInput(data.githubProxy || "");
+        showFeedback("success", "GitHub 代理加速配置已成功保存！");
+      } else {
+        showFeedback("error", "保存 GitHub 代理加速配置失败");
+      }
+    } catch (e) {
+      showFeedback("error", "网络请求异常，保存代理配置失败");
+    } finally {
+      setIsSavingProxy(false);
     }
   };
 
@@ -2988,6 +3022,75 @@ export default function App() {
                     <br />• <b>M3U 规范:</b> 解析包含 <code>#EXTINF</code>, <code>tvg-logo</code>, <code>group-title</code> 等参数的高级频道元数据，并映射至分类中。
                     <br />• <b>TXT (TVBox 规范):</b> 解析 <code>分类名,#genre</code> 行与其下逗号分割的频道名和线路列表，自动建立关系结构。
                   </p>
+                </div>
+              </div>
+
+              {/* GitHub Proxy Acceleration Settings Card */}
+              <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm space-y-4" id="github_proxy_settings_card">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <div className="p-2 bg-indigo-50 text-indigo-600 rounded-xl">
+                      <Settings className="w-5 h-5 animate-spin-hover" />
+                    </div>
+                    <div>
+                      <h3 className="font-bold text-slate-800 text-sm">GitHub 访问加速代理配置</h3>
+                      <p className="text-xs text-slate-400 mt-0.5">当订阅源/同步目标包含 github.com 或 raw.githubusercontent.com 时，自动使用该代理进行解析加速</p>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex flex-col sm:flex-row gap-3 items-center">
+                  <div className="relative flex-1 w-full">
+                    <input
+                      type="text"
+                      value={githubProxyInput}
+                      onChange={(e) => setGithubProxyInput(e.target.value)}
+                      placeholder="例如: https://mirror.ghproxy.com  或  https://ghproxy.net"
+                      className="w-full pl-4 pr-24 py-2.5 border border-slate-200 rounded-xl text-xs focus:outline-none focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 bg-slate-50 text-slate-700 placeholder-slate-400 font-mono"
+                    />
+                    {githubProxy && (
+                      <div className="absolute right-3 top-2.5 flex items-center text-emerald-600 gap-1" title="当前已启用代理">
+                        <Check className="w-4 h-4 stroke-[3]" />
+                        <span className="text-[10px] font-bold">已启用</span>
+                      </div>
+                    )}
+                  </div>
+                  <button
+                    onClick={saveGithubProxy}
+                    disabled={isSavingProxy}
+                    className="w-full sm:w-auto px-6 py-2.5 bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-400 text-white font-bold text-xs rounded-xl shadow transition duration-150 cursor-pointer text-center flex-shrink-0"
+                  >
+                    {isSavingProxy ? "正在保存..." : "保存代理配置"}
+                  </button>
+                  {githubProxy && (
+                    <button
+                      onClick={async () => {
+                        setIsSavingProxy(true);
+                        try {
+                          const res = await fetch("/api/settings", {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({ githubProxy: "" })
+                          });
+                          if (res.ok) {
+                            setGithubProxy("");
+                            setGithubProxyInput("");
+                            showFeedback("success", "GitHub 代理已成功清除并禁用");
+                          }
+                        } catch (err) {
+                          showFeedback("error", "清除代理失败");
+                        } finally {
+                          setIsSavingProxy(false);
+                        }
+                      }}
+                      className="w-full sm:w-auto px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold text-xs rounded-xl transition cursor-pointer text-center flex-shrink-0"
+                    >
+                      清空并禁用
+                    </button>
+                  )}
+                </div>
+                <div className="text-[11px] text-slate-400">
+                  💡 注意：留空并保存即可<b>直接连接</b>拉取 GitHub 原源。如果遇到 GitHub 连接超时、无法拉取或白屏问题，推荐配置 <code>https://mirror.ghproxy.com</code> 或 <code>https://ghproxy.net</code>。
                 </div>
               </div>
 

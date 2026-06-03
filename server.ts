@@ -69,6 +69,7 @@ let groups: Group[] = [];
 let channels: Channel[] = [];
 let syncConfigs: SyncConfig[] = [];
 let adminPassword = process.env.ADMIN_PASSWORD || "";
+let githubProxy = "";
 const testStatus: TestStatus = {
   status: "idle",
   total: 0,
@@ -314,6 +315,9 @@ function loadData() {
       if (parsed.adminPassword !== undefined) {
         adminPassword = parsed.adminPassword;
       }
+      if (parsed.githubProxy !== undefined) {
+        githubProxy = parsed.githubProxy;
+      }
     } else {
       channels = DEFAULT_CHANNELS;
       syncConfigs = DEFAULT_SYNC_CONFIGS;
@@ -383,6 +387,7 @@ function saveData() {
       channels,
       syncConfigs,
       adminPassword,
+      githubProxy,
     };
     fs.writeFileSync(DATA_FILE, JSON.stringify(backup, null, 2), "utf-8");
   } catch (error) {
@@ -647,6 +652,12 @@ async function performSync(config: SyncConfig) {
       targetUrl = targetUrl
         .replace("github.com", "raw.githubusercontent.com")
         .replace("/blob/", "/");
+    }
+
+    // Apply GitHub Proxy if configured
+    if (githubProxy && (targetUrl.includes("github.com") || targetUrl.includes("githubusercontent.com"))) {
+      const proxyPrefix = githubProxy.endsWith("/") ? githubProxy : `${githubProxy}/`;
+      targetUrl = `${proxyPrefix}${targetUrl}`;
     }
 
     const res = await fetch(targetUrl, {
@@ -989,6 +1000,18 @@ async function startServer() {
   });
 
   // API Endpoints
+  // Settings Endpoints
+  app.get("/api/settings", (req, res) => {
+    res.json({ githubProxy });
+  });
+
+  app.post("/api/settings", (req, res) => {
+    const { githubProxy: proxy } = req.body;
+    githubProxy = (proxy || "").trim();
+    saveData();
+    res.json({ success: true, githubProxy });
+  });
+
   // Group CRUD Endpoints
   app.get("/api/groups", (req, res) => {
     res.json(groups);
