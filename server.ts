@@ -5,6 +5,8 @@ import { createServer as createViteServer } from "vite";
 import net from "net";
 import { XMLParser } from "fast-xml-parser";
 import zlib from "zlib";
+import http from "http";
+import https from "https";
 
 interface LiveSource {
   id: string;
@@ -795,6 +797,101 @@ function escapeXml(unsafe: string): string {
   });
 }
 
+async function fetchBufferWithFallback(urlStr: string, userAgent: string): Promise<{ buffer: Buffer; isGzipped: boolean }> {
+  const downloadDirectly = (targetUrlStr: string, maxRedirects = 5): Promise<{ buffer: Buffer; isGzipped: boolean }> => {
+    return new Promise((resolve, reject) => {
+      if (maxRedirects < 0) {
+        return reject(new Error("Too many redirects (max 5 redirects allowed)"));
+      }
+      try {
+        const parsedUrl = new URL(targetUrlStr);
+        const isHttps = parsedUrl.protocol === "https:";
+        const httpClient = isHttps ? https : http;
+
+        const headers: Record<string, string> = {
+          "User-Agent": userAgent,
+          "Accept-Encoding": "gzip, deflate, br",
+          "Accept": "*/*"
+        };
+
+        const options: any = {
+          method: "GET",
+          headers,
+          timeout: 45000,
+        };
+
+        if (isHttps) {
+          options.rejectUnauthorized = false; // Bypass all certificate failures (expired, self-signed, host mismatch, etc.)
+        }
+
+        const req = httpClient.request(parsedUrl, options, (res) => {
+          if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+            const redirectUrl = new URL(res.headers.location, parsedUrl.href).href;
+            console.log(`[EPG SYNC RECOVERY] Following redirect: ${targetUrlStr} -> ${redirectUrl}`);
+            return downloadDirectly(redirectUrl, maxRedirects - 1).then(resolve).catch(reject);
+          }
+
+          if (!res.statusCode || res.statusCode < 200 || res.statusCode >= 300) {
+            return reject(new Error(`HTTP Error ${res.statusCode}`));
+          }
+
+          const chunks: Buffer[] = [];
+          res.on("data", (chunk) => chunks.push(chunk));
+          res.on("end", () => {
+            const buffer = Buffer.concat(chunks);
+            const contentEncoding = res.headers["content-encoding"] || "";
+            const isGzipped = (
+              targetUrlStr.toLowerCase().endsWith(".gz") ||
+              contentEncoding.toLowerCase().includes("gzip") ||
+              (buffer.length >= 2 && buffer[0] === 0x1f && buffer[1] === 0x8b)
+            );
+            resolve({ buffer, isGzipped });
+          });
+        });
+
+        req.on("error", (err) => {
+          reject(err);
+        });
+
+        req.on("timeout", () => {
+          req.destroy();
+          reject(new Error("EPG Sync request timeout (45s)"));
+        });
+
+        req.end();
+      } catch (err) {
+        reject(err);
+      }
+    });
+  };
+
+  try {
+    const res = await fetch(urlStr, {
+      headers: { "User-Agent": userAgent },
+    });
+    if (!res.ok) {
+      throw new Error(`HTTP Error ${res.status}`);
+    }
+    const arrayBuffer = await res.arrayBuffer();
+    const buffer = Buffer.from(arrayBuffer);
+    const contentEncoding = res.headers.get("content-encoding") || "";
+    const isGzipped = (
+      urlStr.toLowerCase().endsWith(".gz") ||
+      contentEncoding.toLowerCase().includes("gzip") ||
+      (buffer.length >= 2 && buffer[0] === 0x1f && buffer[1] === 0x8b)
+    );
+    return { buffer, isGzipped };
+  } catch (fetchErr: any) {
+    console.log(`[EPG SYNC] Standard fetch failed for ${urlStr}: ${fetchErr.message || fetchErr}. Attempting recovery via bypass direct fetch...`);
+    try {
+      return await downloadDirectly(urlStr);
+    } catch (fallbackErr: any) {
+      console.error(`[EPG SYNC RECOVERY FAILED] ${urlStr}: ${fallbackErr.message || fallbackErr}`);
+      throw new Error(fallbackErr.message || "Fetch failed");
+    }
+  }
+}
+
 async function performEpgSync(source: EpgSource): Promise<boolean> {
   try {
     let targetUrl = source.url;
@@ -808,19 +905,8 @@ async function performEpgSync(source: EpgSource): Promise<boolean> {
       targetUrl = `${proxyPrefix}${targetUrl}`;
     }
     console.log(`[EPG SYNC] Fetching ${source.name} from: ${targetUrl}`);
-    const res = await fetch(targetUrl, {
-      headers: { "User-Agent": "IPTV-Manager-EPG-Sync-Service" },
-    });
-    if (!res.ok) {
-      throw new Error(`HTTP Error ${res.status}`);
-    }
-    const arrayBuffer = await res.arrayBuffer();
-    const buffer = Buffer.from(arrayBuffer);
     
-    // Detect gzip format from URL suffix, header or first 2 bytes (0x1f 0x8b)
-    const isGzipped = (targetUrl.toLowerCase().endsWith(".gz") ||
-                     res.headers.get("content-encoding") === "gzip" ||
-                     (buffer.length >= 2 && buffer[0] === 0x1f && buffer[1] === 0x8b));
+    const { buffer, isGzipped } = await fetchBufferWithFallback(targetUrl, "IPTV-Manager-EPG-Sync-Service");
                      
     let xmlText = "";
     if (isGzipped) {
@@ -909,15 +995,10 @@ async function performSync(config: SyncConfig) {
       targetUrl = `${proxyPrefix}${targetUrl}`;
     }
 
-    const res = await fetch(targetUrl, {
-      headers: { "User-Agent": "IPTV-Manager-Sync-Service" },
-    });
+    console.log(`[SUBSCRIPTION SYNC] Fetching ${config.name} from: ${targetUrl}`);
+    const { buffer } = await fetchBufferWithFallback(targetUrl, "IPTV-Manager-Sync-Service");
 
-    if (!res.ok) {
-      throw new Error(`HTTP Error ${res.status}: ${res.statusText}`);
-    }
-
-    const content = await res.text();
+    const content = buffer.toString("utf-8");
     let importedChannelsCount = 0;
     let importedSourcesCount = 0;
 
@@ -1225,7 +1306,8 @@ async function startServer() {
       req.path === "/api/sources/detect-ip" ||
       req.path === "/api/auth/status" ||
       req.path === "/api/auth/verify" ||
-      req.path === "/api/sources/client-test-results";
+      req.path === "/api/sources/client-test-results" ||
+      (req.path === "/api/channels" && req.method === "GET");
       
     if (isPublicPath) {
       return next();
