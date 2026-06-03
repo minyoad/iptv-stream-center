@@ -25,7 +25,8 @@ import {
   Play,
   FileText,
   Database,
-  Shield
+  Shield,
+  GitMerge
 } from "lucide-react";
 import { Channel, LiveSource, SyncConfig, TestStatus, EpgGuide, Group, EpgSource } from "./types";
 import DashboardView from "./components/DashboardView";
@@ -831,6 +832,45 @@ export default function App() {
           }
         } catch (e) {
           showFeedback("error", "网络超时");
+        }
+      }
+    );
+  };
+
+  const handleBatchMerge = () => {
+    if (selectedChannelIds.length < 2) {
+      showFeedback("info", "合并频道功能需要至少选择 2 个频道项目");
+      return;
+    }
+    const selectedNames = channels
+      .filter(ch => selectedChannelIds.includes(ch.id))
+      .map(ch => ch.name);
+
+    triggerConfirm(
+      "合并选中频道",
+      `确定要将选中的 ${selectedChannelIds.length} 个项目合并为一个频道吗？
+系统将智能化推荐/保留属性（Logo、EPG等）最完整的电视频道作为主电视频道，其它的频道名称将被设定为此主频道的关联“别名”，并且会自动合并、去重所有的直播播放线路。
+
+拟合并的频道: [ ${selectedNames.join(" | ")} ]`,
+      async () => {
+        try {
+          const res = await fetch("/api/channels/merge", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ channelIds: selectedChannelIds })
+          });
+          if (res.ok) {
+            const data = await res.json();
+            showFeedback("success", data.message || "频道的合并已成功完成！");
+            setSelectedChannelIds([]);
+            setSelectedChannel(null);
+            fetchData();
+          } else {
+            const err = await res.json();
+            showFeedback("error", err.error || "合并频道作业失败");
+          }
+        } catch (e) {
+          showFeedback("error", "网络连接超时，请稍后重试");
         }
       }
     );
@@ -2045,6 +2085,15 @@ export default function App() {
                             <Trash2 className="w-3 h-3" />
                             批量删除
                           </button>
+                          {selectedChannelIds.length >= 2 && (
+                            <button
+                              onClick={handleBatchMerge}
+                              className="bg-indigo-600 hover:bg-indigo-700 text-white text-[10px] font-bold px-2.5 py-1 rounded-lg transition shadow-xs cursor-pointer flex items-center gap-1"
+                            >
+                              <GitMerge className="w-3 h-3" />
+                              合并选中频道
+                            </button>
+                          )}
                           <button
                             onClick={() => setSelectedChannelIds([])}
                             className="bg-slate-200 hover:bg-slate-300 text-slate-600 text-[10px] font-bold px-2 py-1 rounded-lg transition cursor-pointer"

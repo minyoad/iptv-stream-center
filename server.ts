@@ -1577,6 +1577,128 @@ async function startServer() {
     res.json({ success: true, count: initialLength - channels.length });
   });
 
+  // Merge multiple channels
+  app.post("/api/channels/merge", (req, res) => {
+    const { channelIds } = req.body;
+    if (!Array.isArray(channelIds) || channelIds.length < 2) {
+      return res.status(400).json({ error: "请提供至少两个要合并的频道 ID" });
+    }
+
+    const targetChannels = channels.filter(c => channelIds.includes(c.id));
+    if (targetChannels.length < 2) {
+      return res.status(400).json({ error: "未找到足够的待合并频道项目" });
+    }
+
+    // Score channels to pick the most complete/valid as primary
+    const getScore = (ch: typeof targetChannels[0]) => {
+      let score = 0;
+      if (ch.name && ch.name.trim().length > 0) score += 2;
+      if (ch.logo && (ch.logo.startsWith("http") || ch.logo.startsWith("/") || ch.logo.length > 5)) score += 5;
+      if (ch.epgId && ch.epgId.trim().length > 0 && !/^\d+$/.test(ch.epgId)) score += 3;
+      if (ch.groupIds && ch.groupIds.length > 0) score += ch.groupIds.length;
+      if (ch.sources && ch.sources.length > 0) score += ch.sources.length * 2;
+      if (ch.alias && ch.alias.length > 0) score += ch.alias.length;
+      return score;
+    };
+
+    const sortedByCompleteness = [...targetChannels].sort((a, b) => getScore(b) - getScore(a));
+    const primaryChannel = sortedByCompleteness[0];
+
+    const allNames = new Set<string>();
+    const allAliases = new Set<string>();
+    const allGroupIds = new Set<string>();
+    const logoCandidates: string[] = [];
+    const epgIdCandidates: string[] = [];
+
+    targetChannels.forEach(c => {
+      if (c.name) allNames.add(c.name.trim());
+      if (c.alias && Array.isArray(c.alias)) {
+        c.alias.forEach(a => {
+          if (a) allAliases.add(a.trim());
+        });
+      }
+      if (c.groupIds && Array.isArray(c.groupIds)) {
+        c.groupIds.forEach(g => allGroupIds.add(g));
+      }
+      if (c.logo && c.logo.trim()) {
+        logoCandidates.push(c.logo.trim());
+      }
+      if (c.epgId && c.epgId.trim()) {
+        epgIdCandidates.push(c.epgId.trim());
+      }
+    });
+
+    let bestLogo = primaryChannel.logo || "";
+    const httpLogo = logoCandidates.find(l => l.startsWith("http://") || l.startsWith("https://"));
+    if (httpLogo) {
+      bestLogo = httpLogo;
+    } else if (logoCandidates.length > 0) {
+      bestLogo = logoCandidates[0];
+    }
+
+    let bestEpgId = primaryChannel.epgId || "";
+    const validEpgId = epgIdCandidates.find(e => e && !/^\d+$/.test(e) && e.toLowerCase() !== "null" && e.toLowerCase() !== "undefined");
+    if (validEpgId) {
+      bestEpgId = validEpgId;
+    } else if (epgIdCandidates.length > 0) {
+      bestEpgId = epgIdCandidates[0];
+    }
+
+    const mergedSources: typeof primaryChannel.sources = [];
+    const addedUrls = new Set<string>();
+
+    const allSources = [
+      ...(primaryChannel.sources || []),
+      ...targetChannels.filter(c => c.id !== primaryChannel.id).flatMap(c => c.sources || [])
+    ];
+
+    allSources.forEach(s => {
+      if (!s || !s.url) return;
+      const cleanUrl = s.url.trim();
+      if (!addedUrls.has(cleanUrl)) {
+        addedUrls.add(cleanUrl);
+        mergedSources.push({
+          ...s,
+          url: cleanUrl
+        });
+      } else {
+        const existingIdx = mergedSources.findIndex(x => x.url === cleanUrl);
+        if (existingIdx !== -1) {
+          const existing = mergedSources[existingIdx];
+          if (existing.status !== "active" && s.status === "active") {
+            mergedSources[existingIdx] = s;
+          } else if (existing.status === s.status && s.latency && (!existing.latency || s.latency < existing.latency)) {
+            mergedSources[existingIdx] = s;
+          }
+        }
+      }
+    });
+
+    const primaryName = primaryChannel.name;
+    allNames.forEach(n => {
+      if (n !== primaryName) {
+        allAliases.add(n);
+      }
+    });
+
+    primaryChannel.logo = bestLogo;
+    primaryChannel.epgId = bestEpgId;
+    primaryChannel.groupIds = Array.from(allGroupIds);
+    primaryChannel.alias = Array.from(allAliases).filter(a => a !== primaryName);
+    primaryChannel.sources = mergedSources;
+
+    const otherIdsToMerge = channelIds.filter(id => id !== primaryChannel.id);
+    channels = channels.filter(c => !otherIdsToMerge.includes(c.id));
+
+    saveData();
+
+    res.json({
+      success: true,
+      message: `成功合并 ${targetChannels.length} 个频道。保留了最完备的主频道 [${primaryChannel.name}]，合并后包含别名: ${primaryChannel.alias.join(", ") || "无"}，已整合并去重 ${primaryChannel.sources.length} 条播放线路。`,
+      primaryChannel
+    });
+  });
+
   // Batch update channel groups
   app.post("/api/channels/batch-groups", (req, res) => {
     const { channelIds, groupIds } = req.body;
