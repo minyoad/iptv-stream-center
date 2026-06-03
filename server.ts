@@ -68,6 +68,7 @@ if (!fs.existsSync(DATA_DIR)) {
 let groups: Group[] = [];
 let channels: Channel[] = [];
 let syncConfigs: SyncConfig[] = [];
+let adminPassword = process.env.ADMIN_PASSWORD || "";
 const testStatus: TestStatus = {
   status: "idle",
   total: 0,
@@ -310,6 +311,9 @@ function loadData() {
       channels = parsed.channels || [];
       syncConfigs = parsed.syncConfigs || [];
       groups = parsed.groups || [];
+      if (parsed.adminPassword !== undefined) {
+        adminPassword = parsed.adminPassword;
+      }
     } else {
       channels = DEFAULT_CHANNELS;
       syncConfigs = DEFAULT_SYNC_CONFIGS;
@@ -378,6 +382,7 @@ function saveData() {
       groups,
       channels,
       syncConfigs,
+      adminPassword,
     };
     fs.writeFileSync(DATA_FILE, JSON.stringify(backup, null, 2), "utf-8");
   } catch (error) {
@@ -912,6 +917,76 @@ async function startServer() {
   const PORT = 3000;
 
   app.use(express.json({ limit: "50mb" }));
+
+  // ==================== AUTHENTICATION ENDPOINTS (PUBLIC) ====================
+  // Get current authentication protection status
+  app.get("/api/auth/status", (req, res) => {
+    res.json({ passwordSet: !!adminPassword });
+  });
+
+  // Verify management password (login)
+  app.post("/api/auth/verify", (req, res) => {
+    const { password } = req.body;
+    if (!adminPassword || password === adminPassword) {
+      res.json({ success: true });
+    } else {
+      res.status(401).json({ success: false, error: "密码不正确，请重新输入" });
+    }
+  });
+
+  // Change or set a new password
+  app.post("/api/auth/set-password", (req, res) => {
+    const { oldPassword, newPassword } = req.body;
+    
+    // If password is already set, verify old password first
+    if (adminPassword && oldPassword !== adminPassword) {
+      return res.status(401).json({ success: false, error: "原密码不正确，无法更新密码" });
+    }
+    
+    adminPassword = (newPassword || "").trim();
+    saveData();
+    res.json({ 
+      success: true, 
+      message: adminPassword ? "管理保护密码已设置成功！" : "管理保护密码已清空，系统已解除密码校验保护" 
+    });
+  });
+
+  // ==================== SECURITY ACTION MIDDLEWARE ====================
+  app.use((req, res, next) => {
+    // 0. Only protect /api/ routes. Static assets and index.html must remain public.
+    if (!req.path.startsWith("/api/")) {
+      return next();
+    }
+
+    // 1. Skip paths that must always be public for TV playback players, external probes or login verification
+    const isPublicPath = 
+      req.path.startsWith("/api/export/") || 
+      req.path === "/api/epg/guide" || 
+      req.path === "/api/sources/detect-ip" ||
+      req.path === "/api/auth/status" ||
+      req.path === "/api/auth/verify" ||
+      req.path === "/api/sources/client-test-results";
+      
+    if (isPublicPath) {
+      return next();
+    }
+
+    // 2. If no admin password is set yet, bypass protection entirely
+    if (!adminPassword) {
+      return next();
+    }
+
+    // 3. Otherwise, check validation header
+    const clientSecretHeader = req.headers["x-admin-password"];
+    if (clientSecretHeader !== adminPassword) {
+      return res.status(401).json({ 
+        error: "Unauthorized: 您未提供管理密码或密码校验过期", 
+        code: "AUTH_REQUIRED" 
+      });
+    }
+
+    next();
+  });
 
   // API Endpoints
   // Group CRUD Endpoints

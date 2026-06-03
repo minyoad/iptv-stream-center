@@ -144,6 +144,21 @@ export default function App() {
     });
   };
 
+  // Password-protection security management states
+  const [isAuthRequired, setIsAuthRequired] = useState(false);
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [adminPasswordInput, setAdminPasswordInput] = useState("");
+  const [authChecking, setAuthChecking] = useState(true);
+  const [authError, setAuthError] = useState("");
+  
+  // States for password setting modal/form
+  const [isSettingPasswordModalOpen, setIsSettingPasswordModalOpen] = useState(false);
+  const [passwordForm, setPasswordForm] = useState({
+    oldPassword: "",
+    newPassword: "",
+    confirmPassword: ""
+  });
+
   // Playback Export config builder parameters
   const [exportParams, setExportParams] = useState({
     isp: "",
@@ -350,10 +365,10 @@ export default function App() {
   };
 
   useEffect(() => {
-    if (activeTab === "backup") {
+    if (isAuthenticated && activeTab === "backup") {
       fetchBackups();
     }
-  }, [activeTab]);
+  }, [activeTab, isAuthenticated]);
 
   // Load Channels, Groups & Configurations
   const fetchData = async () => {
@@ -389,6 +404,7 @@ export default function App() {
 
   // Adaptive, resilient polling for testing status
   useEffect(() => {
+    if (!isAuthenticated) return;
     fetchData();
     
     let timerId: any = null;
@@ -431,7 +447,7 @@ export default function App() {
       isMounted = false;
       if (timerId) clearTimeout(timerId);
     };
-  }, []);
+  }, [isAuthenticated]);
 
   const detectClientIpInfo = async (silent = false) => {
     setIsDetectingIp(true);
@@ -473,6 +489,141 @@ export default function App() {
     setTimeout(() => {
       setFeedbackMsg(null);
     }, 4500);
+  };
+
+  // Setup automated global fetch interceptor via a local scoped fetch function
+  const fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    const url = typeof input === "string" ? input : (input instanceof Request ? input.url : String(input));
+    if (url.startsWith("/api/")) {
+      const password = localStorage.getItem("iptv_admin_password") || "";
+      const headers = new Headers(init?.headers || {});
+      if (password) {
+        headers.set("x-admin-password", password);
+      }
+      const updatedInit = {
+        ...init,
+        headers,
+      };
+      const response = await window.fetch(input, updatedInit);
+      
+      // If server responds with 401 Unauthorized because of password requirement, trigger authentication prompt
+      if (response.status === 401 && !url.includes("/api/auth/verify") && !url.includes("/api/auth/status")) {
+        setIsAuthenticated(false);
+        setIsAuthRequired(true);
+      }
+      return response;
+    }
+    return window.fetch(input, init);
+  };
+
+  const checkAuthStatus = async () => {
+    try {
+      const res = await fetch("/api/auth/status");
+      if (res.ok) {
+        const data = await res.json();
+        if (data.passwordSet) {
+          setIsAuthRequired(true);
+          const savedPwd = localStorage.getItem("iptv_admin_password") || "";
+          if (savedPwd) {
+            // Verify stored password
+            const verifyRes = await fetch("/api/auth/verify", {
+               method: "POST",
+               headers: { "Content-Type": "application/json" },
+               body: JSON.stringify({ password: savedPwd })
+            });
+            if (verifyRes.ok) {
+              setIsAuthenticated(true);
+            } else {
+              localStorage.removeItem("iptv_admin_password");
+              setIsAuthenticated(false);
+            }
+          } else {
+            setIsAuthenticated(false);
+          }
+        } else {
+          setIsAuthRequired(false);
+          setIsAuthenticated(true);
+        }
+      }
+    } catch (e) {
+      console.error("Auth status query failed", e);
+    } finally {
+      setAuthChecking(false);
+    }
+  };
+
+  useEffect(() => {
+    checkAuthStatus();
+  }, []);
+
+  const handleLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAuthError("");
+    try {
+      const verifyRes = await fetch("/api/auth/verify", {
+         method: "POST",
+         headers: { "Content-Type": "application/json" },
+         body: JSON.stringify({ password: adminPasswordInput })
+      });
+      if (verifyRes.ok) {
+        localStorage.setItem("iptv_admin_password", adminPasswordInput);
+        setIsAuthenticated(true);
+        showFeedback("success", "解锁成功！欢迎回到 IPTV 管理终端");
+        setAdminPasswordInput("");
+        fetchData();
+      } else {
+         const err = await verifyRes.json();
+         setAuthError(err.error || "密码错误，请重新输入");
+      }
+    } catch (e) {
+      setAuthError("无法连接到主服务器，请检查网络后再试");
+    }
+  };
+
+  const handleUpdatePassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (passwordForm.newPassword !== passwordForm.confirmPassword) {
+      showFeedback("error", "两次输入的新密码不一致，请重试");
+      return;
+    }
+    
+    try {
+      const res = await fetch("/api/auth/set-password", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          oldPassword: passwordForm.oldPassword,
+          newPassword: passwordForm.newPassword
+        })
+      });
+      
+      const data = await res.json();
+      if (res.ok && data.success) {
+        showFeedback("success", data.message || "密码操作成功！");
+        if (passwordForm.newPassword) {
+          localStorage.setItem("iptv_admin_password", passwordForm.newPassword);
+          setIsAuthRequired(true);
+          setIsAuthenticated(true);
+        } else {
+          localStorage.removeItem("iptv_admin_password");
+          setIsAuthRequired(false);
+          setIsAuthenticated(true);
+        }
+        setIsSettingPasswordModalOpen(false);
+        setPasswordForm({ oldPassword: "", newPassword: "", confirmPassword: "" });
+      } else {
+        showFeedback("error", data.error || "原密码校验失败");
+      }
+    } catch (e) {
+      showFeedback("error", "提交密码设置任务超时或失败");
+    }
+  };
+
+  const handleLogout = () => {
+    localStorage.removeItem("iptv_admin_password");
+    setIsAuthenticated(false);
+    setIsSettingPasswordModalOpen(false);
+    showFeedback("info", "已成功退出当前管理会话。已加锁。");
   };
 
   // Trigger Bulk Async Speed check on host
@@ -1257,6 +1408,67 @@ export default function App() {
     showFeedback("success", "复制接口成功！已写入剪贴板。");
   };
 
+  if (authChecking) {
+    return (
+      <div className="w-full min-h-screen bg-slate-900 flex flex-col items-center justify-center text-slate-100 font-sans" id="auth_checking_container">
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-500 mb-4" />
+        <p className="text-sm font-semibold text-slate-400">正在安全初始化并校验管理会话...</p>
+      </div>
+    );
+  }
+
+  if (isAuthRequired && !isAuthenticated) {
+    return (
+      <div className="w-full min-h-screen bg-slate-950 flex flex-col items-center justify-center p-4 font-sans text-slate-100" id="lock_screen_container">
+        <div className="max-w-md w-full bg-slate-900/60 rounded-3xl p-8 border border-slate-800 shadow-2xl flex flex-col items-center space-y-6 backdrop-blur-md">
+          
+          {/* Logo Shield Icon */}
+          <div className="w-16 h-16 bg-indigo-500/10 border border-indigo-500/20 rounded-2xl flex items-center justify-center text-indigo-400 shadow-xl shadow-indigo-500/5 animate-pulse">
+            <Shield className="w-8 h-8" />
+          </div>
+          
+          <div className="text-center space-y-2">
+            <h1 className="text-xl font-extrabold text-white tracking-tight">管理会话已加锁</h1>
+            <p className="text-xs text-slate-400 max-w-sm leading-relaxed mx-auto">
+              正在保护您的 IPTV 电视直播主板系统目录。请输入校验密码以确认您的管理身份。
+            </p>
+          </div>
+          
+          <form onSubmit={handleLogin} className="w-full space-y-4">
+            <div className="space-y-1.5">
+              <label className="text-[11px] font-bold text-slate-500 block uppercase tracking-wider">管理密码 (Password)</label>
+              <input
+                type="password"
+                required
+                value={adminPasswordInput}
+                onChange={(e) => setAdminPasswordInput(e.target.value)}
+                placeholder="请输入已设置的管理密码"
+                className="w-full p-3.5 bg-slate-950 border border-slate-800 rounded-2xl text-slate-200 text-sm focus:outline-none focus:border-indigo-500 transition font-mono placeholder:text-slate-700"
+              />
+            </div>
+
+            {authError && (
+              <div className="p-3 bg-rose-500/10 border border-rose-500/25 text-rose-400 text-xs font-semibold rounded-xl text-center">
+                ⚠️ {authError}
+              </div>
+            )}
+
+            <button
+              type="submit"
+              className="w-full py-3.5 bg-indigo-600 hover:bg-indigo-500 text-white font-black text-xs rounded-2xl transition shadow-lg shadow-indigo-600/20 cursor-pointer text-center block uppercase tracking-wider"
+            >
+              解锁安全终端
+            </button>
+          </form>
+          
+          <div className="text-[10px] text-slate-600 font-mono text-center">
+            IPTV Stream Node Control Panel • Secured
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="w-full min-h-screen bg-slate-50 flex overflow-hidden font-sans text-slate-800" id="app_frame">
       {/* Dynamic Slide-in Status / Info Feedback Banner */}
@@ -1361,6 +1573,28 @@ export default function App() {
           >
             <Database className="w-4 h-4" />
             系统备份与恢复管理
+          </button>
+
+          <button 
+            onClick={() => {
+              setPasswordForm({ oldPassword: "", newPassword: "", confirmPassword: "" });
+              setIsSettingPasswordModalOpen(true);
+            }}
+            className={`w-full flex items-center justify-between px-4 py-3 rounded-xl transition text-xs text-left font-semibold ${
+              isAuthRequired 
+              ? "bg-indigo-50/40 text-indigo-700 hover:bg-indigo-50 border border-indigo-100" 
+              : "text-slate-500 hover:bg-slate-50 hover:text-slate-800"
+            }`}
+            id="nav_security"
+            type="button"
+          >
+            <span className="flex items-center gap-3.5">
+              <Shield className="w-4 h-4" />
+              安全密码保护
+            </span>
+            <span className={`text-[10px] scale-90 px-1.5 py-0.5 rounded font-black ${isAuthRequired ? "bg-indigo-100 text-indigo-800" : "bg-slate-100 text-slate-500"}`}>
+              {isAuthRequired ? "启用" : "未设"}
+            </span>
           </button>
 
           {/* Quick Stats sidebar banner */}
@@ -3823,6 +4057,99 @@ export default function App() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {isSettingPasswordModalOpen && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4" id="security_password_modal">
+          <div className="bg-white rounded-2xl max-w-sm w-full p-6 shadow-2xl border border-slate-100 flex flex-col space-y-5 animate-fade-in">
+            <div className="flex justify-between items-center">
+              <div className="flex items-center gap-2">
+                <Shield className="w-5 h-5 text-indigo-600" />
+                <h3 className="text-sm font-extrabold text-slate-800">安全密码校验保护设置</h3>
+              </div>
+              <button 
+                className="text-slate-400 hover:text-slate-600 font-bold transition text-xs" 
+                onClick={() => setIsSettingPasswordModalOpen(false)}
+              >
+                ✕
+              </button>
+            </div>
+
+            <p className="text-[11px] text-slate-500 leading-relaxed font-semibold">
+              启用密码校验保护后，管理及写入操作需要验证，这有助于保障您的 IPTV 频道及配置文件不受随意篡改。
+            </p>
+
+            <form onSubmit={handleUpdatePassword} className="space-y-4 text-xs font-semibold text-slate-600">
+              {isAuthRequired && (
+                <div className="space-y-1.5">
+                  <label className="block text-slate-700">当前校验密码 *</label>
+                  <input 
+                    type="password"
+                    required
+                    value={passwordForm.oldPassword}
+                    onChange={(e) => setPasswordForm({ ...passwordForm, oldPassword: e.target.value })}
+                    placeholder="请输入您当前的管理密码"
+                    className="w-full text-xs p-2.5 border border-slate-200 rounded-xl focus:border-indigo-500 bg-slate-50 focus:outline-none"
+                  />
+                </div>
+              )}
+
+              <div className="space-y-1.5">
+                <label className="block text-slate-700">新安全密码 (留空则代表取消密码保卫)</label>
+                <input 
+                  type="password"
+                  value={passwordForm.newPassword}
+                  onChange={(e) => setPasswordForm({ ...passwordForm, newPassword: e.target.value })}
+                  placeholder="留空表示取消保护"
+                  className="w-full text-xs p-2.5 border border-slate-200 rounded-xl focus:border-indigo-500 bg-slate-50 focus:outline-none"
+                />
+              </div>
+
+              {passwordForm.newPassword && (
+                <div className="space-y-1.5 animate-slide-in">
+                  <label className="block text-slate-700">确认新安全密码 *</label>
+                  <input 
+                    type="password"
+                    required
+                    value={passwordForm.confirmPassword}
+                    onChange={(e) => setPasswordForm({ ...passwordForm, confirmPassword: e.target.value })}
+                    placeholder="请再次属实输入新密码"
+                    className="w-full text-xs p-2.5 border border-slate-200 rounded-xl focus:border-indigo-500 bg-slate-50 focus:outline-none"
+                  />
+                </div>
+              )}
+
+              <div className="flex gap-2.5 pt-2">
+                <button 
+                  type="button"
+                  onClick={() => setIsSettingPasswordModalOpen(false)}
+                  className="w-1/3 py-2.5 border border-slate-200 hover:bg-slate-50 text-slate-600 rounded-xl transition text-center text-xs font-bold"
+                >
+                  取消
+                </button>
+                <button 
+                  type="submit"
+                  className="w-2/3 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl transition text-center text-xs font-bold shadow-md shadow-indigo-100"
+                >
+                  保存设置
+                </button>
+              </div>
+            </form>
+
+            {isAuthRequired && (
+              <div className="border-t border-slate-100 pt-4 flex flex-col items-center">
+                <button
+                  type="button"
+                  onClick={handleLogout}
+                  className="py-2 px-4 border border-rose-100 hover:bg-rose-50 text-rose-600 rounded-xl text-xs font-bold transition flex items-center gap-2"
+                >
+                  Lock
+                  🔒 立即锁定并退出管理会话
+                </button>
+              </div>
+            )}
           </div>
         </div>
       )}
