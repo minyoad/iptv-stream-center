@@ -7,6 +7,8 @@ import { XMLParser } from "fast-xml-parser";
 import zlib from "zlib";
 import http from "http";
 import https from "https";
+import crypto from "crypto";
+import { GoogleGenAI, Type } from "@google/genai";
 
 interface LiveSource {
   id: string;
@@ -45,6 +47,9 @@ interface SyncConfig {
   lastSynced?: string;
   status: "success" | "failed" | "never";
   message?: string;
+  disabled?: boolean;
+  consecutiveFailures?: number;
+  contentHash?: string;
 }
 
 interface EpgSource {
@@ -797,6 +802,158 @@ function escapeXml(unsafe: string): string {
   });
 }
 
+let geminiClient: GoogleGenAI | null = null;
+function getGeminiClient(): GoogleGenAI {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) {
+    throw new Error("请先在 系统设置 > 密钥 (Settings > Secrets) 中配置您的 GEMINI_API_KEY！");
+  }
+  if (!geminiClient) {
+    geminiClient = new GoogleGenAI({
+      apiKey,
+      httpOptions: {
+        headers: {
+          "User-Agent": "aistudio-build",
+        }
+      }
+    });
+  }
+  return geminiClient;
+}
+
+const ipGeoCache = new Map<string, { province: string, isp: string }>();
+
+async function getClientIpGeo(ipString: string): Promise<{ province: string, isp: string }> {
+  let ip = (ipString || "").trim();
+  if (ip.includes("::ffff:")) {
+    ip = ip.replace("::ffff:", "");
+  }
+  if (!ip || ip === "127.0.0.1" || ip === "::1" || ip.startsWith("10.") || ip.startsWith("192.168.") || ip.startsWith("172.16.") || ip.startsWith("172.17.") || ip.startsWith("172.18.") || ip.startsWith("172.19.") || ip.startsWith("172.2") || ip.startsWith("172.3")) {
+    return { province: "", isp: "" };
+  }
+
+  if (ipGeoCache.has(ip)) {
+    return ipGeoCache.get(ip)!;
+  }
+
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 1200);
+
+    const checkUrl = `http://ip-api.com/json/${ip}?lang=zh-CN`;
+    const res = await fetch(checkUrl, { signal: controller.signal });
+    clearTimeout(timeoutId);
+
+    if (res.ok) {
+      const data = await res.json();
+      if (data && data.status === "success") {
+        let province = "";
+        let isp = "";
+
+        const regName = data.regionName || "";
+        const ispStr = data.isp || "";
+
+        const provinces = ["北京", "上海", "天津", "重庆", "河北", "山西", "辽宁", "吉林", "黑龙江", "江苏", "浙江", "安徽", "福建", "江西", "山东", "河南", "湖北", "湖南", "广东", "海南", "四川", "贵州", "云南", "陕西", "甘肃", "青海", "台湾", "内蒙古", "广西", "西藏", "宁夏", "新疆", "香港", "澳门"];
+        for (const p of provinces) {
+          if (regName.includes(p)) {
+            province = p;
+            break;
+          }
+        }
+
+        const ispKeywords = [
+          { keyword: "telecom", name: "电信" },
+          { keyword: "unicom", name: "联通" },
+          { keyword: "mobile", name: "移动" },
+          { keyword: "chinanet", name: "电信" },
+          { keyword: "broadband", name: "广电" },
+          { keyword: "cantv", name: "广电" },
+          { keyword: "chinasat", name: "广电" },
+          { keyword: "电信", name: "电信" },
+          { keyword: "联通", name: "联通" },
+          { keyword: "移动", name: "移动" },
+          { keyword: "铁通", name: "铁通" },
+          { keyword: "广电", name: "广电" },
+        ];
+        
+        for (const ik of ispKeywords) {
+          if (ispStr.toLowerCase().includes(ik.keyword)) {
+            isp = ik.name;
+            break;
+          }
+        }
+
+        const geo = { province, isp };
+        console.log(`[IP GEO LOOKUP] Resolved IP ${ip}:`, geo);
+        ipGeoCache.set(ip, geo);
+        return geo;
+      }
+    }
+  } catch (err: any) {
+    console.error(`[IP GEO LOOKUP ERROR] for ${ip}:`, err.message || err);
+  }
+
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 1200);
+    const res = await fetch(`https://whois.pconline.com.cn/ipJson.jsp?ip=${ip}&json=true`, { signal: controller.signal });
+    clearTimeout(timeoutId);
+    if (res.ok) {
+      const data = await res.json();
+      if (data && data.pro) {
+        let province = data.pro.replace("省", "").replace("市", "");
+        let isp = "";
+        const addr = data.addr || "";
+        if (addr.includes("电信")) isp = "电信";
+        else if (addr.includes("联通")) isp = "联通";
+        else if (addr.includes("移动")) isp = "移动";
+        else if (addr.includes("广电")) isp = "广电";
+        
+        const geo = { province, isp };
+        console.log(`[IP GEO LOOKUP FALLBACK] Resolved IP ${ip}:`, geo);
+        ipGeoCache.set(ip, geo);
+        return geo;
+      }
+    }
+  } catch (err: any) {
+    console.error(`[IP GEO LOOKUP FALLBACK ERROR] for ${ip}:`, err.message || err);
+  }
+
+  return { province: "", isp: "" };
+}
+
+function sortSourcesByGeo(sources: LiveSource[], clientProvince: string, clientIsp: string): LiveSource[] {
+  if (!clientProvince && !clientIsp) return sources;
+  
+  return [...sources].sort((a, b) => {
+    const getScore = (s: LiveSource) => {
+      let score = 0;
+      const srcProv = (s.province || "").trim();
+      const srcIsp = (s.isp || "").trim();
+
+      const provinceMatch = clientProvince && srcProv && srcProv === clientProvince;
+      const ispMatch = clientIsp && srcIsp && srcIsp === clientIsp;
+
+      if (provinceMatch && ispMatch) {
+        score += 100; // Exact province + ISP match
+      } else if (provinceMatch) {
+        score += 50;  // Province match only
+      } else if (ispMatch && (srcProv === "全国" || !srcProv)) {
+        score += 30;  // Nationwide + ISP match
+      } else if (srcProv === "全国" || !srcProv) {
+        score += 10;  // Nationwide only
+      } else if (ispMatch) {
+        score += 5;   // ISP match other province
+      } else {
+        score += 1;   // No match
+      }
+      return score;
+    };
+
+    return getScore(b) - getScore(a);
+  });
+}
+
 async function fetchBufferWithFallback(urlStr: string, userAgent: string): Promise<{ buffer: Buffer; isGzipped: boolean }> {
   const downloadDirectly = (targetUrlStr: string, maxRedirects = 5): Promise<{ buffer: Buffer; isGzipped: boolean }> => {
     return new Promise((resolve, reject) => {
@@ -979,7 +1136,7 @@ async function performEpgSync(source: EpgSource): Promise<boolean> {
 }
 
 // Synchronizer for M3U and TXT
-async function performSync(config: SyncConfig) {
+async function performSync(config: SyncConfig, force = false) {
   try {
     // Process Github URL: converts github.com/user/repo/blob/branch/file to raw.githubusercontent.com
     let targetUrl = config.url;
@@ -999,6 +1156,19 @@ async function performSync(config: SyncConfig) {
     const { buffer } = await fetchBufferWithFallback(targetUrl, "IPTV-Manager-Sync-Service");
 
     const content = buffer.toString("utf-8");
+
+    // Track update status by computing md5 checksum
+    const freshHash = crypto.createHash("md5").update(content).digest("hex");
+    if (!force && config.contentHash && config.contentHash === freshHash) {
+      console.log(`[SUBSCRIPTION SYNC] No update detected for ${config.name}. Content hash matches.`);
+      config.status = "success";
+      config.lastSynced = new Date().toISOString();
+      config.message = "同步完成 (检测到内容无新变化)";
+      config.consecutiveFailures = 0;
+      saveData();
+      return true;
+    }
+
     let importedChannelsCount = 0;
     let importedSourcesCount = 0;
 
@@ -1217,15 +1387,24 @@ async function performSync(config: SyncConfig) {
       }
     }
 
+    config.contentHash = freshHash;
     config.status = "success";
     config.lastSynced = new Date().toISOString();
     config.message = `成功导入 ${importedChannelsCount} 个频道，${importedSourcesCount} 个新直播源`;
+    config.consecutiveFailures = 0;
     saveData();
     return true;
   } catch (err: any) {
+    config.consecutiveFailures = (config.consecutiveFailures || 0) + 1;
     config.status = "failed";
     config.lastSynced = new Date().toISOString();
-    config.message = `同步失败: ${err.message || err}`;
+    if (config.consecutiveFailures >= 3) {
+      config.disabled = true;
+      config.autoSync = false;
+      config.message = `连续导入失败 ${config.consecutiveFailures} 次，已自动禁用: ${err.message || err}`;
+    } else {
+      config.message = `同步失败 (连续第 ${config.consecutiveFailures} 次失败): ${err.message || err}`;
+    }
     saveData();
     return false;
   }
@@ -1239,7 +1418,7 @@ setInterval(() => {
   checkAndPerformDailyBackup();
 
   for (const config of syncConfigs) {
-    if (config.autoSync) {
+    if (config.autoSync && !config.disabled) {
       const hoursSinceSync = config.lastSynced
         ? (now.getTime() - new Date(config.lastSynced).getTime()) / (1000 * 3600)
         : Infinity;
@@ -2174,9 +2353,22 @@ async function startServer() {
     }
 
     if (name) config.name = name;
-    if (url) config.url = url;
+    if (url && url !== config.url) {
+      config.url = url;
+      config.contentHash = undefined;
+      config.disabled = false;
+      config.consecutiveFailures = 0;
+    } else if (url) {
+      config.url = url;
+    }
     if (type) config.type = type;
-    if (autoSync !== undefined) config.autoSync = autoSync;
+    if (autoSync !== undefined) {
+      config.autoSync = autoSync;
+      if (autoSync === true) {
+        config.disabled = false;
+        config.consecutiveFailures = 0;
+      }
+    }
     if (syncInterval !== undefined) config.syncInterval = Number(syncInterval);
 
     saveData();
@@ -2206,9 +2398,11 @@ async function startServer() {
 
     config.status = "never";
     config.message = "正在进行后台同步...";
+    config.disabled = false;
+    config.consecutiveFailures = 0;
     
-    // Run sync asynchronously, but response could wait or return status
-    const success = await performSync(config);
+    // Run sync asynchronously forcing update on manual trigger
+    const success = await performSync(config, true);
     if (success) {
       res.json({ success: true, message: "同步完成", config });
     } else {
@@ -2474,11 +2668,25 @@ async function startServer() {
     if (channelId) {
       const channel = channels.find((c) => c.id === channelId);
       if (channel) {
+        let isSimulated = true;
+        const activeEpgSrcs = epgSources.filter(s => s.active);
+        for (const src of activeEpgSrcs) {
+          const cache = getEpgCache(src.id);
+          if (cache) {
+            const entry = findMatchingEpgEntry(channel, cache);
+            if (entry && entry.programs && entry.programs.length > 0) {
+              isSimulated = false;
+              break;
+            }
+          }
+        }
+
         return res.json({
           channelId,
           channelName: channel.name,
           date: targetDate,
           epgId: channel.epgId,
+          isSimulated,
           programs: getEpgForChannelAndDate(channel),
         });
       }
@@ -2495,12 +2703,182 @@ async function startServer() {
     res.json({ date: targetDate, guides: guideMap });
   });
 
+  // AI Smart Auto-Correction Recommendation Endpoint
+  app.post("/api/epg/ai-recommend", async (req, res) => {
+    try {
+      const { channelId, channelName } = req.body;
+      let targetName = "";
+      if (channelId) {
+        const found = channels.find(c => c.id === channelId);
+        if (found) {
+          targetName = found.name;
+        }
+      }
+      if (!targetName && channelName) {
+        targetName = String(channelName).trim();
+      }
+
+      if (!targetName) {
+        return res.status(400).json({ error: "缺少频道名称或频道ID" });
+      }
+
+      // 1. Gather all candidates from active EPG sources
+      const candidates: { epgId: string; displayNames: string[]; sourceName: string }[] = [];
+      const seenIds = new Set<string>();
+
+      const activeEpgSrcs = epgSources.filter(s => s.active);
+      for (const src of activeEpgSrcs) {
+        const cache = getEpgCache(src.id);
+        if (cache) {
+          for (const [epgId, entry] of Object.entries(cache)) {
+            const key = `${src.id}::${epgId}`;
+            if (!seenIds.has(key)) {
+              seenIds.add(key);
+              candidates.push({
+                epgId,
+                displayNames: entry.displayNames || [],
+                sourceName: src.name
+              });
+            }
+          }
+        }
+      }
+
+      // 2. Score and sort candidates to get the top 100
+      const scoreCand = (name: string, cand: { epgId: string; displayNames: string[] }) => {
+        const normTarget = name.toLowerCase().replace(/[\s\-hd高超清蓝光]/g, "");
+        let maxScore = 0;
+
+        const checkText = (text: string) => {
+          const normText = text.toLowerCase().replace(/[\s\-hd高超清蓝光]/g, "");
+          if (!normText || !normTarget) return 0;
+          if (normText === normTarget) return 100;
+          if (normTarget.includes(normText) || normText.includes(normTarget)) {
+            return 50 + Math.min(normText.length, normTarget.length) * 5;
+          }
+          const s1 = new Set(normTarget.split(""));
+          const s2 = new Set(normText.split(""));
+          let intersection = 0;
+          for (const char of s1) {
+            if (s2.has(char)) intersection++;
+          }
+          if (intersection > 0) {
+            return (intersection / Math.max(s1.size, s2.size)) * 40;
+          }
+          return 0;
+        };
+
+        maxScore = Math.max(maxScore, checkText(cand.epgId));
+        if (cand.displayNames) {
+          for (const display of cand.displayNames) {
+            maxScore = Math.max(maxScore, checkText(display));
+          }
+        }
+        return maxScore;
+      };
+
+      const scoredList = candidates
+        .map(c => ({ candidate: c, score: scoreCand(targetName, c) }))
+        .filter(x => x.score > 0)
+        .sort((a, b) => b.score - a.score)
+        .slice(0, 100)
+        .map(x => x.candidate);
+
+      // 3. Get Gemini Client and generate content
+      const ai = getGeminiClient();
+
+      const prompt = `你是一个智能IPTV电视频道匹配专家。
+我们正在为用户导入的频道：【${targetName}】匹配最合适的 EPG (电子节目单) ID。
+
+下面是从当前已被激活的 EPG 节目源里筛选出的匹配候选列表（包含 epgId、displayNames、及来源Epg源名）：
+${JSON.stringify(scoredList.map(c => ({ epgId: c.epgId, names: c.displayNames, src: c.sourceName })), null, 2)}
+
+请根据：
+1. 名字同义性（例如 CCTV-5 对应 CCTV5 或者 体育台，广东体育 对应 粤语体育）
+2. 缩写和官方标准（例如 CCTV1 代表 Central China Television Channel 1，或者 湖南卫视 对应 Hunan-TV）
+3. 剔除噪声（如 HD, 高清, 超清 等分辨率标识不影响频道属性）
+
+请在候选项目中，选出最完美最精准的前 3 个推荐推荐。
+如果候选列表没有完美匹配，请在 EPG 的标准命名规范下（如“cctv1”, “hunantv”等）推荐一个最合理的 EPG ID。并且说明这是非候选项目的常识性推荐。
+
+请精确按照以下 JSON Schema 返回数据：
+[
+  {
+    "epgId": "推荐匹配的 epgId",
+    "displayName": "该 epgId 的代表名称 (例如 湖南卫视)",
+    "reason": "推荐理由简短中文",
+    "confidence": 0.95 // 匹配置信度，范围 0.0 到 1.0
+  }
+]`;
+
+      const geminiRes = await ai.models.generateContent({
+        model: "gemini-3.5-flash",
+        contents: prompt,
+        config: {
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: Type.ARRAY,
+            items: {
+              type: Type.OBJECT,
+              properties: {
+                epgId: { type: Type.STRING },
+                displayName: { type: Type.STRING },
+                reason: { type: Type.STRING },
+                confidence: { type: Type.NUMBER }
+              },
+              required: ["epgId", "displayName", "reason", "confidence"]
+            }
+          }
+        }
+      });
+
+      const responseText = geminiRes.text;
+      if (!responseText) {
+        throw new Error("模型未返回任何结果");
+      }
+
+      const results = JSON.parse(responseText.trim());
+      res.json({ success: true, channelName: targetName, recommendations: results });
+    } catch (err: any) {
+      console.error("[EPG AI RECOMMEND ERROR]", err.message || err);
+      res.status(500).json({ error: err.message || "智能匹配推荐失败，请检查 API Key 配置" });
+    }
+  });
+
   // CUSTOM EXPORTS/PLAYBACK API INTERFACE
   // Third-party players consume this!
   // Example usage: http://localhost:3000/api/export/m3u?isp=电信&status=active
   // Example usage: http://localhost:3000/api/export/txt?province=北京
-  app.get("/api/export/m3u", (req, res) => {
-    const { category, isp, province, status, limit } = req.query;
+  app.get("/api/export/m3u", async (req, res) => {
+    const { category, isp, province, status, limit, ip, clientIp } = req.query;
+
+    let targetProvince = province ? String(province) : "";
+    let targetIsp = isp ? String(isp) : "";
+
+    // If province/isp not explicitly provided, detect from IP
+    let resolvedClientIp = "";
+    if (!province && !isp) {
+      if (typeof ip === "string" && ip) {
+        resolvedClientIp = ip;
+      } else if (typeof clientIp === "string" && clientIp) {
+        resolvedClientIp = clientIp;
+      } else if (typeof req.headers["x-forwarded-for"] === "string") {
+        resolvedClientIp = req.headers["x-forwarded-for"].split(",")[0].trim();
+      } else if (Array.isArray(req.headers["x-forwarded-for"])) {
+        resolvedClientIp = req.headers["x-forwarded-for"][0].trim();
+      } else if (typeof req.headers["x-real-ip"] === "string") {
+        resolvedClientIp = req.headers["x-real-ip"].trim();
+      } else {
+        resolvedClientIp = req.socket.remoteAddress || "";
+      }
+
+      if (resolvedClientIp) {
+        const geo = await getClientIpGeo(resolvedClientIp);
+        targetProvince = geo.province;
+        targetIsp = geo.isp;
+        console.log(`[EXPORT M3U AUTO-IP] Client IP ${resolvedClientIp} matched Province: ${targetProvince}, ISP: ${targetIsp}`);
+      }
+    }
 
     let playlistRows = ["#EXTM3U x-tvg-url=\"http://epg.51zmt.top:12182/xml/chinas.xml.gz\""];
 
@@ -2515,12 +2893,19 @@ async function startServer() {
         // Filter group level if specific category selected
         if (category && groupName !== String(category) && gId !== String(category)) return;
 
-        channel.sources.forEach((source) => {
-          if (count >= maxLimit) return;
+        let processedSources = channel.sources;
+        if (province || isp) {
+          processedSources = channel.sources.filter(source => {
+            if (province && source.province !== String(province)) return false;
+            if (isp && source.isp !== String(isp)) return false;
+            return true;
+          });
+        } else if (targetProvince || targetIsp) {
+          processedSources = sortSourcesByGeo(channel.sources, targetProvince, targetIsp);
+        }
 
-          // Filter source levels by ISP, province or status
-          if (isp && source.isp !== String(isp)) return;
-          if (province && source.province !== String(province)) return;
+        processedSources.forEach((source) => {
+          if (count >= maxLimit) return;
           if (status && source.status !== String(status)) return;
 
           // Extra details label
@@ -2544,8 +2929,36 @@ async function startServer() {
   });
 
   // TXT (TVBox compatible) format
-  app.get("/api/export/txt", (req, res) => {
-    const { category, isp, province, status, limit } = req.query;
+  app.get("/api/export/txt", async (req, res) => {
+    const { category, isp, province, status, limit, ip, clientIp } = req.query;
+
+    let targetProvince = province ? String(province) : "";
+    let targetIsp = isp ? String(isp) : "";
+
+    // If province/isp not explicitly provided, detect from IP
+    let resolvedClientIp = "";
+    if (!province && !isp) {
+      if (typeof ip === "string" && ip) {
+        resolvedClientIp = ip;
+      } else if (typeof clientIp === "string" && clientIp) {
+        resolvedClientIp = clientIp;
+      } else if (typeof req.headers["x-forwarded-for"] === "string") {
+        resolvedClientIp = req.headers["x-forwarded-for"].split(",")[0].trim();
+      } else if (Array.isArray(req.headers["x-forwarded-for"])) {
+        resolvedClientIp = req.headers["x-forwarded-for"][0].trim();
+      } else if (typeof req.headers["x-real-ip"] === "string") {
+        resolvedClientIp = req.headers["x-real-ip"].trim();
+      } else {
+        resolvedClientIp = req.socket.remoteAddress || "";
+      }
+
+      if (resolvedClientIp) {
+        const geo = await getClientIpGeo(resolvedClientIp);
+        targetProvince = geo.province;
+        targetIsp = geo.isp;
+        console.log(`[EXPORT TXT AUTO-IP] Client IP ${resolvedClientIp} matched Province: ${targetProvince}, ISP: ${targetIsp}`);
+      }
+    }
 
     const exportMap = new Map<string, string[]>();
 
@@ -2559,10 +2972,19 @@ async function startServer() {
 
         if (category && groupName !== String(category) && gId !== String(category)) return;
 
-        channel.sources.forEach((source) => {
+        let processedSources = channel.sources;
+        if (province || isp) {
+          processedSources = channel.sources.filter(source => {
+            if (province && source.province !== String(province)) return false;
+            if (isp && source.isp !== String(isp)) return false;
+            return true;
+          });
+        } else if (targetProvince || targetIsp) {
+          processedSources = sortSourcesByGeo(channel.sources, targetProvince, targetIsp);
+        }
+
+        processedSources.forEach((source) => {
           if (count >= maxLimit) return;
-          if (isp && source.isp !== String(isp)) return;
-          if (province && source.province !== String(province)) return;
           if (status && source.status !== String(status)) return;
 
           const catName = groupName;
@@ -2662,6 +3084,85 @@ async function startServer() {
     
     res.setHeader("Content-Type", "application/xml");
     res.send(`${xmlHeader}\n${channelTags}\n${programTags}\n${xmlFooter}`);
+  });
+
+  // Compressed XML.GZ EPG feed
+  app.get("/api/export/epg.xml.gz", (req, res) => {
+    const xmlHeader = `<?xml version="1.0" encoding="utf-8"?>
+<!DOCTYPE tv SYSTEM "xmltv.dtd">
+<tv generator-info-name="IPTV Channel Manager" generator-info-url="http://localhost:3000/">`;
+
+    const channelTags = channels.map((c) => {
+      const epgIdEscaped = escapeXml(c.epgId || generateDefaultEpgId(c.name));
+      return `  <channel id="${epgIdEscaped}">
+    <display-name lang="zh">${escapeXml(c.name)}</display-name>
+    <icon src="${escapeXml(c.logo)}" />
+  </channel>`;
+    }).join("\n");
+
+    const programTemplates = [
+      { start: "000000", stop: "060000", title: "深夜温情院线" },
+      { start: "060000", stop: "090000", title: "早晨第一线新闻" },
+      { start: "090000", stop: "120000", title: "经典文娱纪实节目" },
+      { start: "120000", stop: "130000", title: "午间时势观察" },
+      { start: "130000", stop: "180000", title: "午后黄金人气戏剧" },
+      { start: "180000", stop: "190000", title: "傍晚热门民生探索" },
+      { start: "190000", stop: "200000", title: "晚间新闻报道集锦" },
+      { start: "200000", stop: "223000", title: "金牌晚间档品质剧场" },
+      { start: "223000", stop: "235959", title: "深夜体育与军事视界" },
+    ];
+
+    const todayStr = new Date().toISOString().split("T")[0].replace(/-/g, "");
+    const activeEpgSources = epgSources.filter(s => s.active);
+
+    const programTags = channels.map((c) => {
+      const epgIdEscaped = escapeXml(c.epgId || generateDefaultEpgId(c.name));
+      
+      let matchedPrograms: any[] = [];
+      let found = false;
+
+      for (const source of activeEpgSources) {
+        const cache = getEpgCache(source.id);
+        if (cache) {
+          const entry = findMatchingEpgEntry(c, cache);
+          if (entry && entry.programs && entry.programs.length > 0) {
+            matchedPrograms = entry.programs;
+            found = true;
+            break;
+          }
+        }
+      }
+
+      if (found && matchedPrograms.length > 0) {
+        return matchedPrograms.map((prog: any) => {
+          return `  <programme start="${escapeXml(prog.start)}" stop="${escapeXml(prog.stop)}" channel="${epgIdEscaped}">
+    <title lang="zh">${escapeXml(prog.title)}</title>
+    ${prog.desc ? `<desc lang="zh">${escapeXml(prog.desc)}</desc>` : ""}
+  </programme>`;
+        }).join("\n");
+      } else {
+        return programTemplates.map((p) => {
+          return `  <programme start="${todayStr}${p.start} +0800" stop="${todayStr}${p.stop} +0800" channel="${epgIdEscaped}">
+    <title lang="zh">${escapeXml(p.title)}</title>
+    <desc lang="zh">由 IPTV 电视服务自动同步 matching epg channel id [${epgIdEscaped}]。</desc>
+  </programme>`;
+        }).join("\n");
+      }
+    }).join("\n");
+
+    const xmlFooter = `</tv>`;
+    const fullXml = `${xmlHeader}\n${channelTags}\n${programTags}\n${xmlFooter}`;
+
+    try {
+      const compressed = zlib.gzipSync(Buffer.from(fullXml, "utf-8"));
+      res.setHeader("Content-Type", "application/x-gzip");
+      res.setHeader("Content-Encoding", "gzip");
+      res.setHeader("Content-Disposition", "attachment; filename=\"epg.xml.gz\"");
+      res.send(compressed);
+    } catch (err: any) {
+      console.error("[EPG GZIP COMPRESSION ERROR]", err);
+      res.status(500).send("Internal Server Error during compression");
+    }
   });
 
   // Clean-up and optimization APIs

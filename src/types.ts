@@ -35,6 +35,9 @@ export interface SyncConfig {
   lastSynced?: string;
   status: "success" | "failed" | "never";
   message?: string;
+  disabled?: boolean;
+  consecutiveFailures?: number;
+  contentHash?: string;
 }
 
 export interface EpgSource {
@@ -70,5 +73,6 @@ export interface EpgGuide {
   channelName: string;
   date: string;
   epgId: string;
+  isSimulated?: boolean;
   programs: EpgProgram[];
 }

@@ -96,6 +96,11 @@ export default function App() {
   const [epgGuide, setEpgGuide] = useState<EpgGuide | null>(null);
   const [epgLoading, setEpgLoading] = useState(false);
 
+  // EPG Auto-Correction AI states
+  const [aiRecommends, setAiRecommends] = useState<{ epgId: string; displayName: string; reason: string; confidence: number }[]>([]);
+  const [aiRecommendLoading, setAiRecommendLoading] = useState(false);
+  const [aiRecommendError, setAiRecommendError] = useState("");
+
   // Batch channel operations state
   const [selectedChannelIds, setSelectedChannelIds] = useState<string[]>([]);
   const [isBatchGroupModalOpen, setIsBatchGroupModalOpen] = useState(false);
@@ -1226,6 +1231,8 @@ export default function App() {
 
   const openChannelCreate = () => {
     setEditingChannel(null);
+    setAiRecommends([]);
+    setAiRecommendError("");
     setChannelForm({
       name: "",
       groupIds: groups.length > 0 ? [groups[0].id] : [],
@@ -1239,6 +1246,8 @@ export default function App() {
 
   const openChannelEdit = (ch: Channel) => {
     setEditingChannel(ch);
+    setAiRecommends([]);
+    setAiRecommendError("");
     setChannelForm({
       name: ch.name || "",
       groupIds: ch.groupIds || [],
@@ -1464,6 +1473,33 @@ export default function App() {
       showFeedback("error", "无法加载 EPG 导视表");
     } finally {
       setEpgLoading(false);
+    }
+  };
+
+  // AI Smart Correction Recommended Generator
+  const runAiRecommend = async (channelId: string, channelName: string) => {
+    setAiRecommendLoading(true);
+    setAiRecommendError("");
+    setAiRecommends([]);
+    try {
+      const res = await fetch("/api/epg/ai-recommend", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ channelId, channelName })
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setAiRecommends(data.recommendations || []);
+        if (!data.recommendations || data.recommendations.length === 0) {
+          setAiRecommendError("AI 未返回推荐结果。");
+        }
+      } else {
+        setAiRecommendError(data.error || "获取 AI 推荐失败");
+      }
+    } catch (err) {
+      setAiRecommendError("网络连接错误或尚未配置 Gemini API Key");
+    } finally {
+      setAiRecommendLoading(false);
     }
   };
 
@@ -2251,9 +2287,90 @@ export default function App() {
                       {epgGuide && (
                         <div className="bg-indigo-50/40 p-4 rounded-xl border border-indigo-100 space-y-3" id="epg_preview_box">
                           <div className="flex justify-between items-center text-xs font-bold text-slate-700">
-                            <span className="flex items-center"><Clock className="w-4 h-4 mr-1.5 text-indigo-600" />  EPG 实时节目导视表 [ {epgGuide.epgId} ]</span>
-                            <button className="text-[10px] text-slate-400 font-semibold" onClick={()=>setEpgGuide(null)}>关闭预览</button>
+                            <span className="flex items-center gap-1.5 flex-wrap">
+                              <Clock className="w-4 h-4 mr-1 text-indigo-600" />
+                              EPG 实时节目导视表 [ {epgGuide.epgId} ]
+                              {epgGuide.isSimulated && (
+                                <span className="px-1.5 py-0.5 bg-amber-100 text-amber-800 border border-amber-200 text-[9px] rounded font-bold flex items-center shrink-0">
+                                  ⚠️ 未成功匹配外部源 (使用本地默认模版模拟)
+                                </span>
+                              )}
+                            </span>
+                            <button className="text-[10px] text-slate-400 font-semibold cursor-pointer" onClick={()=>setEpgGuide(null)}>关闭预览</button>
                           </div>
+
+                          {epgGuide.isSimulated && selectedChannel && (
+                            <div className="bg-amber-50/60 p-3 rounded-lg border border-amber-100/60 text-xs text-amber-800 space-y-2">
+                              <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-2">
+                                <span><b>智能校准提示：</b>当前的外部 EPG ID (<b>{epgGuide.epgId}</b>) 尚未能在启用的外部源中检索到今日节目数据。您可以使用 Gemini AI 基于频道名智能校正匹配。</span>
+                                <button 
+                                  onClick={() => runAiRecommend(selectedChannel.id, selectedChannel.name)}
+                                  disabled={aiRecommendLoading}
+                                  className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-[10px] px-3 py-1.5 rounded-lg transition flex items-center shrink-0 disabled:bg-slate-300 cursor-pointer"
+                                >
+                                  {aiRecommendLoading ? "🤖 AI正在搜寻中..." : "🤖 启动 AI 智能校准纠错"}
+                                </button>
+                              </div>
+                              
+                              {aiRecommendError && (
+                                <p className="text-[10px] text-rose-600 font-bold bg-rose-55 p-1 px-2 rounded">{aiRecommendError}</p>
+                              )}
+
+                              {aiRecommends.length > 0 && (
+                                <div className="space-y-1.5 pt-1">
+                                  <p className="text-[10px] font-bold text-indigo-800">Gemini AI 为您智能解析推荐的最佳匹配（点击直接自动更正并保存）：</p>
+                                  <div className="flex flex-col gap-1.5">
+                                    {aiRecommends.map((rec) => (
+                                      <div 
+                                        key={rec.epgId}
+                                        onClick={async () => {
+                                          try {
+                                            const res = await fetch(`/api/channels/${selectedChannel.id}`, {
+                                              method: "PUT",
+                                              headers: { "Content-Type": "application/json" },
+                                              body: JSON.stringify({ epgId: rec.epgId })
+                                            });
+                                            if (res.ok) {
+                                              showFeedback("success", `EPG ID 已成功纠正为 "${rec.epgId}"`);
+                                              setAiRecommends([]);
+                                              fetchData();
+                                              const updatedCh = { ...selectedChannel, epgId: rec.epgId };
+                                              setSelectedChannel(updatedCh);
+                                              // Immediately re-trigger fetching with newly saved channel values
+                                              const previewRes = await fetch(`/api/epg/guide?channelId=${selectedChannel.id}`);
+                                              if (previewRes.ok) {
+                                                const previewData = await previewRes.json();
+                                                setEpgGuide(previewData);
+                                              }
+                                            } else {
+                                              showFeedback("error", "更新失败");
+                                            }
+                                          } catch (_) {
+                                            showFeedback("error", "网络连接异常");
+                                          }
+                                        }}
+                                        className="bg-white hover:bg-indigo-50 p-2 rounded-lg border border-indigo-100 flex justify-between items-center transition cursor-pointer hover:scale-[1.005]"
+                                      >
+                                        <div className="space-y-0.5">
+                                          <div className="flex items-center gap-1.5">
+                                            <span className="font-mono text-[9px] font-bold text-indigo-700 bg-indigo-50 px-1.5 py-0.5 rounded">{rec.epgId}</span>
+                                            <span className="font-bold text-slate-705 text-[10px]">({rec.displayName})</span>
+                                          </div>
+                                          <p className="text-[9px] text-slate-500">{rec.reason}</p>
+                                        </div>
+                                        <div className="flex flex-col items-end gap-0.5 shrink-0 ml-1">
+                                          <span className="text-[8px] bg-emerald-50 text-emerald-700 font-bold px-1 rounded-sm">
+                                            置信度: {(rec.confidence * 100).toFixed(0)}%
+                                          </span>
+                                          <span className="text-[8px] text-indigo-500 font-semibold">点击一键应用并重新加载 ❯</span>
+                                        </div>
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          )}
                           
                           <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 max-h-48 overflow-y-auto pt-1">
                             {epgGuide.programs.map((p, idx) => (
@@ -3260,47 +3377,74 @@ export default function App() {
                       </div>
                     ) : (
                       syncConfigs.map((cfg) => (
-                        <div key={cfg.id} className="p-4 rounded-xl border border-slate-200 space-y-2.5 bg-slate-50/40">
-                          <div className="flex justify-between items-start gap-2">
-                            <div>
+                      <div 
+                        key={cfg.id} 
+                        className={`p-4 rounded-xl border space-y-2.5 transition duration-150 ${
+                          cfg.disabled 
+                            ? "border-rose-300 bg-rose-50/20 shadow-xs" 
+                            : "border-slate-200 bg-slate-50/40"
+                        }`}
+                      >
+                        <div className="flex justify-between items-start gap-2">
+                          <div>
+                            <div className="flex items-center gap-1.5 flex-wrap">
                               <p className="text-xs font-bold text-slate-800">{cfg.name}</p>
-                              <p className="text-[10px] text-slate-400 font-mono mt-0.5 truncate max-w-sm">{cfg.url}</p>
+                              {cfg.disabled && (
+                                <span className="text-[9px] bg-rose-100 text-rose-800 font-bold px-1.5 py-0.5 rounded-sm border border-rose-200">
+                                  ⚠️ 连续失败被禁用
+                                </span>
+                              )}
                             </div>
-                            
-                            <div className="flex items-center gap-1.5 flex-shrink-0">
-                              <span className={`text-[9px] uppercase font-bold tracking-wider px-2 py-0.5 rounded-full ${
-                                cfg.autoSync ? "bg-emerald-100 text-emerald-800" : "bg-slate-200 text-slate-600"
-                              }`}>
-                                {cfg.autoSync ? `定时 ${cfg.syncInterval}h` : "手动触发"}
-                              </span>
-                              
-                              <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${
-                                cfg.status === "success" ? "bg-emerald-50 text-emerald-700" :
-                                cfg.status === "failed" ? "bg-rose-50 text-rose-700" : "bg-slate-100 text-slate-500"
-                              }`}>
-                                {cfg.status === "success" && "同步顺畅"}
-                                {cfg.status === "failed" && "同步断流"}
-                                {cfg.status === "never" && "从未触发"}
-                              </span>
-                            </div>
+                            <p className="text-[10px] text-slate-400 font-mono mt-0.5 truncate max-w-sm">{cfg.url}</p>
                           </div>
+                          
+                          <div className="flex items-center gap-1.5 flex-shrink-0">
+                            <span className={`text-[9px] uppercase font-bold tracking-wider px-2 py-0.5 rounded-full ${
+                              cfg.disabled ? "bg-rose-100 text-rose-700" :
+                              cfg.autoSync ? "bg-emerald-100 text-emerald-800" : "bg-slate-200 text-slate-600"
+                            }`}>
+                              {cfg.disabled ? "自动锁定" : cfg.autoSync ? `定时 ${cfg.syncInterval}h` : "手动触发"}
+                            </span>
+                            
+                            <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${
+                              cfg.disabled ? "bg-rose-100 text-rose-800 border border-rose-200" :
+                              cfg.status === "success" ? "bg-emerald-50 text-emerald-700 hover:bg-emerald-100" :
+                              cfg.status === "failed" ? "bg-rose-50 text-rose-700" : "bg-slate-100 text-slate-500"
+                            }`}>
+                              {cfg.disabled ? "已临时关闭" :
+                               cfg.status === "success" && "同步顺畅"}
+                              {!cfg.disabled && cfg.status === "failed" && "同步断流"}
+                              {cfg.status === "never" && "从未触发"}
+                            </span>
+                          </div>
+                        </div>
 
-                          {/* Last synced metadata message banner */}
-                          <div className="text-[10px] text-slate-500 bg-white p-2.5 rounded-lg border border-slate-100 flex justify-between items-center gap-2">
-                            <span className="truncate">{cfg.message || "准备拉取"}</span>
-                            <span className="text-slate-400 font-mono flex-shrink-0">
+                        {/* Last synced metadata message banner */}
+                        <div className="text-[10px] text-slate-500 bg-white p-2.5 rounded-lg border border-slate-100 flex flex-col gap-1">
+                          <div className="flex justify-between items-center gap-2">
+                            <span className="truncate max-w-[280px] font-medium text-slate-600">
+                              {cfg.message || "准备拉取"}
+                            </span>
+                            <span className="text-slate-400 font-mono flex-shrink-0 bg-slate-50 px-1.5 py-0.5 rounded text-[9px]">
                               {cfg.lastSynced ? new Date(cfg.lastSynced).toLocaleTimeString() : "未同步"}
                             </span>
                           </div>
+                          {cfg.consecutiveFailures && cfg.consecutiveFailures > 0 ? (
+                            <div className="text-[9px] text-rose-600 flex items-center gap-1 bg-rose-50/50 p-1.5 rounded border border-rose-100 mt-1">
+                              <span>⚠️ 连续重试失败计数: <b>{cfg.consecutiveFailures} / 3</b></span>
+                              {cfg.disabled && <span>(已触发安全机制熔断自动禁用，需手动点击下方拉取重置)</span>}
+                            </div>
+                          ) : null}
+                        </div>
 
-                          {/* Quick action controls */}
-                          <div className="flex justify-between pt-1">
-                            <button 
-                              onClick={() => triggerManualSyncRun(cfg.id)}
-                              className="text-indigo-600 hover:text-indigo-800 hover:underline text-[11px] font-bold flex items-center cursor-pointer"
-                            >
-                              <RefreshCw className="w-3 h-3 mr-1" /> 立即手动拉取并覆盖同步
-                            </button>
+                        {/* Quick action controls */}
+                        <div className="flex justify-between pt-1">
+                          <button 
+                            onClick={() => triggerManualSyncRun(cfg.id)}
+                            className="text-indigo-600 hover:text-indigo-800 hover:underline text-[11px] font-bold flex items-center cursor-pointer"
+                          >
+                            <RefreshCw className="w-3 h-3 mr-1" /> {cfg.disabled ? "重试并重新启用同步" : "立即手动拉取并覆盖同步"}
+                          </button>
                             
                             <div className="flex gap-2">
                               <button 
@@ -3484,32 +3628,64 @@ export default function App() {
                     </div>
 
                     {/* XMLTV XML EPG Timeline Guide row info */}
-                    <div className="p-4 rounded-xl border border-slate-100 bg-slate-50/50 space-y-2">
-                      <div className="flex justify-between items-center text-xs">
-                        <span className="font-bold text-slate-800 flex items-center">
-                          <Calendar className="w-4 h-4 mr-1.5 text-violet-500" /> XMLTV EPG (Electronic Program Guide) Feed
-                        </span>
-                        <a 
-                          href={`${getFullHostUrl()}/api/export/epg.xml`}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="text-violet-600 hover:text-violet-800 hover:underline flex items-center gap-1 font-bold text-[10px]"
-                        >
-                          打开 XMLTV 文档 <ExternalLink className="w-3 h-3" />
-                        </a>
+                    <div className="p-4 rounded-xl border border-slate-100 bg-slate-50/50 space-y-4">
+                      {/* Original XML */}
+                      <div className="space-y-2">
+                        <div className="flex justify-between items-center text-xs">
+                          <span className="font-bold text-slate-800 flex items-center">
+                            <Calendar className="w-4 h-4 mr-1.5 text-violet-500" /> XMLTV EPG (Electronic Program Guide) Feed
+                          </span>
+                          <a 
+                            href={`${getFullHostUrl()}/api/export/epg.xml`}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="text-violet-600 hover:text-violet-800 hover:underline flex items-center gap-1 font-bold text-[10px]"
+                          >
+                            打开 XMLTV 文档 <ExternalLink className="w-3 h-3" />
+                          </a>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className="flex-1 bg-white border border-slate-150 p-2.5 rounded-xl font-mono text-[10px] text-slate-600 truncate">
+                            {getFullHostUrl()}/api/export/epg.xml
+                          </span>
+                          <button 
+                            onClick={() => copyTextToClipboard(`${getFullHostUrl()}/api/export/epg.xml`)}
+                            className="bg-slate-900 hover:bg-slate-800 text-slate-50 p-2.5 rounded-xl transition flex-shrink-0 cursor-pointer"
+                          >
+                            <Copy className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
                       </div>
-                      <div className="flex items-center gap-2">
-                        <span className="flex-1 bg-white border border-slate-150 p-2.5 rounded-xl font-mono text-[10px] text-slate-600 truncate">
-                          {getFullHostUrl()}/api/export/epg.xml
-                        </span>
-                        <button 
-                          onClick={() => copyTextToClipboard(`${getFullHostUrl()}/api/export/epg.xml`)}
-                          className="bg-slate-900 hover:bg-slate-800 text-slate-50 p-2.5 rounded-xl transition flex-shrink-0 cursor-pointer"
-                        >
-                          <Copy className="w-3.5 h-3.5" />
-                        </button>
+
+                      {/* GZ version */}
+                      <div className="space-y-2 border-t border-slate-100 pt-3">
+                        <div className="flex justify-between items-center text-xs">
+                          <span className="font-bold text-slate-800 flex items-center">
+                            <Calendar className="w-4 h-4 mr-1.5 text-violet-500" /> XMLTV EPG Gzip 压缩源 (.xml.gz 极速反馈)
+                          </span>
+                          <a 
+                            href={`${getFullHostUrl()}/api/export/epg.xml.gz`}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="text-violet-600 hover:text-violet-800 hover:underline flex items-center gap-1 font-bold text-[10px]"
+                          >
+                            直接下载 EPG.xml.gz <ExternalLink className="w-3 h-3" />
+                          </a>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className="flex-1 bg-white border border-slate-150 p-2.5 rounded-xl font-mono text-[10px] text-slate-600 truncate">
+                            {getFullHostUrl()}/api/export/epg.xml.gz
+                          </span>
+                          <button 
+                            onClick={() => copyTextToClipboard(`${getFullHostUrl()}/api/export/epg.xml.gz`)}
+                            className="bg-slate-900 hover:bg-slate-800 text-slate-50 p-2.5 rounded-xl transition flex-shrink-0 cursor-pointer"
+                          >
+                            <Copy className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
                       </div>
-                      <p className="text-[10px] text-slate-400">输出完全遵循 xmltv 国际通用规范，电视频道 EPG epgId 动态对应，供您的播放器自动拉取显示精确时间轴海报日程。</p>
+
+                      <p className="text-[10px] text-slate-400">输出完全遵循 xmltv 国际通用规范，支持 Gzip 高级压缩，电视频道 EPG epgId 动态对应，供您的播放器自动拉取显示精确时间轴海报日程。</p>
                     </div>
 
                   </div>
@@ -3567,20 +3743,35 @@ export default function App() {
                   </button>
                 </div>
 
-                <div className="pt-4 border-t border-slate-800 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
-                  <div className="space-y-0.5">
-                    <span className="text-[10px] text-slate-500 font-mono uppercase tracking-wider">整合输出 XMLTV EPG 接口</span>
-                    <p className="text-xs font-mono text-emerald-400">{getFullHostUrl()}/api/export/epg.xml</p>
+                <div className="pt-4 border-t border-slate-800 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 w-full">
+                    <div className="space-y-0.5">
+                      <span className="text-[10px] text-slate-500 font-mono uppercase tracking-wider">整合输出 XMLTV EPG 接口</span>
+                      <p className="text-xs font-mono text-emerald-400 truncate">{getFullHostUrl()}/api/export/epg.xml</p>
+                      <button
+                        onClick={() => {
+                          copyTextToClipboard(`${getFullHostUrl()}/api/export/epg.xml`);
+                          showFeedback("success", "已复制 EPG 输出接口链接");
+                        }}
+                        className="mt-1 text-[10px] text-blue-400 hover:text-blue-300 hover:underline font-bold bg-transparent border-0 p-0 text-left outline-none cursor-pointer"
+                      >
+                        复制最终聚合 EPG 链接 ❯
+                      </button>
+                    </div>
+                    <div className="space-y-0.5">
+                      <span className="text-[10px] text-slate-500 font-mono uppercase tracking-wider">整合输出 XMLTV EPG.XML.GZ 压缩接口</span>
+                      <p className="text-xs font-mono text-emerald-400 truncate">{getFullHostUrl()}/api/export/epg.xml.gz</p>
+                      <button
+                        onClick={() => {
+                          copyTextToClipboard(`${getFullHostUrl()}/api/export/epg.xml.gz`);
+                          showFeedback("success", "已复制 Gzip 压缩 EPG 链接");
+                        }}
+                        className="mt-1 text-[10px] text-blue-400 hover:text-blue-300 hover:underline font-bold bg-transparent border-0 p-0 text-left outline-none cursor-pointer"
+                      >
+                        复制 Gzip 压缩 EPG 链接 ❯
+                      </button>
+                    </div>
                   </div>
-                  <button
-                    onClick={() => {
-                      copyTextToClipboard(`${getFullHostUrl()}/api/export/epg.xml`);
-                      showFeedback("success", "已复制 EPG 输出接口链接");
-                    }}
-                    className="px-3.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold rounded-lg cursor-pointer transition"
-                  >
-                    复制最终聚合 EPG 链接
-                  </button>
                 </div>
               </div>
 
@@ -4124,15 +4315,60 @@ export default function App() {
               </div>
 
               <div className="space-y-1.5">
-                <label>EPG 节目匹配 ID (epgId) *</label>
-                <input 
-                  type="text"
-                  required
-                  value={channelForm.epgId}
-                  onChange={(e)=>setChannelForm({...channelForm, epgId: e.target.value})}
-                  placeholder="如: cctv1"
-                  className="w-full text-xs p-2.5 border border-slate-200 rounded-xl focus:border-indigo-500 bg-slate-50 focus:outline-none font-mono"
-                />
+                <label className="flex justify-between items-center">
+                  <span>EPG 节目匹配 ID (epgId) *</span>
+                </label>
+                <div className="flex gap-2">
+                  <input 
+                    type="text"
+                    required
+                    value={channelForm.epgId}
+                    onChange={(e)=>setChannelForm({...channelForm, epgId: e.target.value})}
+                    placeholder="如: cctv1"
+                    className="flex-1 text-xs p-2.5 border border-slate-200 rounded-xl focus:border-indigo-500 bg-slate-50 focus:outline-none font-mono"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => runAiRecommend(channelForm.id || "", channelForm.name)}
+                    disabled={aiRecommendLoading}
+                    className="bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-xs px-3 py-1.5 rounded-xl transition font-bold border border-indigo-200/50 flex items-center justify-center cursor-pointer disabled:bg-slate-100 disabled:text-slate-400"
+                  >
+                    {aiRecommendLoading ? "🤖 AI匹配中..." : "🤖 AI 智能匹配"}
+                  </button>
+                </div>
+
+                {aiRecommendError && (
+                  <p className="text-[10px] text-rose-600 font-bold mt-1 leading-relaxed bg-rose-50 p-2 rounded-lg border border-rose-100">{aiRecommendError}</p>
+                )}
+
+                {aiRecommends.length > 0 && (
+                  <div className="mt-2 bg-indigo-50/30 p-2.5 rounded-xl border border-indigo-100 space-y-2 max-h-48 overflow-y-auto">
+                    <p className="text-[10px] font-bold text-indigo-800">Gemini AI 智能推荐匹配 (点击直接采纳填入)：</p>
+                    <div className="flex flex-col gap-1.5">
+                      {aiRecommends.map((rec) => (
+                        <div 
+                          key={rec.epgId}
+                          onClick={() => {
+                            setChannelForm({ ...channelForm, epgId: rec.epgId });
+                            showFeedback("success", `已填充 "${rec.epgId}"`);
+                          }}
+                          className="bg-white hover:bg-indigo-50 p-2 rounded-lg border border-indigo-100/50 flex justify-between items-center transition cursor-pointer hover:border-indigo-300"
+                        >
+                          <div className="space-y-0.5">
+                            <div className="flex items-center gap-1.5">
+                              <span className="font-mono text-[10px] font-bold text-indigo-700 bg-indigo-50 px-1.5 py-0.5 rounded">{rec.epgId}</span>
+                              <span className="font-bold text-slate-700 text-[10px]">({rec.displayName})</span>
+                            </div>
+                            <p className="text-[9px] text-slate-400 leading-normal">{rec.reason}</p>
+                          </div>
+                          <span className="text-[9px] bg-emerald-50 text-emerald-700 px-1.5 py-0.5 font-bold rounded-sm">
+                            {(rec.confidence * 100).toFixed(0)}%
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
 
               <div className="space-y-1.5">
