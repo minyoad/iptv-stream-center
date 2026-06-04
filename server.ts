@@ -106,10 +106,31 @@ const testStatus: TestStatus = {
   results: [],
 };
 
+// Strip bitrate and resolution details from channel names (e.g. CCTV13 4M1080 -> CCTV13, iHot爱青春 7.5M1080 -> iHot爱青春)
+function stripBitrateAndResolution(name: string): string {
+  if (!name) return "";
+  let clean = name.trim();
+
+  // Remove bracketed resolution or bitrate, e.g. "[1080p]", "(4M1080)", "[7.5M1080]", "(1080p50)"
+  clean = clean.replace(/[\[(]\s*(?:480|576|720|1080|1280|1440|1920|2160|4320|[48][kK]|\d+(?:\.\d+)?[Mm]\d*)[pPiI]?\s*[\])]/gi, "");
+
+  // Remove obvious trailing bitrate patterns, e.g. " 4M1080", " 7.5M1080", " 8M", " 10Mbps"
+  clean = clean.replace(/(?:\s+|-|_)+(?:\d+(?:\.\d+)?[Mm](?:[bB][pP][sS])?\d*[pPiI]?)(?=\s|$|[#])/gi, "");
+
+  // Remove standard resolution numbers, e.g. " 1080i", " 4K", " 576", " 1080p50"
+  clean = clean.replace(/(?:\s+|-|_)+(?:(?:480|576|720|1080|1280|1440|1920|2160|4320|[48][kK])(?:[pPiI]\d*|fps|FPS)?|\d+[pPiI]\d*)(?=\s|$|[#])/gi, "");
+
+  // Remove leftover empty brackets or parentheses containing quality/format descriptors
+  clean = clean.replace(/(?:\s+|-|_)*[\[(](?:高清|超清|标清|蓝光|原画)*[\])]/g, "");
+
+  return clean.trim();
+}
+
 // Normalize channel names by making them lower-case and stripping all spaces/whitespace to support smart matching (e.g., "cctv-1 综合" matches "cctv-1综合")
 function normalizeChannelName(name: string): string {
   if (!name) return "";
-  let clean = name.toLowerCase().replace(/\s+/g, "");
+  const stripped = stripBitrateAndResolution(name);
+  let clean = stripped.toLowerCase().replace(/\s+/g, "");
   
   // Custom smart matching for CCTV channels (e.g., CCTV-1, CCTV1, CCTV1HD, CCTV-1综合, CCTV-1 综合HD, cctv 1, CCTV 5+)
   // We match cctv followed by optional separator and a digit, plus optional "+"
@@ -123,7 +144,7 @@ function normalizeChannelName(name: string): string {
   // For other channels, remove hyphens, spaces, and common quality tags to improve match rates
   return clean
     .replace(/[-_.\s]+/g, "")
-    .replace(/(hd|ud|4k|8k|高清|超清|标清|sdi|channel|tv)/g, "");
+    .replace(/(hd|uhd|fhd|ud|4k|8k|高清|超清|标清|sdi|channel|tv)/g, "");
 }
 
 // Generate default epgId from channel name. CCTV5 and CCTV5+ are distinguished by keeping '+'. If processed epgId is empty, fallback to channel name.
@@ -1198,6 +1219,7 @@ async function performSync(config: SyncConfig, force = false) {
           if (commaIndex !== -1) {
             name = line.substring(commaIndex + 1).trim();
           }
+          name = stripBitrateAndResolution(name);
 
           currentInfo = {
             name,
@@ -1316,7 +1338,8 @@ async function performSync(config: SyncConfig, force = false) {
           const { province, isp: parsedIsp } = parseIspAndProvince(nameWithSpecs + " " + currentCategory);
           const isp = config.isp ? config.isp : parsedIsp;
           // Strip ISP and specifications from standard channel title
-          const name = nameWithSpecs.split("#")[0].trim();
+          let name = nameWithSpecs.split("#")[0].trim();
+          name = stripBitrateAndResolution(name);
 
           // Resolve group
           const catNames = currentCategory.split(/[,;，；]/).map(s => s.trim()).filter(Boolean);
@@ -2140,6 +2163,7 @@ async function startServer() {
             if (commaIndex !== -1) {
               name = line.substring(commaIndex + 1).trim();
             }
+            name = stripBitrateAndResolution(name);
 
             currentInfo = {
               name,
@@ -2241,7 +2265,8 @@ async function startServer() {
             const url = parts[1].trim();
 
             const { province, isp } = parseIspAndProvince(nameWithSpecs + " " + currentCategory);
-            const name = nameWithSpecs.split("#")[0].trim();
+            let name = nameWithSpecs.split("#")[0].trim();
+            name = stripBitrateAndResolution(name);
 
             // Resolve categories
             const catNames = currentCategory.split(/[,;，；]/).map((s: string) => s.trim()).filter(Boolean);
