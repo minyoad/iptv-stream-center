@@ -2231,11 +2231,71 @@ async function startServer() {
       if (ch.groupIds && ch.groupIds.length > 0) score += ch.groupIds.length;
       if (ch.sources && ch.sources.length > 0) score += ch.sources.length * 2;
       if (ch.alias && ch.alias.length > 0) score += ch.alias.length;
+
+      // Heavy priority score boost for names that match the system's standard preset channel list (DEFAULT_CHANNELS and templates)
+      const hasPresetName = DEFAULT_CHANNELS.some(
+        dc => dc.name.trim().toLowerCase() === ch.name.trim().toLowerCase() || dc.id === ch.id
+      );
+      if (hasPresetName) {
+        score += 10000;
+      } else {
+        const isTemplateName = loadedDefaultAliases.some(
+          group => group.template.trim().toLowerCase() === ch.name.trim().toLowerCase()
+        );
+        if (isTemplateName) {
+          score += 5000;
+        } else {
+          const aliasTemplate = findAliasTemplate(ch.name);
+          if (aliasTemplate && aliasTemplate.templateName.trim().toLowerCase() === ch.name.trim().toLowerCase()) {
+            score += 1000;
+          }
+        }
+      }
       return score;
     };
 
     const sortedByCompleteness = [...targetChannels].sort((a, b) => getScore(b) - getScore(a));
     const primaryChannel = sortedByCompleteness[0];
+
+    // If one of the target channels being merged can be matched to a canonical channel list template name,
+    // we use that standard name as the main channel name
+    let resolvedStandardName = "";
+    for (const ch of targetChannels) {
+      const match = DEFAULT_CHANNELS.find(
+        dc => dc.name.trim().toLowerCase() === ch.name.trim().toLowerCase() || dc.id === ch.id
+      );
+      if (match) {
+        resolvedStandardName = match.name;
+        break;
+      }
+    }
+
+    if (!resolvedStandardName) {
+      for (const ch of targetChannels) {
+        const match = loadedDefaultAliases.find(
+          group => group.template.trim().toLowerCase() === ch.name.trim().toLowerCase()
+        );
+        if (match) {
+          resolvedStandardName = match.template;
+          break;
+        }
+      }
+    }
+
+    if (!resolvedStandardName) {
+      for (const ch of targetChannels) {
+        const match = findAliasTemplate(ch.name);
+        if (match) {
+          resolvedStandardName = match.templateName;
+          break;
+        }
+      }
+    }
+
+    if (resolvedStandardName) {
+      console.log(`[Channel Merge] Prioritized preset/standard channel list name: "${primaryChannel.name}" -> "${resolvedStandardName}"`);
+      primaryChannel.name = resolvedStandardName;
+    }
 
     const allNames = new Set<string>();
     const allAliases = new Set<string>();
