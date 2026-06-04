@@ -2571,7 +2571,7 @@ export default function App() {
                             <p className="text-xs font-medium mt-1">此频道没有任何直播线路，点击上方按钮新增</p>
                           </div>
                         ) : (
-                          <div className="space-y-2.5">
+                          <div className="space-y-2.5 max-h-[480px] overflow-y-auto pr-1">
                             {selectedChannel.sources.map((src, index) => {
                               const isChecked = selectedSourceIds.includes(src.id);
                               return (
@@ -3152,10 +3152,10 @@ export default function App() {
                         <p className="text-[11px] text-slate-400 mt-1 max-w-sm leading-relaxed font-semibold">无满足当前运营商、省份、连通性及搜素输入限制的物理线路，请清理当前过滤器重试。</p>
                       </div>
                     ) : (
-                      <div className="overflow-x-auto">
+                      <div className="overflow-x-auto max-h-[600px] overflow-y-auto">
                         <table className="w-full text-left border-collapse" id="global_sources_table">
-                          <thead>
-                            <tr className="border-b border-slate-100 bg-slate-50/60 text-[10px] uppercase font-bold text-slate-400 tracking-wider">
+                          <thead className="sticky top-0 bg-slate-50 border-b border-slate-200 shadow-xs z-10">
+                            <tr className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">
                               <th className="py-4 px-4 w-12 text-center">
                                 <input 
                                   type="checkbox"
