@@ -228,8 +228,35 @@ function normalizeChannelName(name: string): string {
 // Generate default epgId from channel name. CCTV5 and CCTV5+ are distinguished by keeping '+'. If processed epgId is empty, fallback to channel name.
 function generateDefaultEpgId(name: string): string {
   if (!name) return "";
-  let processed = name.toLowerCase().replace(/[^a-z0-9+]/g, "");
-  return processed || name;
+  // 1. Strip bitrate and resolution first
+  let clean = stripBitrateAndResolution(name);
+  
+  // 2. Convert to lowercase
+  clean = clean.toLowerCase();
+
+  // 3. Remove spaces, hyphens, dots, underscores, braces, brackets, and common symbol noise
+  clean = clean.replace(/[-_.\s※\(\)\[\]{\\}/]+/g, "");
+
+  // 4. Custom matching for CCTV channels (CCTV-1, CCTV5+, CCTV-6电影, etc.)
+  const cctvMatch = clean.match(/^cctv[-_]?(\d+)(\+)?/);
+  if (cctvMatch) {
+    const num = cctvMatch[1];
+    const plus = cctvMatch[2] || "";
+    return `cctv${num}${plus}`;
+  }
+
+  // 5. Remove quality/format words but ONLY if they are not the sole text.
+  // Let's remove them safely. If we remove 'hd' from 'hbo hd', we want 'hbo'.
+  // But if the word is exactly 'hd' or empty after removal, we fallback so we don't return empty.
+  const noiseRegex = /(fhd|uhd|hd|sd|hevc|h265|h264|1080p|720p|4k|8k|高清|超清|标清|sdi|channel|tv)/g;
+  let withoutNoise = clean.replace(noiseRegex, "");
+  if (withoutNoise.trim().length > 0) {
+    clean = withoutNoise;
+  }
+
+  // 6. Return lowercase alphanumeric/Chinese sequence, or fallback to normalized text if empty
+  let processed = clean.trim();
+  return processed || name.toLowerCase().trim();
 }
 
 interface DefaultAliasGroup {
@@ -645,6 +672,19 @@ function loadData() {
         }
         c.groupIds.push(otherGroup.id);
         updated = true;
+      }
+    });
+
+    // Validate or Repair Channel EPG IDs to resolve generic duplicates like "hd", "1080p", "4k" or blank EPG IDs
+    channels.forEach((c: any) => {
+      const invalidGenericIds = ["hd", "sd", "fhd", "uhd", "hevc", "h265", "h264", "1080p", "720p", "4k", "8k", "高清", "超清", "标清", "sdi", "channel", "tv"];
+      if (!c.epgId || c.epgId.trim().length === 0 || (typeof c.epgId === "string" && invalidGenericIds.includes(c.epgId.toLowerCase().trim()))) {
+        const freshEpgId = generateDefaultEpgId(c.name);
+        if (freshEpgId !== c.epgId) {
+          console.log(`[Repair EPG ID] Repairing bad/duplicate epgId "${c.epgId}" for channel "${c.name}" -> "${freshEpgId}"`);
+          c.epgId = freshEpgId;
+          updated = true;
+        }
       }
     });
 
