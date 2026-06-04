@@ -3,14 +3,15 @@ FROM node:20-alpine AS builder
 
 WORKDIR /app
 
-# 安装原生模块构建依赖
-RUN apk add --no-cache python3 make g++
+# 安装原生模块构建依赖，并切换为阿里云 APK 镜像站提高国内下载速度
+RUN sed -i 's/dl-cdn.alpinelinux.org/mirrors.aliyun.com/g' /etc/apk/repositories \
+    && apk add --no-cache python3 make g++
 
 # 复制依赖定义文件
 COPY package*.json ./
 
-# 安装完整依赖（包括开发依赖以支持构建）
-RUN npm install
+# 使用镜像源安装完整依赖（包括开发依赖以支持构建）
+RUN npm install --registry=https://registry.npmmirror.com
 
 # 复制所有源代码
 COPY . .
@@ -29,9 +30,10 @@ ENV NODE_ENV=production
 # 仅复制 package.json
 COPY package*.json ./
 
-# 安装生产依赖，并使用虚拟依赖组在编译后自动清除构建工具
-RUN apk add --no-cache --virtual .build-deps python3 make g++ \
-    && npm install --omit=dev \
+# 切换为阿里云 APK 镜像站，安装生产依赖编译依赖组，并通过腾讯/淘宝镜像源高速下载依赖，编译完成后自动清除临时构建工具
+RUN sed -i 's/dl-cdn.alpinelinux.org/mirrors.aliyun.com/g' /etc/apk/repositories \
+    && apk add --no-cache --virtual .build-deps python3 make g++ \
+    && npm install --omit=dev --registry=https://registry.npmmirror.com \
     && apk del .build-deps
 
 # 从构建阶段复制编译输出文件（/app/dist 包含了静态前端托管和 CJS 后端代码）
