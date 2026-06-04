@@ -18,6 +18,7 @@ import {
   Settings,
   AlertCircle,
   UploadCloud,
+  Upload,
   Check,
   Calendar,
   Layers,
@@ -84,8 +85,15 @@ export default function App() {
     url: "",
     type: "m3u" as "m3u" | "txt",
     autoSync: true,
-    syncInterval: 12
+    syncInterval: 12,
+    isp: ""
   });
+
+  // States for subscription backups and import/export
+  const [isImportSubscriptionsOpen, setIsImportSubscriptionsOpen] = useState(false);
+  const [importSubscriptionsContent, setImportSubscriptionsContent] = useState("");
+  const [importSubscriptionsMerge, setImportSubscriptionsMerge] = useState(true); // true = merge, false = overwrite
+  const [isQuickBackupAvailable, setIsQuickBackupAvailable] = useState(!!localStorage.getItem("iptv_sync_configs_backup"));
 
   // Manual Text Import paste box
   const [pasteContent, setPasteContent] = useState("");
@@ -1379,6 +1387,96 @@ export default function App() {
     );
   };
 
+  // Export sync subscriptions as JSON file
+  const handleExportSubscriptions = async (e: React.MouseEvent) => {
+    downloadApiFile("/api/sync-configs/export", "iptv_sync_subscriptions.json", e);
+  };
+
+  // Import sync subscriptions from JSON payload
+  const handleImportSubscriptions = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!importSubscriptionsContent.trim()) {
+      showFeedback("error", "请输入或选择 JSON 订阅配置内容");
+      return;
+    }
+    try {
+      let configs: any;
+      try {
+        configs = JSON.parse(importSubscriptionsContent);
+      } catch (parseErr) {
+        showFeedback("error", "JSON 格式解析错误，请确认数据排版是否合法");
+        return;
+      }
+
+      const res = await fetch("/api/sync-configs/import", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          configs: Array.isArray(configs) ? configs : [configs],
+          overwrite: !importSubscriptionsMerge
+        })
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        showFeedback("success", data.message || "成功导入订阅配置");
+        setIsImportSubscriptionsOpen(false);
+        setImportSubscriptionsContent("");
+        fetchData();
+      } else {
+        const err = await res.json();
+        showFeedback("error", err.error || "导入失败");
+      }
+    } catch (err: any) {
+      showFeedback("error", `通信失败: ${err.message || err}`);
+    }
+  };
+
+  // Local/Quick Backup of subscriptions list
+  const handleQuickBackupSubscriptions = () => {
+    try {
+      localStorage.setItem("iptv_sync_configs_backup", JSON.stringify(syncConfigs));
+      setIsQuickBackupAvailable(true);
+      showFeedback("success", "订阅已成功备份至浏览器缓存 (暂存盘)！");
+    } catch (err) {
+      showFeedback("error", "快速备份备份失败");
+    }
+  };
+
+  // Local/Quick Restore of subscriptions list
+  const handleQuickRestoreSubscriptions = () => {
+    const backupStr = localStorage.getItem("iptv_sync_configs_backup");
+    if (!backupStr) {
+      showFeedback("error", "暂未找到任何备份记录");
+      return;
+    }
+    triggerConfirm(
+      "从本地快速备份还原",
+      "您确定要从快速备份还原订阅源吗？这将会合并当前的订阅设置。",
+      async () => {
+        try {
+          const res = await fetch("/api/sync-configs/import", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              configs: JSON.parse(backupStr),
+              overwrite: false // Safe merge
+            })
+          });
+
+          if (res.ok) {
+            showFeedback("success", "订阅源快速恢复成功");
+            fetchData();
+          } else {
+            showFeedback("error", "快速恢复订阅失败");
+          }
+        } catch (e) {
+          showFeedback("error", "快速恢复通信异常");
+        }
+      }
+    );
+  };
+
   const triggerManualSyncRun = async (id: string) => {
     showFeedback("info", "已启动远程 URL 下载同步解析流程...");
     try {
@@ -1398,12 +1496,13 @@ export default function App() {
   const openSyncCreate = () => {
     setEditingSync(null);
     setSyncForm({
-      name: "",
-      url: "",
-      type: "m3u",
-      autoSync: true,
-      syncInterval: 12
-    });
+       name: "",
+       url: "",
+       type: "m3u",
+       autoSync: true,
+       syncInterval: 12,
+       isp: ""
+     });
     setIsSyncModalOpen(true);
   };
 
@@ -1508,7 +1607,12 @@ export default function App() {
     if (e) e.preventDefault();
     try {
       showFeedback("info", `准备下载 ${filename}...`);
-      const res = await fetch(endpoint);
+      const password = localStorage.getItem("iptv_admin_password") || "";
+      const headers: Record<string, string> = {};
+      if (password) {
+        headers["x-admin-password"] = password;
+      }
+      const res = await fetch(endpoint, { headers });
       if (!res.ok) {
         throw new Error(`连接失败 (HTTP ${res.status})`);
       }
@@ -3394,6 +3498,43 @@ export default function App() {
                     </button>
                   </div>
 
+                  <div className="flex flex-wrap items-center gap-1.5 pt-2 pb-2 border-y border-slate-100 text-[11px]" id="subscription_backup_panel">
+                    <span className="text-[10px] text-slate-400 font-bold uppercase mr-1">数据订阅管理:</span>
+                    <button
+                      onClick={handleExportSubscriptions}
+                      className="text-emerald-600 hover:text-emerald-800 bg-emerald-50 hover:bg-emerald-100 px-2.5 py-1.5 rounded-xl font-bold text-[10.5px] transition cursor-pointer flex items-center gap-1"
+                      title="下载当前配置到本地 JSON"
+                    >
+                      <Download className="w-3 h-3" /> 导出备份 (JSON)
+                    </button>
+                    <button
+                      onClick={() => {
+                        setImportSubscriptionsContent("");
+                        setIsImportSubscriptionsOpen(true);
+                      }}
+                      className="text-violet-600 hover:text-violet-800 bg-violet-50 hover:bg-violet-100 px-2.5 py-1.5 rounded-xl font-bold text-[10.5px] transition cursor-pointer flex items-center gap-1"
+                      title="通过导入 JSON 备份恢复订阅"
+                    >
+                      <Upload className="w-3 h-3" /> 导入备份 (JSON)
+                    </button>
+                    <button
+                      onClick={handleQuickBackupSubscriptions}
+                      className="text-blue-600 hover:text-blue-800 bg-blue-50 hover:bg-blue-100 px-2.5 py-1.5 rounded-xl font-bold text-[10.5px] transition cursor-pointer flex items-center gap-1"
+                      title="备份到浏览器缓存中"
+                    >
+                      <Copy className="w-3 h-3" /> 快速暂存
+                    </button>
+                    {isQuickBackupAvailable && (
+                      <button
+                        onClick={handleQuickRestoreSubscriptions}
+                        className="text-amber-600 hover:text-amber-800 bg-amber-50 hover:bg-amber-100 px-2.5 py-1.5 rounded-xl font-bold text-[10.5px] transition cursor-pointer flex items-center gap-1"
+                        title="从缓存中加载订阅"
+                      >
+                        <RefreshCw className="w-3 h-3" /> 快速恢复
+                      </button>
+                    )}
+                  </div>
+
                   <div className="space-y-4 flex-1 overflow-y-auto max-h-[460px]">
                     {syncConfigs.length === 0 ? (
                       <div className="flex flex-col items-center justify-center py-20 text-slate-350">
@@ -3414,6 +3555,11 @@ export default function App() {
                           <div>
                             <div className="flex items-center gap-1.5 flex-wrap">
                               <p className="text-xs font-bold text-slate-800">{cfg.name}</p>
+                              {cfg.isp && (
+                                <span className="text-[9px] bg-blue-50 text-blue-700 border border-blue-150 font-semibold px-1.5 py-0.5 rounded-sm flex items-center gap-0.5">
+                                  ⚡ {cfg.isp}
+                                </span>
+                              )}
                               {cfg.disabled && (
                                 <span className="text-[9px] bg-rose-100 text-rose-800 font-bold px-1.5 py-0.5 rounded-sm border border-rose-200">
                                   ⚠️ 连续失败被禁用
@@ -3480,7 +3626,8 @@ export default function App() {
                                     url: cfg.url,
                                     type: cfg.type,
                                     autoSync: cfg.autoSync,
-                                    syncInterval: cfg.syncInterval
+                                    syncInterval: cfg.syncInterval,
+                                    isp: cfg.isp || ""
                                   });
                                   setIsSyncModalOpen(true);
                                 }}
@@ -4161,16 +4308,14 @@ export default function App() {
                                     <RefreshCw className="w-3 h-3" />
                                     还原
                                   </button>
-                                  <a
-                                    href={`/api/backups/download/${encodeURIComponent(back.filename)}`}
-                                    target="_blank"
-                                    rel="noreferrer"
-                                    className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold px-2.5 py-1.5 rounded-lg transition text-[11px] inline-flex items-center gap-1"
+                                  <button
+                                    onClick={(e) => downloadApiFile(`/api/backups/download/${encodeURIComponent(back.filename)}`, back.filename, e)}
+                                    className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold px-2.5 py-1.5 rounded-lg transition text-[11px] inline-flex items-center gap-1 cursor-pointer"
                                     title="下载到本地"
                                   >
                                     <Download className="w-3 h-3" />
                                     下载
-                                  </a>
+                                  </button>
                                   <button
                                     onClick={() => deleteBackup(back.filename)}
                                     className="bg-rose-50 hover:bg-rose-100 text-rose-600 font-bold px-2.5 py-1.5 rounded-lg transition text-[11px]"
@@ -4582,6 +4727,24 @@ export default function App() {
                 </div>
               )}
 
+              <div className="space-y-1.5" id="sync_form_isp_block">
+                <label>强制将导入的直播源设置为特定运营商 (ISP)</label>
+                <select 
+                  value={syncForm.isp}
+                  onChange={(e)=>setSyncForm({...syncForm, isp: e.target.value})}
+                  className="w-full text-xs p-2.5 border border-slate-200 rounded-xl bg-slate-50 focus:outline-none text-slate-700 font-bold"
+                >
+                  <option value="">自动解析并智能提取</option>
+                  <option value="电信">中国电信</option>
+                  <option value="联通">中国联通</option>
+                  <option value="移动">中国移动</option>
+                  <option value="广电">中国广电</option>
+                  <option value="BGP">多线 BGP 专线</option>
+                  <option value="其它">其它</option>
+                </select>
+                <p className="text-[10px] text-slate-400 font-normal">指定后，该订阅拉取产生的所有直播源都将统一且强制被赋予此 ISP 属性。</p>
+              </div>
+
               <div className="flex gap-3 pt-3">
                 <button 
                   type="button" 
@@ -4595,6 +4758,105 @@ export default function App() {
                   className="w-2/3 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-slate-50 rounded-xl cursor-pointer text-center font-bold"
                 >
                   建立同步订阅
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Dialog: Import Sync Subscription backup JSON file or text */}
+      {isImportSubscriptionsOpen && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4" id="import_subscriptions_modal">
+          <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl border border-slate-100 space-y-5 flex flex-col animate-fade-in animate-scale-up">
+            <div className="flex justify-between items-center">
+              <h3 className="text-sm font-bold text-slate-800 flex items-center gap-1.5 font-sans">
+                <Upload className="w-4 h-4 text-violet-600" /> 导入 GitHub 周期同步订阅配置
+              </h3>
+              <button className="text-slate-400 hover:text-slate-600 font-bold font-sans" onClick={()=>setIsImportSubscriptionsOpen(false)}>✕</button>
+            </div>
+            
+            <form onSubmit={handleImportSubscriptions} className="space-y-4 text-xs font-semibold text-slate-600">
+              <div className="space-y-1.5 bg-slate-50 p-3 rounded-xl border border-slate-150">
+                <label className="text-slate-700 font-bold block mb-1">导入模式 (Import Strategy)</label>
+                <div className="flex gap-4">
+                  <label className="flex items-center gap-1.5 cursor-pointer">
+                    <input 
+                      type="radio"
+                      checked={importSubscriptionsMerge === true}
+                      onChange={() => setImportSubscriptionsMerge(true)}
+                      className="text-indigo-600 focus:ring-indigo-500 rounded-full"
+                    />
+                    <span>增量合并校验</span>
+                  </label>
+                  <label className="flex items-center gap-1.5 cursor-pointer">
+                    <input 
+                      type="radio" 
+                      checked={importSubscriptionsMerge === false}
+                      onChange={() => setImportSubscriptionsMerge(false)}
+                      className="text-indigo-600 focus:ring-rose-500 rounded-full"
+                    />
+                    <span className="text-rose-600 font-bold hover:text-rose-800">完全覆盖抹平 (Overwrite)</span>
+                  </label>
+                </div>
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-slate-700 font-bold">粘贴订阅 JSON 备份文本或上传本地备份文件 *</label>
+                
+                {/* File input directly in modal */}
+                <div className="flex items-center justify-center w-full">
+                  <label className="flex flex-col items-center justify-center w-full h-28 border-2 border-slate-200 border-dashed rounded-xl cursor-pointer bg-slate-50/50 hover:bg-slate-100/50 hover:border-violet-300 transition-all">
+                    <div className="flex flex-col items-center justify-center pt-3 pb-3">
+                      <Upload className="w-6 h-6 text-violet-500 mb-1" />
+                      <p className="mb-0.5 text-[11px] text-slate-600"><span className="font-bold text-violet-600 hover:underline">点击选择本地 JSON 备份文件</span></p>
+                      <p className="text-[9px] text-slate-400">仅限 JSON 格式的订阅源配置文件 (.json)</p>
+                    </div>
+                    <input 
+                      type="file" 
+                      accept=".json,application/json" 
+                      className="hidden" 
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (file) {
+                          const reader = new FileReader();
+                          reader.onload = (evt) => {
+                            const result = evt.target?.result;
+                            if (typeof result === "string") {
+                              setImportSubscriptionsContent(result);
+                              showFeedback("success", `成功读取文件, 共 ${file.size} 字节`);
+                            }
+                          };
+                          reader.readAsText(file);
+                        }
+                      }}
+                    />
+                  </label>
+                </div>
+                
+                <textarea 
+                  required
+                  rows={8}
+                  value={importSubscriptionsContent}
+                  onChange={(e)=>setImportSubscriptionsContent(e.target.value)}
+                  placeholder='如: [{"name":"央视源", "url":"https://raw.githubusercontent.com/...", "type":"m3u", "autoSync":true, "syncInterval":12}]'
+                  className="w-full text-[10px] p-3 border border-slate-200 rounded-xl focus:border-indigo-500 bg-slate-50 focus:outline-none font-mono text-slate-700 leading-normal"
+                />
+              </div>
+
+              <div className="flex gap-3 pt-2">
+                <button 
+                  type="button" 
+                  onClick={()=>setIsImportSubscriptionsOpen(false)}
+                  className="w-1/3 py-2.5 border border-slate-200 hover:bg-slate-50 text-slate-600 rounded-xl cursor-pointer text-center font-bold"
+                >
+                  取消
+                </button>
+                <button 
+                  type="submit" 
+                  className="w-2/3 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-slate-50 rounded-xl cursor-pointer text-center font-bold animate-pulse-once"
+                >
+                  解析并完成订阅导入
                 </button>
               </div>
             </form>

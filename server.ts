@@ -50,6 +50,7 @@ interface SyncConfig {
   disabled?: boolean;
   consecutiveFailures?: number;
   contentHash?: string;
+  isp?: string;
 }
 
 interface EpgSource {
@@ -1208,7 +1209,8 @@ async function performSync(config: SyncConfig, force = false) {
         } else if (line && !line.startsWith("#") && currentInfo) {
           // Play stream URL matching current channel
           const url = line;
-          const { province, isp } = parseIspAndProvince(currentInfo.name + " " + currentInfo.category);
+          const { province, isp: parsedIsp } = parseIspAndProvince(currentInfo.name + " " + currentInfo.category);
+          const isp = config.isp ? config.isp : parsedIsp;
 
           // Find or create correct Group entities for this category (comma/semicolon split for many-to-many relationship)
           const catNames = currentInfo.category.split(/[,;，；]/).map(s => s.trim()).filter(Boolean);
@@ -1275,7 +1277,8 @@ async function performSync(config: SyncConfig, force = false) {
           }
 
           // Add source if URL not already there
-          if (!channel.sources.some((s) => s.url === url)) {
+          const existingSrc = channel.sources.find((s) => s.url === url);
+          if (!existingSrc) {
             channel.sources.push({
               id: "src_" + Math.random().toString(36).substring(2, 10),
               url,
@@ -1284,6 +1287,8 @@ async function performSync(config: SyncConfig, force = false) {
               status: "unknown",
             });
             importedSourcesCount++;
+          } else if (config.isp) {
+            existingSrc.isp = config.isp;
           }
 
           currentInfo = null; // reset
@@ -1308,7 +1313,8 @@ async function performSync(config: SyncConfig, force = false) {
           const nameWithSpecs = parts[0].trim();
           const url = parts[1].trim();
 
-          const { province, isp } = parseIspAndProvince(nameWithSpecs + " " + currentCategory);
+          const { province, isp: parsedIsp } = parseIspAndProvince(nameWithSpecs + " " + currentCategory);
+          const isp = config.isp ? config.isp : parsedIsp;
           // Strip ISP and specifications from standard channel title
           const name = nameWithSpecs.split("#")[0].trim();
 
@@ -1373,7 +1379,8 @@ async function performSync(config: SyncConfig, force = false) {
             }
           }
 
-          if (!channel.sources.some((s) => s.url === url)) {
+          const existingSrc = channel.sources.find((s) => s.url === url);
+          if (!existingSrc) {
             channel.sources.push({
               id: "src_" + Math.random().toString(36).substring(2, 10),
               url,
@@ -1382,6 +1389,8 @@ async function performSync(config: SyncConfig, force = false) {
               status: "unknown",
             });
             importedSourcesCount++;
+          } else if (config.isp) {
+            existingSrc.isp = config.isp;
           }
         }
       }
@@ -2322,8 +2331,82 @@ async function startServer() {
     res.json(syncConfigs);
   });
 
+  // Export sync configurations as a downloadable JSON file
+  app.get("/api/sync-configs/export", (req, res) => {
+    try {
+      res.setHeader("Content-Disposition", "attachment; filename=\"iptv_sync_subscriptions.json\"");
+      res.setHeader("Content-Type", "application/json");
+      res.json(syncConfigs);
+    } catch (err: any) {
+      res.status(500).json({ error: `导出订阅失败: ${err.message || err}` });
+    }
+  });
+
+  // Import sync configurations from JSON list
+  app.post("/api/sync-configs/import", (req, res) => {
+    try {
+      const { configs, overwrite } = req.body;
+      if (!Array.isArray(configs)) {
+        return res.status(400).json({ error: "导入的备份格式不合法：期望一个 JSON 数组" });
+      }
+
+      const importedConfigs: SyncConfig[] = [];
+      for (const item of configs) {
+        if (!item.name || !item.url) {
+          continue; // Skip invalid entries
+        }
+        importedConfigs.push({
+          id: item.id && !overwrite ? item.id : "sc_" + Math.random().toString(36).substring(2, 10),
+          name: String(item.name).trim(),
+          url: String(item.url).trim(),
+          type: item.type === "txt" ? "txt" : "m3u",
+          autoSync: item.autoSync !== undefined ? !!item.autoSync : true,
+          syncInterval: Number(item.syncInterval) || 12,
+          status: item.status || "never",
+          message: item.message || "",
+          lastSynced: item.lastSynced,
+          disabled: !!item.disabled,
+          consecutiveFailures: Number(item.consecutiveFailures) || 0,
+          contentHash: item.contentHash,
+          isp: item.isp ? String(item.isp).trim() : undefined,
+        });
+      }
+
+      if (overwrite) {
+        syncConfigs = importedConfigs;
+      } else {
+        // Merge - avoid duplicate URLs
+        for (const imported of importedConfigs) {
+          const existingIdx = syncConfigs.findIndex(c => c.url === imported.url);
+          if (existingIdx >= 0) {
+            // Update existing
+            syncConfigs[existingIdx] = {
+              ...syncConfigs[existingIdx],
+              name: imported.name,
+              type: imported.type,
+              autoSync: imported.autoSync,
+              syncInterval: imported.syncInterval,
+              isp: imported.isp,
+            };
+          } else {
+            syncConfigs.push(imported);
+          }
+        }
+      }
+
+      saveData();
+      res.json({
+        success: true,
+        message: `成功导入 ${importedConfigs.length} 项同步订阅配置`,
+        syncConfigs
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: `导入订阅失败: ${err.message || err}` });
+    }
+  });
+
   app.post("/api/sync-configs", (req, res) => {
-    const { name, url, type, autoSync, syncInterval } = req.body;
+    const { name, url, type, autoSync, syncInterval, isp } = req.body;
     if (!name || !url) {
       return res.status(400).json({ error: "同步名称和URL为必填项" });
     }
@@ -2336,6 +2419,7 @@ async function startServer() {
       autoSync: !!autoSync,
       syncInterval: Number(syncInterval) || 12,
       status: "never",
+      isp: isp ? String(isp).trim() : undefined,
     };
 
     syncConfigs.push(newConfig);
@@ -2345,7 +2429,7 @@ async function startServer() {
 
   app.put("/api/sync-configs/:id", (req, res) => {
     const { id } = req.params;
-    const { name, url, type, autoSync, syncInterval } = req.body;
+    const { name, url, type, autoSync, syncInterval, isp } = req.body;
 
     const config = syncConfigs.find((c) => c.id === id);
     if (!config) {
@@ -2362,6 +2446,9 @@ async function startServer() {
       config.url = url;
     }
     if (type) config.type = type;
+    if (isp !== undefined) {
+      config.isp = isp ? String(isp).trim() : undefined;
+    }
     if (autoSync !== undefined) {
       config.autoSync = autoSync;
       if (autoSync === true) {
