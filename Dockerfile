@@ -19,6 +19,10 @@ COPY . .
 # 执行构建：这将调用 vite build 构建前端，并使用 esbuild 构建后端到 dist/server.cjs
 RUN npm run build
 
+# 构建完成后，在 builder 阶段剔除开发依赖，从而在 node_modules 中只保留生产依赖及其已编译好的 .node 库
+RUN npm prune --production --registry=https://registry.npmmirror.com
+
+
 # 使用轻量级 Node.js Alpine 镜像作为运行阶段
 FROM node:20-alpine AS runner
 
@@ -27,16 +31,10 @@ WORKDIR /app
 # 设置生产环境变量
 ENV NODE_ENV=production
 
-# 仅复制 package.json
-COPY package*.json ./
-
-# 切换为阿里云 APK 镜像站，安装生产依赖编译依赖组，并通过腾讯/淘宝镜像源高速下载依赖，编译完成后自动清除临时构建工具
-RUN sed -i 's/dl-cdn.alpinelinux.org/mirrors.aliyun.com/g' /etc/apk/repositories \
-    && apk add --no-cache --virtual .build-deps python3 make g++ \
-    && npm install --omit=dev --registry=https://registry.npmmirror.com \
-    && apk del .build-deps
-
-# 从构建阶段复制编译输出文件（/app/dist 包含了静态前端托管和 CJS 后端代码）
+# 免去在 runner 阶段安装 python3/make/g++ 的需求，也完全避免了二次 C++ 编译
+# 直接将构建阶段编译好的源码和已编译好的原生生产依赖复制过来
+COPY --from=builder /app/package*.json ./
+COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/dist ./dist
 
 # 创建持久化数据目录
