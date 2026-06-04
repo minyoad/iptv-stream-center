@@ -92,6 +92,7 @@ let syncConfigs: SyncConfig[] = [];
 let epgSources: EpgSource[] = [];
 let adminPassword = process.env.ADMIN_PASSWORD || "";
 let githubProxy = "";
+let autoCreateChannel = true;
 
 const SQLITE_DB_PATH = path.join(DATA_DIR, "iptv_sqlite.db");
 let db: Database.Database;
@@ -461,6 +462,9 @@ function loadData() {
       if (parsed.githubProxy !== undefined) {
         githubProxy = parsed.githubProxy;
       }
+      if (parsed.autoCreateChannel !== undefined) {
+        autoCreateChannel = !!parsed.autoCreateChannel;
+      }
 
       // Populate SQLite with this state
       saveData();
@@ -482,6 +486,7 @@ function loadData() {
       for (const row of loadedSettings as any[]) {
         if (row.key === "adminPassword") adminPassword = row.value;
         if (row.key === "githubProxy") githubProxy = row.value;
+        if (row.key === "autoCreateChannel") autoCreateChannel = (row.value === "true" || row.value === "1");
       }
 
       const loadedGroups = db.prepare("SELECT * FROM groups").all();
@@ -663,6 +668,7 @@ function saveData() {
       const insertSetting = db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)");
       insertSetting.run("adminPassword", adminPassword);
       insertSetting.run("githubProxy", githubProxy);
+      insertSetting.run("autoCreateChannel", autoCreateChannel ? "true" : "false");
 
       // 2. Sync groups
       db.exec("DELETE FROM groups");
@@ -1581,6 +1587,10 @@ async function performSync(config: SyncConfig, force = false) {
           );
 
           if (!channel) {
+            if (!autoCreateChannel) {
+              currentInfo = null; // reset
+              continue;
+            }
             const channelId = "ch_" + Math.random().toString(36).substring(2, 10);
             const cleanName = stdInfo ? stdInfo.templateName : currentInfo!.name;
             const cleanAliases = stdInfo 
@@ -1599,12 +1609,6 @@ async function performSync(config: SyncConfig, force = false) {
             channels.push(channel);
             importedChannelsCount++;
           } else {
-            // Append group IDs if any new ones are imported
-            matchedGroupIds.forEach(gId => {
-              if (!channel!.groupIds.includes(gId)) {
-                channel!.groupIds.push(gId);
-              }
-            });
             // Auto pre-populate missing aliases from standard configuration
             if (stdInfo) {
               stdInfo.aliases.forEach(a => {
@@ -1686,6 +1690,9 @@ async function performSync(config: SyncConfig, force = false) {
           );
 
           if (!channel) {
+            if (!autoCreateChannel) {
+              continue;
+            }
             const channelId = "ch_" + Math.random().toString(36).substring(2, 10);
             const cleanName = stdInfo ? stdInfo.templateName : name;
             const cleanAliases = stdInfo 
@@ -1704,12 +1711,6 @@ async function performSync(config: SyncConfig, force = false) {
             channels.push(channel);
             importedChannelsCount++;
           } else {
-            // Append group matchings
-            matchedGroupIds.forEach(gId => {
-              if (!channel!.groupIds.includes(gId)) {
-                channel!.groupIds.push(gId);
-              }
-            });
             if (stdInfo) {
               stdInfo.aliases.forEach(a => {
                 if (!channel!.alias.includes(a)) {
@@ -1861,14 +1862,19 @@ async function startServer() {
   // API Endpoints
   // Settings Endpoints
   app.get("/api/settings", (req, res) => {
-    res.json({ githubProxy });
+    res.json({ githubProxy, autoCreateChannel });
   });
 
   app.post("/api/settings", (req, res) => {
-    const { githubProxy: proxy } = req.body;
-    githubProxy = (proxy || "").trim();
+    const { githubProxy: proxy, autoCreateChannel: autoCreate } = req.body;
+    if (proxy !== undefined) {
+      githubProxy = (proxy || "").trim();
+    }
+    if (autoCreate !== undefined) {
+      autoCreateChannel = !!autoCreate;
+    }
     saveData();
-    res.json({ success: true, githubProxy });
+    res.json({ success: true, githubProxy, autoCreateChannel });
   });
 
   // EPG Sources REST Endpoints
@@ -2607,11 +2613,6 @@ async function startServer() {
               channels.push(channel);
               importedChannelsCount++;
             } else {
-              matchedGroupIds.forEach((gId) => {
-                if (!channel!.groupIds.includes(gId)) {
-                  channel!.groupIds.push(gId);
-                }
-              });
               if (stdInfo) {
                 stdInfo.aliases.forEach(a => {
                   if (!channel!.alias.includes(a)) {
@@ -2699,11 +2700,6 @@ async function startServer() {
               channels.push(channel);
               importedChannelsCount++;
             } else {
-              matchedGroupIds.forEach((gId) => {
-                if (!channel!.groupIds.includes(gId)) {
-                  channel!.groupIds.push(gId);
-                }
-              });
               if (stdInfo) {
                 stdInfo.aliases.forEach(a => {
                   if (!channel!.alias.includes(a)) {
@@ -2840,7 +2836,7 @@ async function startServer() {
 
   app.put("/api/sync-configs/:id", (req, res) => {
     const { id } = req.params;
-    const { name, url, type, autoSync, syncInterval, isp } = req.body;
+    const { name, url, type, autoSync, syncInterval, isp, disabled } = req.body;
 
     const config = syncConfigs.find((c) => c.id === id);
     if (!config) {
@@ -2868,6 +2864,12 @@ async function startServer() {
       }
     }
     if (syncInterval !== undefined) config.syncInterval = Number(syncInterval);
+    if (disabled !== undefined) {
+      config.disabled = !!disabled;
+      if (disabled === false) {
+        config.consecutiveFailures = 0;
+      }
+    }
 
     saveData();
     res.json(config);
@@ -2884,6 +2886,39 @@ async function startServer() {
 
     saveData();
     res.json({ success: true, message: "同步配置删除成功" });
+  });
+
+  // Batch Run All Active Sync Configs
+  app.post("/api/sync-configs/run-all", async (req, res) => {
+    const activeConfigs = syncConfigs.filter((c) => !c.disabled);
+    if (activeConfigs.length === 0) {
+      return res.json({ success: true, message: "没有发现任何未禁用的订阅源", syncConfigs });
+    }
+
+    let successCount = 0;
+    let failCount = 0;
+
+    // Execute in parallel
+    const promises = activeConfigs.map(async (config) => {
+      config.status = "never";
+      config.message = "正在进行后台批量同步...";
+      config.consecutiveFailures = 0;
+      const success = await performSync(config, true);
+      if (success) {
+        successCount++;
+      } else {
+        failCount++;
+      }
+    });
+
+    await Promise.all(promises);
+    saveData();
+
+    res.json({
+      success: true,
+      message: `批量订阅同步完成：成功 ${successCount} 个，失败 ${failCount} 个`,
+      syncConfigs
+    });
   });
 
   // Manually Run Sync

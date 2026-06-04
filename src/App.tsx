@@ -38,6 +38,8 @@ export default function App() {
   const [groups, setGroups] = useState<Group[]>([]);
   const [githubProxy, setGithubProxy] = useState("");
   const [githubProxyInput, setGithubProxyInput] = useState("");
+  const [autoCreateChannel, setAutoCreateChannel] = useState(true);
+  const [isBatchSyncing, setIsBatchSyncing] = useState(false);
   const [isSavingProxy, setIsSavingProxy] = useState(false);
   const [epgSources, setEpgSources] = useState<EpgSource[]>([]);
   const [isEpgLoading, setIsEpgLoading] = useState(false);
@@ -424,6 +426,7 @@ export default function App() {
         const settingsData = await resSettings.json();
         setGithubProxy(settingsData.githubProxy || "");
         setGithubProxyInput(settingsData.githubProxy || "");
+        setAutoCreateChannel(settingsData.autoCreateChannel !== false);
       }
       await fetchEpgSourcesInternal();
     } catch (err) {
@@ -650,6 +653,27 @@ export default function App() {
       showFeedback("error", "网络请求异常，保存代理配置失败");
     } finally {
       setIsSavingProxy(false);
+    }
+  };
+
+  const handleToggleAutoCreateChannel = async (val: boolean) => {
+    try {
+      const res = await fetch("/api/settings", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ autoCreateChannel: val })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setAutoCreateChannel(data.autoCreateChannel !== false);
+        showFeedback("success", `全局设置已更新：自动同步时${val ? "允许" : "静默禁止"}新建频道`);
+      } else {
+        showFeedback("error", "更新全局设置失败");
+      }
+    } catch (e) {
+      showFeedback("error", "网络连接异常，更新设置失败");
     }
   };
 
@@ -1496,6 +1520,44 @@ export default function App() {
       }
     } catch (e) {
       showFeedback("error", "请求异常，请检查 Github URL 是否通畅");
+    }
+  };
+
+  const triggerBatchSyncAll = async () => {
+    if (isBatchSyncing) return;
+    setIsBatchSyncing(true);
+    showFeedback("info", "正在对所有已启用的订阅源发起批量同步拉取...");
+    try {
+      const res = await fetch("/api/sync-configs/run-all", { method: "POST" });
+      const data = await res.json();
+      if (res.ok) {
+        showFeedback("success", data.message || "批量订阅同步已顺利完成！");
+        fetchData();
+      } else {
+        showFeedback("error", data.error || "批量同步发生服务错误");
+      }
+    } catch (e) {
+      showFeedback("error", "网络连接错误，无法完成批量同步");
+    } finally {
+      setIsBatchSyncing(false);
+    }
+  };
+
+  const toggleSyncDisabled = async (id: string, currentDisabled: boolean) => {
+    try {
+      const res = await fetch(`/api/sync-configs/${id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ disabled: !currentDisabled })
+      });
+      if (res.ok) {
+        showFeedback("success", `已成功${!currentDisabled ? "禁用" : "启用"}该同步配置！`);
+        fetchData();
+      } else {
+        showFeedback("error", "更新同步源状态失败");
+      }
+    } catch (e) {
+      showFeedback("error", "网络连接异常，更改同步源状态失败");
     }
   };
 
@@ -3452,6 +3514,45 @@ export default function App() {
                 </div>
               </div>
 
+              {/* 同步时新建频道策略设置 */}
+              <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm space-y-4 animate-fade-in" id="auto_create_channel_settings_card">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <div className="p-2 bg-indigo-50 text-indigo-600 rounded-xl">
+                      <Tv className="w-5 h-5 animate-spin-hover" />
+                    </div>
+                    <div>
+                      <h3 className="font-bold text-slate-800 text-sm">自动同步频道创建策略</h3>
+                      <p className="text-xs text-slate-400 mt-0.5">控制在订阅源同步过程中是否自动注册不存在的新频道分类</p>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-between bg-slate-50 p-4 rounded-xl border border-slate-100 hover:bg-slate-100/50 transition">
+                  <div className="flex-1 pr-4">
+                    <span className="font-bold text-slate-700 text-xs block">允许在自动同步时创建新频道</span>
+                    <span className="text-[11px] text-slate-400 mt-0.5 block leading-relaxed">
+                      开启时：拉取订阅源后，若发现未录入的频道名称，将被自动生成并分类；<br />
+                      关闭时：不创建任何新频道，只对系统里已被添加或存在的现有频道，维护更新其对应的直播源线路。
+                    </span>
+                  </div>
+                  <div className="relative flex items-center shrink-0">
+                    <button
+                      onClick={() => handleToggleAutoCreateChannel(!autoCreateChannel)}
+                      className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors duration-200 focus:outline-none cursor-pointer ${
+                        autoCreateChannel ? "bg-indigo-600" : "bg-slate-300"
+                      }`}
+                    >
+                      <span
+                        className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform duration-200 ${
+                          autoCreateChannel ? "translate-x-6" : "translate-x-1"
+                        }`}
+                      />
+                    </button>
+                  </div>
+                </div>
+              </div>
+
               {/* Grid dividing local paste vs remote subscription sync */}
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-6" id="sync_configs_grid">
                 
@@ -3509,15 +3610,28 @@ export default function App() {
 
                 {/* 2. Automated Scheduled GitHub Sync configurations */}
                 <div className="bg-white p-6 rounded-2xl border border-slate-200 flex flex-col space-y-4" id="scheduled_sync_box">
-                  <div className="flex justify-between items-center pb-1">
+                  <div className="flex justify-between items-center pb-1 flex-wrap gap-2">
                     <h3 className="font-bold text-slate-800 text-sm">GitHub 直播源自动周期同步</h3>
-                    <button 
-                      onClick={openSyncCreate}
-                      className="text-indigo-600 hover:text-indigo-800 border-2 border-dashed border-indigo-200 hover:border-indigo-400 bg-indigo-50/50 px-3.5 py-1.5 rounded-xl font-bold text-[10px] transition cursor-pointer flex items-center"
-                    >
-                      <Plus className="w-3.5 h-3.5 mr-1" />
-                      添加自动同步订阅
-                    </button>
+                    <div className="flex items-center gap-2">
+                      {syncConfigs.some(cfg => !cfg.disabled) && (
+                        <button
+                          onClick={triggerBatchSyncAll}
+                          disabled={isBatchSyncing}
+                          className="bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-400 text-white px-3.5 py-1.5 rounded-xl font-bold text-[10px] transition cursor-pointer flex items-center gap-1 shadow-sm"
+                        >
+                          <RefreshCw className={`w-3 h-3 ${isBatchSyncing ? "animate-spin" : ""}`} />
+                          {isBatchSyncing ? "批量同步中..." : "批量同步所有源"}
+                        </button>
+                      )}
+                      
+                      <button 
+                        onClick={openSyncCreate}
+                        className="text-indigo-600 hover:text-indigo-800 border-2 border-dashed border-indigo-200 hover:border-indigo-400 bg-indigo-50/50 px-3.5 py-1.5 rounded-xl font-bold text-[10px] transition cursor-pointer flex items-center"
+                      >
+                        <Plus className="w-3.5 h-3.5 mr-1" />
+                        添加自动同步订阅
+                      </button>
+                    </div>
                   </div>
 
                   <div className="flex flex-wrap items-center gap-1.5 pt-2 pb-2 border-y border-slate-100 text-[11px]" id="subscription_backup_panel">
@@ -3591,12 +3705,30 @@ export default function App() {
                             <p className="text-[10px] text-slate-400 font-mono mt-0.5 truncate max-w-sm">{cfg.url}</p>
                           </div>
                           
-                          <div className="flex items-center gap-1.5 flex-shrink-0">
+                          <div className="flex items-center gap-2 flex-shrink-0">
+                            {/* Quick Switch Toggle */}
+                            <div className="flex items-center gap-1.5 bg-white px-2 py-1 rounded-xl border border-slate-200 shadow-2xs hover:border-slate-300 transition">
+                              <span className="text-[9.5px] font-bold text-slate-500">{cfg.disabled ? "已禁用" : "启用中"}</span>
+                              <button
+                                onClick={() => toggleSyncDisabled(cfg.id, !!cfg.disabled)}
+                                title={cfg.disabled ? "点击启用该源自动同步" : "点击关闭该源自动同步"}
+                                className={`relative inline-flex h-4 w-7.5 items-center rounded-full transition-all duration-200 focus:outline-none cursor-pointer ${
+                                  !cfg.disabled ? "bg-emerald-500" : "bg-slate-200 hover:bg-slate-300"
+                                }`}
+                              >
+                                <span
+                                  className={`inline-block h-2.5 w-2.5 transform rounded-full bg-white transition-transform duration-200 shadow-sm ${
+                                    !cfg.disabled ? "translate-x-4" : "translate-x-1"
+                                  }`}
+                                />
+                              </button>
+                            </div>
+
                             <span className={`text-[9px] uppercase font-bold tracking-wider px-2 py-0.5 rounded-full ${
                               cfg.disabled ? "bg-rose-100 text-rose-700" :
                               cfg.autoSync ? "bg-emerald-100 text-emerald-800" : "bg-slate-200 text-slate-600"
                             }`}>
-                              {cfg.disabled ? "自动锁定" : cfg.autoSync ? `定时 ${cfg.syncInterval}h` : "手动触发"}
+                              {cfg.disabled ? "已停止" : cfg.autoSync ? `定时 ${cfg.syncInterval}h` : "手动触发"}
                             </span>
                             
                             <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${
@@ -3604,7 +3736,7 @@ export default function App() {
                               cfg.status === "success" ? "bg-emerald-50 text-emerald-700 hover:bg-emerald-100" :
                               cfg.status === "failed" ? "bg-rose-50 text-rose-700" : "bg-slate-100 text-slate-500"
                             }`}>
-                              {cfg.disabled ? "已临时关闭" :
+                              {cfg.disabled ? "临时停用" :
                                cfg.status === "success" && "同步顺畅"}
                               {!cfg.disabled && cfg.status === "failed" && "同步断流"}
                               {cfg.status === "never" && "从未触发"}
