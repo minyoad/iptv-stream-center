@@ -9,6 +9,7 @@ import http from "http";
 import https from "https";
 import crypto from "crypto";
 import { GoogleGenAI, Type } from "@google/genai";
+import Database from "better-sqlite3";
 
 interface LiveSource {
   id: string;
@@ -91,6 +92,79 @@ let syncConfigs: SyncConfig[] = [];
 let epgSources: EpgSource[] = [];
 let adminPassword = process.env.ADMIN_PASSWORD || "";
 let githubProxy = "";
+
+const SQLITE_DB_PATH = path.join(DATA_DIR, "iptv_sqlite.db");
+let db: Database.Database;
+
+function initSqlite() {
+  db = new Database(SQLITE_DB_PATH);
+  
+  // Enable WAL mode for high performance concurrency and stability
+  db.pragma("journal_mode = WAL");
+  db.pragma("synchronous = NORMAL");
+
+  // Create tables structured for fast access
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS groups (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS channels (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      logo TEXT,
+      groupIds TEXT,
+      alias TEXT,
+      epgId TEXT
+    );
+    CREATE TABLE IF NOT EXISTS sources (
+      id TEXT PRIMARY KEY,
+      channelId TEXT NOT NULL,
+      url TEXT NOT NULL,
+      province TEXT,
+      isp TEXT,
+      status TEXT,
+      latency INTEGER,
+      lastChecked TEXT,
+      clientIspReported TEXT,
+      clientProvinceReported TEXT
+    );
+    CREATE TABLE IF NOT EXISTS sync_configs (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      url TEXT,
+      type TEXT,
+      autoSync INTEGER,
+      syncInterval INTEGER,
+      lastSynced TEXT,
+      status TEXT,
+      message TEXT,
+      disabled INTEGER,
+      consecutiveFailures INTEGER,
+      contentHash TEXT,
+      isp TEXT
+    );
+    CREATE TABLE IF NOT EXISTS epg_sources (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      url TEXT,
+      active INTEGER,
+      lastSynced TEXT,
+      status TEXT,
+      message TEXT
+    );
+    CREATE TABLE IF NOT EXISTS settings (
+      key TEXT PRIMARY KEY,
+      value TEXT
+    );
+  `);
+
+  // Ensure optimized indices for speedy lookups
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_sources_channelId ON sources(channelId);
+    CREATE INDEX IF NOT EXISTS idx_sources_status ON sources(status);
+  `);
+}
 
 const EPG_CACHE_DIR = path.join(DATA_DIR, "epg_cache_sources");
 if (!fs.existsSync(EPG_CACHE_DIR)) {
@@ -356,12 +430,27 @@ const DEFAULT_SYNC_CONFIGS: SyncConfig[] = [
   }
 ];
 
-// Load Database from disk
+// Load Database from disk/SQLite
 function loadData() {
   try {
+    initSqlite();
+
+    let legacyJsonFound = false;
+    let parsed: any = null;
+
+    // Check if the legacy json exists (initial transition or restored backup)
     if (fs.existsSync(DATA_FILE)) {
-      const content = fs.readFileSync(DATA_FILE, "utf-8");
-      const parsed = JSON.parse(content);
+      console.log("[Migration] Found legacy/restored JSON data file. Loading and Syncing...");
+      try {
+        const content = fs.readFileSync(DATA_FILE, "utf-8");
+        parsed = JSON.parse(content);
+        legacyJsonFound = true;
+      } catch (e: any) {
+        console.error("[Migration Error] Failed to parse legacy JSON:", e.message || e);
+      }
+    }
+
+    if (legacyJsonFound && parsed) {
       channels = parsed.channels || [];
       syncConfigs = parsed.syncConfigs || [];
       groups = parsed.groups || [];
@@ -373,27 +462,113 @@ function loadData() {
         githubProxy = parsed.githubProxy;
       }
 
-      // Auto-seed default EPG sources if empty
-      if (epgSources.length === 0) {
-        epgSources = [
-          {
-            id: "epg_fanmingming",
-            name: "Fanmingming 高速公开 EPG XML 源",
-            url: "https://live.fanmingming.com/e.xml",
-            active: true,
-            status: "never",
-          },
-          {
-            id: "epg_51zmt",
-            name: "51zmt 经典公开 EPG XML 源",
-            url: "http://epg.51zmt.top:11111/e.xml",
-            active: true,
-            status: "never",
-          }
-        ];
-        saveData();
+      // Populate SQLite with this state
+      saveData();
+
+      // Rename DATA_FILE so we don't migrate on every start
+      try {
+        const bakPath = DATA_FILE + ".bak";
+        if (fs.existsSync(bakPath)) {
+          fs.unlinkSync(bakPath); // remove old bak if any
+        }
+        fs.renameSync(DATA_FILE, bakPath);
+        console.log(`[Migration] Legacy JSON file archived to ${bakPath}`);
+      } catch (err: any) {
+        console.error("[Migration Error] Failed to archive legacy JSON file:", err.message);
       }
     } else {
+      // Load directly from SQLite
+      const loadedSettings = db.prepare("SELECT * FROM settings").all();
+      for (const row of loadedSettings as any[]) {
+        if (row.key === "adminPassword") adminPassword = row.value;
+        if (row.key === "githubProxy") githubProxy = row.value;
+      }
+
+      const loadedGroups = db.prepare("SELECT * FROM groups").all();
+      groups = loadedGroups.map((g: any) => ({
+        id: g.id,
+        name: g.name
+      }));
+
+      const loadedSyncConfigs = db.prepare("SELECT * FROM sync_configs").all();
+      syncConfigs = loadedSyncConfigs.map((sc: any) => ({
+        id: sc.id,
+        name: sc.name,
+        url: sc.url,
+        type: sc.type,
+        autoSync: sc.autoSync === 1,
+        syncInterval: sc.syncInterval,
+        lastSynced: sc.lastSynced || undefined,
+        status: sc.status || "never",
+        message: sc.message || undefined,
+        disabled: sc.disabled === 1,
+        consecutiveFailures: sc.consecutiveFailures || 0,
+        contentHash: sc.contentHash || undefined,
+        isp: sc.isp || undefined
+      }));
+
+      const loadedEpgSources = db.prepare("SELECT * FROM epg_sources").all();
+      epgSources = loadedEpgSources.map((es: any) => ({
+        id: es.id,
+        name: es.name,
+        url: es.url,
+        active: es.active === 1,
+        lastSynced: es.lastSynced || undefined,
+        status: es.status || "never",
+        message: es.message || undefined
+      }));
+
+      const dbChannels = db.prepare("SELECT * FROM channels").all();
+      const dbSources = db.prepare("SELECT * FROM sources").all();
+      const sourceMap = new Map<string, LiveSource[]>();
+      
+      for (const row of dbSources as any[]) {
+        const src: LiveSource = {
+          id: row.id,
+          url: row.url,
+          province: row.province || "",
+          isp: row.isp || "",
+          status: row.status || "unknown",
+          latency: row.latency !== null ? row.latency : undefined,
+          lastChecked: row.lastChecked || undefined,
+          clientIspReported: row.clientIspReported || undefined,
+          clientProvinceReported: row.clientProvinceReported || undefined
+        };
+        if (!sourceMap.has(row.channelId)) {
+          sourceMap.set(row.channelId, []);
+        }
+        sourceMap.get(row.channelId)!.push(src);
+      }
+
+      channels = dbChannels.map((ch: any) => {
+        let groupIds: string[] = [];
+        try {
+          groupIds = JSON.parse(ch.groupIds || "[]");
+        } catch {
+          groupIds = ch.groupIds ? ch.groupIds.split(",") : [];
+        }
+
+        let alias: string[] = [];
+        try {
+          alias = JSON.parse(ch.alias || "[]");
+        } catch {}
+
+        return {
+          id: ch.id,
+          name: ch.name,
+          logo: ch.logo || "",
+          groupIds,
+          alias,
+          epgId: ch.epgId || "",
+          sources: sourceMap.get(ch.id) || []
+        };
+      });
+    }
+
+    // Auto seed default EPG / configs if SQLite was completely empty
+    const hasChannels = db.prepare("SELECT COUNT(*) as count FROM channels").get() as { count: number };
+    if (hasChannels.count === 0 && channels.length === 0) {
+      console.log("[SQLite Seed] Entire database is empty. Seeding defaults...");
       channels = DEFAULT_CHANNELS;
       syncConfigs = DEFAULT_SYNC_CONFIGS;
       groups = DEFAULT_GROUPS;
@@ -417,8 +592,8 @@ function loadData() {
     }
 
     // Run Migration: if groups collection or channel groupIds are missing
+    let updated = false;
     if (groups.length === 0) {
-      // Build unique categories from channels
       const uniqueCats = new Set<string>();
       channels.forEach((c: any) => {
         if (c.category) uniqueCats.add(c.category);
@@ -431,12 +606,14 @@ function loadData() {
           name: catName,
         }));
       }
+      updated = true;
     }
 
     // Ensure all channels have groupIds array and map old category
     channels.forEach((c: any) => {
       if (!c.groupIds) {
         c.groupIds = [];
+        updated = true;
       }
       if (c.category) {
         let matchingGroup = groups.find((g) => g.name === c.category);
@@ -446,9 +623,11 @@ function loadData() {
             name: c.category,
           };
           groups.push(matchingGroup);
+          updated = true;
         }
         if (!c.groupIds.includes(matchingGroup.id)) {
           c.groupIds.push(matchingGroup.id);
+          updated = true;
         }
       }
       // Guarantee at least one group membership
@@ -457,44 +636,137 @@ function loadData() {
         if (!otherGroup) {
           otherGroup = { id: "g_other", name: "其它频道" };
           groups.push(otherGroup);
+          updated = true;
         }
         c.groupIds.push(otherGroup.id);
+        updated = true;
       }
     });
 
+    if (updated) {
+      saveData();
+    }
+
   } catch (error) {
-    console.error("Failed to load IPTV data, applying default seed data:", error);
+    console.error("Failed to load IPTV data from SQLite:", error);
     channels = DEFAULT_CHANNELS;
     syncConfigs = DEFAULT_SYNC_CONFIGS;
     groups = DEFAULT_GROUPS;
   }
 }
 
-// Save Database to disk
+// Save Database to SQLite disk
 function saveData() {
   try {
-    const backup = {
-      groups,
-      channels,
-      syncConfigs,
-      epgSources,
-      adminPassword,
-      githubProxy,
-    };
-    fs.writeFileSync(DATA_FILE, JSON.stringify(backup, null, 2), "utf-8");
+    const syncDb = db.transaction(() => {
+      // 1. Sync settings
+      const insertSetting = db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)");
+      insertSetting.run("adminPassword", adminPassword);
+      insertSetting.run("githubProxy", githubProxy);
+
+      // 2. Sync groups
+      db.exec("DELETE FROM groups");
+      const insertGroup = db.prepare("INSERT INTO groups (id, name) VALUES (?, ?)");
+      for (const g of groups) {
+        insertGroup.run(g.id, g.name);
+      }
+
+      // 3. Sync channels & sources
+      db.exec("DELETE FROM channels");
+      db.exec("DELETE FROM sources");
+
+      const insertChannel = db.prepare("INSERT INTO channels (id, name, logo, groupIds, alias, epgId) VALUES (?, ?, ?, ?, ?, ?)");
+      const insertSource = db.prepare(`
+        INSERT INTO sources (id, channelId, url, province, isp, status, latency, lastChecked, clientIspReported, clientProvinceReported)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+
+      for (const ch of channels) {
+        insertChannel.run(
+          ch.id,
+          ch.name,
+          ch.logo || "",
+          JSON.stringify(ch.groupIds || []),
+          JSON.stringify(ch.alias || []),
+          ch.epgId || ""
+        );
+
+        if (ch.sources && ch.sources.length > 0) {
+          for (const s of ch.sources) {
+            insertSource.run(
+              s.id,
+              ch.id,
+              s.url,
+              s.province || "",
+              s.isp || "",
+              s.status || "unknown",
+              s.latency !== undefined ? s.latency : null,
+              s.lastChecked || "",
+              s.clientIspReported || "",
+              s.clientProvinceReported || ""
+            );
+          }
+        }
+      }
+
+      // 4. Sync sync_configs
+      db.exec("DELETE FROM sync_configs");
+      const insertSync = db.prepare(`
+        INSERT INTO sync_configs (id, name, url, type, autoSync, syncInterval, lastSynced, status, message, disabled, consecutiveFailures, contentHash, isp)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+      for (const sc of syncConfigs) {
+        insertSync.run(
+          sc.id,
+          sc.name,
+          sc.url,
+          sc.type,
+          sc.autoSync ? 1 : 0,
+          sc.syncInterval,
+          sc.lastSynced || "",
+          sc.status || "never",
+          sc.message || "",
+          sc.disabled ? 1 : 0,
+          sc.consecutiveFailures || 0,
+          sc.contentHash || "",
+          sc.isp || ""
+        );
+      }
+
+      // 5. Sync epg_sources
+      db.exec("DELETE FROM epg_sources");
+      const insertEpg = db.prepare(`
+        INSERT INTO epg_sources (id, name, url, active, lastSynced, status, message)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `);
+      for (const epg of epgSources) {
+        insertEpg.run(
+          epg.id,
+          epg.name,
+          epg.url,
+          epg.active ? 1 : 0,
+          epg.lastSynced || "",
+          epg.status || "never",
+          epg.message || ""
+        );
+      }
+    });
+
+    syncDb();
   } catch (error) {
-    console.error("Failed to save IPTV data to file:", error);
+    console.error("Failed to save IPTV data to SQLite:", error);
   }
 }
 
-// Automated Daily Backup of iptv_data.json to prevent accidental data loss
+// Automated Daily Backup of SQLite to prevent accidental data loss
 function checkAndPerformDailyBackup() {
   try {
     if (!fs.existsSync(DATA_DIR)) {
       fs.mkdirSync(DATA_DIR, { recursive: true });
     }
-    if (!fs.existsSync(DATA_FILE)) {
-      return; // No data to backup yet
+    const sqlitePath = path.join(DATA_DIR, "iptv_sqlite.db");
+    if (!fs.existsSync(sqlitePath)) {
+      return; 
     }
     const now = new Date();
     const year = now.getFullYear();
@@ -502,14 +774,28 @@ function checkAndPerformDailyBackup() {
     const day = String(now.getDate()).padStart(2, "0");
     const dateStr = `${year}-${month}-${day}`;
     
-    const backupFileName = `iptv_data_backup_${dateStr}.json`;
-    const backupFilePath = path.join(DATA_DIR, backupFileName);
+    const backupDbName = `iptv_data_sqlite_backup_${dateStr}.db`;
+    const backupDbPath = path.join(DATA_DIR, backupDbName);
     
-    if (!fs.existsSync(backupFilePath)) {
-      console.log(`[Backup] Generating daily backup: ${backupFileName}`);
-      fs.copyFileSync(DATA_FILE, backupFilePath);
+    if (!fs.existsSync(backupDbPath)) {
+      console.log(`[Backup] Generating daily automated SQLite snapshot: ${backupDbName}`);
+      fs.copyFileSync(sqlitePath, backupDbPath);
+
+      // Generate a companion restorable legacy JSON file
+      const backupJsonName = `iptv_data_backup_${dateStr}.json`;
+      const backupJsonPath = path.join(DATA_DIR, backupJsonName);
+      if (!fs.existsSync(backupJsonPath)) {
+        const backupJson = {
+          groups,
+          channels,
+          syncConfigs,
+          epgSources,
+          adminPassword,
+          githubProxy,
+        };
+        fs.writeFileSync(backupJsonPath, JSON.stringify(backupJson, null, 2), "utf-8");
+      }
       
-      // Keep last 30 backups to prevent storage leaks
       cleanOldBackups();
     }
   } catch (err) {
@@ -521,14 +807,14 @@ function cleanOldBackups() {
   try {
     const files = fs.readdirSync(DATA_DIR);
     const backupFiles = files
-      .filter((f) => f.startsWith("iptv_data_backup_") && f.endsWith(".json"))
-      .sort(); // Sorting list ascends alphabetically (oldest daily date first due to YYYY-MM-DD formatting)
+      .filter((f) => (f.startsWith("iptv_data_backup_") || f.startsWith("iptv_data_sqlite_backup_")) && (f.endsWith(".json") || f.endsWith(".db")))
+      .sort(); // Sorting list ascends alphabetically
       
     if (backupFiles.length > 30) {
       const extraBackups = backupFiles.slice(0, backupFiles.length - 30);
       for (const fileToDelete of extraBackups) {
         fs.unlinkSync(path.join(DATA_DIR, fileToDelete));
-        console.log(`[Backup] Retained last 30 daily backups, deleted old backup: ${fileToDelete}`);
+        console.log(`[Backup] Deleted old backup: ${fileToDelete}`);
       }
     }
   } catch (err) {
@@ -3476,8 +3762,18 @@ ${JSON.stringify(scoredList.map(c => ({ epgId: c.epgId, names: c.displayNames, s
       
       // Save current database as prior backup to prevent accidental loss
       const autoBackupName = `iptv_data_backup_before_restore_${Date.now()}.json`;
-      if (fs.existsSync(DATA_FILE)) {
-        fs.copyFileSync(DATA_FILE, path.join(DATA_DIR, autoBackupName));
+      try {
+        const priorBackupJson = {
+          groups,
+          channels,
+          syncConfigs,
+          epgSources,
+          adminPassword,
+          githubProxy,
+        };
+        fs.writeFileSync(path.join(DATA_DIR, autoBackupName), JSON.stringify(priorBackupJson, null, 2), "utf-8");
+      } catch (backupErr) {
+        console.error("[Restore Backup] Failed to write safety prior backup:", backupErr);
       }
 
       if (content) {
