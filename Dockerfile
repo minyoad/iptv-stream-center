@@ -3,6 +3,9 @@ FROM node:20-alpine AS builder
 
 WORKDIR /app
 
+# 安装原生模块构建依赖
+RUN apk add --no-cache python3 make g++
+
 # 复制依赖定义文件
 COPY package*.json ./
 
@@ -23,9 +26,13 @@ WORKDIR /app
 # 设置生产环境变量
 ENV NODE_ENV=production
 
-# 仅复制 package.json 并安装生产依赖
+# 仅复制 package.json
 COPY package*.json ./
-RUN npm install --omit=dev
+
+# 安装生产依赖，并使用虚拟依赖组在编译后自动清除构建工具
+RUN apk add --no-cache --virtual .build-deps python3 make g++ \
+    && npm install --omit=dev \
+    && apk del .build-deps
 
 # 从构建阶段复制编译输出文件（/app/dist 包含了静态前端托管和 CJS 后端代码）
 COPY --from=builder /app/dist ./dist
