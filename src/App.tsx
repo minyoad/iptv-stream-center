@@ -112,7 +112,7 @@ export default function App() {
   // Batch channel operations state
   const [selectedChannelIds, setSelectedChannelIds] = useState<string[]>([]);
   const [isBatchGroupModalOpen, setIsBatchGroupModalOpen] = useState(false);
-  const [batchGroupForm, setBatchGroupForm] = useState<{ groupIds: string[] }>({ groupIds: [] });
+  const [batchGroupForm, setBatchGroupForm] = useState<{ groupIds: string[]; mode: "replace" | "append" }>({ groupIds: [], mode: "replace" });
 
   // Batch live source operations state
   const [selectedSourceIds, setSelectedSourceIds] = useState<string[]>([]);
@@ -894,7 +894,7 @@ export default function App() {
       showFeedback("info", "请先选择需要编辑分组的频道");
       return;
     }
-    setBatchGroupForm({ groupIds: [] });
+    setBatchGroupForm({ groupIds: [], mode: "append" }); // Default to append since user requested adding/appending logic as a primary feature
     setIsBatchGroupModalOpen(true);
   };
 
@@ -912,7 +912,8 @@ export default function App() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           channelIds: selectedChannelIds,
-          groupIds: batchGroupForm.groupIds
+          groupIds: batchGroupForm.groupIds,
+          mode: batchGroupForm.mode
         })
       });
 
@@ -4411,15 +4412,15 @@ export default function App() {
       
       {/* 1. Modal Dialog: Create/Update Channel */}
       {isChannelModalOpen && (
-        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4" id="channel_modal">
-          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-100 space-y-5 flex flex-col animate-fade-in">
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 font-sans" id="channel_modal">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-100 space-y-5 flex flex-col animate-fade-in font-sans">
             <div className="flex justify-between items-center">
               <h3 className="text-sm font-bold text-slate-800">{editingChannel ? "修改 IPTV 频道元数据" : "建立新收录 IPTV 频道"}</h3>
-              <button className="text-slate-400 hover:text-slate-600 font-bold" onClick={()=>setIsChannelModalOpen(false)}>✕</button>
+              <button className="text-slate-400 hover:text-slate-600 font-bold font-sans" onClick={()=>setIsChannelModalOpen(false)}>✕</button>
             </div>
             
             <form onSubmit={handleSaveChannel} className="space-y-4 text-xs font-semibold text-slate-600">
-              <div className="space-y-1.5">
+              <div className="space-y-1.5 font-sans">
                 <label>频道标准中文名称 (Standard Name) *</label>
                 <input 
                   type="text"
@@ -4427,18 +4428,18 @@ export default function App() {
                   value={channelForm.name}
                   onChange={(e)=>setChannelForm({...channelForm, name: e.target.value})}
                   placeholder="如: CCTV-1 综合"
-                  className="w-full text-xs p-2.5 border border-slate-200 rounded-xl focus:border-indigo-500 bg-slate-50 focus:outline-none"
+                  className="w-full text-xs p-2.5 border border-slate-200 rounded-xl focus:border-indigo-500 bg-slate-50 focus:outline-none placeholder-slate-400 text-slate-800 font-sans"
                 />
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div className="space-y-1.5">
+                <div className="space-y-1.5 font-sans">
                   <label>关联直播分类 (选择一个或多个分组) *</label>
                   <div className="border border-slate-200 rounded-xl bg-slate-50 p-2.5 max-h-32 overflow-y-auto space-y-1" id="group_checkboxes_pnl">
                     {groups.map((g) => {
                       const isChecked = channelForm.groupIds.includes(g.id);
                       return (
-                        <label key={g.id} className="flex items-center gap-2 cursor-pointer py-0.5 hover:bg-slate-100/50 rounded px-1.5">
+                        <label key={g.id} className="flex items-center gap-2 cursor-pointer py-0.5 hover:bg-slate-100/50 rounded px-1.5 select-none text-slate-700">
                           <input
                             type="checkbox"
                             checked={isChecked}
@@ -4461,7 +4462,7 @@ export default function App() {
                   </div>
                 </div>
 
-                <div className="space-y-1.5 flex flex-col justify-between">
+                <div className="space-y-1.5 flex flex-col justify-between font-sans">
                   <div>
                     <label>创建并关联新分类 (动态逗号分隔)</label>
                     <input
@@ -4469,14 +4470,14 @@ export default function App() {
                       value={channelForm.newGroupsString}
                       onChange={(e)=>setChannelForm({...channelForm, newGroupsString: e.target.value})}
                       placeholder="如: 黑龙江卫视, 蓝光专区"
-                      className="w-full text-xs p-2.5 mt-1 border border-slate-200 rounded-xl focus:border-indigo-500 bg-slate-50 focus:outline-none"
+                      className="w-full text-xs p-2.5 mt-1 border border-slate-200 rounded-xl focus:border-indigo-500 bg-slate-50 focus:outline-none placeholder-slate-400 text-slate-800"
                     />
                   </div>
-                  <p className="text-[10px] text-slate-400 font-medium leading-relaxed">可以直接在这输入想加入的新类型，保存时系统会自动帮您创建组并关联，实现多对多绑定。</p>
+                  <p className="text-[10px] text-slate-400 font-medium leading-relaxed font-sans">可以直接在这输入想加入的新类型，保存时系统会自动帮您创建组并关联，实现多对多绑定。</p>
                 </div>
               </div>
 
-              <div className="space-y-1.5">
+              <div className="space-y-1.5 font-sans">
                 <label className="flex justify-between items-center">
                   <span>EPG 节目匹配 ID (epgId) *</span>
                 </label>
@@ -4487,7 +4488,7 @@ export default function App() {
                     value={channelForm.epgId}
                     onChange={(e)=>setChannelForm({...channelForm, epgId: e.target.value})}
                     placeholder="如: cctv1"
-                    className="flex-1 text-xs p-2.5 border border-slate-200 rounded-xl focus:border-indigo-500 bg-slate-50 focus:outline-none font-mono"
+                    className="flex-1 text-xs p-2.5 border border-slate-200 rounded-xl focus:border-indigo-500 bg-slate-50 focus:outline-none font-mono placeholder-slate-400 text-slate-800"
                   />
                   <button
                     type="button"
@@ -4500,13 +4501,13 @@ export default function App() {
                 </div>
 
                 {aiRecommendError && (
-                  <p className="text-[10px] text-rose-600 font-bold mt-1 leading-relaxed bg-rose-50 p-2 rounded-lg border border-rose-100">{aiRecommendError}</p>
+                  <p className="text-[10px] text-rose-600 font-bold mt-1 leading-relaxed bg-rose-50 p-2 rounded-lg border border-rose-100 font-sans">{aiRecommendError}</p>
                 )}
 
                 {aiRecommends.length > 0 && (
-                  <div className="mt-2 bg-indigo-50/30 p-2.5 rounded-xl border border-indigo-100 space-y-2 max-h-48 overflow-y-auto">
+                  <div className="mt-2 bg-indigo-50/30 p-2.5 rounded-xl border border-indigo-100 space-y-2 max-h-48 overflow-y-auto font-sans">
                     <p className="text-[10px] font-bold text-indigo-800">Gemini AI 智能推荐匹配 (点击直接采纳填入)：</p>
-                    <div className="flex flex-col gap-1.5">
+                    <div className="flex flex-col gap-1.5 font-sans">
                       {aiRecommends.map((rec) => (
                         <div 
                           key={rec.epgId}
@@ -4533,42 +4534,158 @@ export default function App() {
                 )}
               </div>
 
-              <div className="space-y-1.5">
+              <div className="space-y-1.5 font-sans">
                 <label>频道台标图片图标 (Logo URL)</label>
                 <input 
                   type="url"
                   value={channelForm.logo}
                   onChange={(e)=>setChannelForm({...channelForm, logo: e.target.value})}
                   placeholder="https://..."
-                  className="w-full text-xs p-2.5 border border-slate-200 rounded-xl focus:border-indigo-500 bg-slate-50 focus:outline-none font-mono"
+                  className="w-full text-xs p-2.5 border border-slate-200 rounded-xl focus:border-indigo-500 bg-slate-50 focus:outline-none font-mono placeholder-slate-400 text-slate-800"
                 />
               </div>
 
-              <div className="space-y-1.5">
+              <div className="space-y-1.5 font-sans">
                 <label>匹配兼容等别名 (Comma Separated)</label>
                 <input 
                   type="text"
                   value={channelForm.alias}
                   onChange={(e)=>setChannelForm({...channelForm, alias: e.target.value})}
-                  placeholder="如: CCTV1, 中央一套, CCTV-1 HD"
-                  className="w-full text-xs p-2.5 border border-slate-200 rounded-xl focus:border-indigo-500 bg-slate-50 focus:outline-none"
+                  placeholder="如: cctv1, 中央一套, CCTV-1 HD"
+                  className="w-full text-xs p-2.5 border border-slate-200 rounded-xl focus:border-indigo-500 bg-slate-50 focus:outline-none placeholder-slate-400 text-slate-800"
                 />
-                <p className="text-[10px] text-slate-400 font-medium">导入不同直播源时，只要名字撞到了这些别名，就会自动归为此频道的源。</p>
+                <p className="text-[10px] text-slate-400 font-medium font-sans">导入不同直播源时，只要名字撞到了这些别名，就会自动归为此频道的源。</p>
               </div>
 
               <div className="flex gap-3 pt-3">
                 <button 
                   type="button" 
                   onClick={()=>setIsChannelModalOpen(false)}
-                  className="w-1/3 py-2.5 border border-slate-200 hover:bg-slate-50 text-slate-600 rounded-xl cursor-pointer text-center font-bold"
+                  className="w-1/3 py-2.5 border border-slate-200 hover:bg-slate-50 text-slate-600 rounded-xl cursor-pointer text-center font-bold font-sans"
                 >
                   取消
                 </button>
                 <button 
                   type="submit" 
-                  className="w-2/3 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-slate-50 rounded-xl cursor-pointer text-center font-bold"
+                  className="w-2/3 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-slate-50 rounded-xl cursor-pointer text-center font-bold font-sans shadow-md"
                 >
                   保存设置
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* 3. Modal Dialog: Create/Update Scheduled Sync Subscription */}
+      {isSyncModalOpen && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 font-sans" id="sync_modal">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-100 space-y-5 flex flex-col animate-fade-in font-sans">
+            <div className="flex justify-between items-center">
+              <h3 className="text-sm font-bold text-slate-800 font-sans">{editingSync ? "修改定时拉取任务" : "建立新增从网络 URL 拉取同步"}</h3>
+              <button className="text-slate-400 hover:text-slate-600 font-bold" onClick={()=>setIsSyncModalOpen(false)}>✕</button>
+            </div>
+            
+            <form onSubmit={handleSaveSync} className="space-y-4 text-xs font-semibold text-slate-600">
+              <div className="space-y-1.5 font-sans">
+                <label>同步任务备注名称 *</label>
+                <input 
+                  type="text"
+                  required
+                  value={syncForm.name}
+                  onChange={(e)=>setSyncForm({...syncForm, name: e.target.value})}
+                  placeholder="如: Github 超速 M3U IPv6 源"
+                  className="w-full text-xs p-2.5 border border-slate-200 rounded-xl focus:border-indigo-500 bg-slate-50 dark:border-slate-700 focus:outline-none placeholder-slate-400 text-slate-800"
+                />
+              </div>
+
+              <div className="space-y-1.5 font-sans">
+                <label>远程 M3U / TXT 源文件地址 URL *</label>
+                <input 
+                  type="url"
+                  required
+                  value={syncForm.url}
+                  onChange={(e)=>setSyncForm({...syncForm, url: e.target.value})}
+                  placeholder="https://raw.githubusercontent.com/..."
+                  className="w-full text-xs p-2.5 border border-slate-200 rounded-xl focus:border-indigo-500 bg-slate-50 focus:outline-none font-mono placeholder-slate-400 text-slate-800"
+                />
+                <p className="text-[10px] text-slate-400 font-medium font-sans">支持从 Github 转换 raw url 后直接请求导入新源。</p>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-1.5">
+                  <label>文件类型 (Format Type)</label>
+                  <select 
+                    value={syncForm.type}
+                    onChange={(e)=>setSyncForm({...syncForm, type: e.target.value as "m3u" | "txt"})}
+                    className="w-full text-xs p-2.5 border border-slate-200 rounded-xl bg-slate-50 focus:outline-none font-bold text-slate-700 font-sans"
+                  >
+                    <option value="m3u">M3U Playlist 格式</option>
+                    <option value="txt">TVBox TXT 格式</option>
+                  </select>
+                </div>
+
+                <div className="space-y-1.5">
+                  <label>自动定时同步后台自动拉取</label>
+                  <div className="flex items-center gap-2.5 h-10">
+                    <input 
+                      type="checkbox" 
+                      checked={syncForm.autoSync}
+                      onChange={(e)=>setSyncForm({...syncForm, autoSync: e.target.checked})}
+                      className="w-4 h-4 text-indigo-600 rounded"
+                    />
+                    <span className="font-sans">定时轮询拉取</span>
+                  </div>
+                </div>
+              </div>
+
+              {syncForm.autoSync && (
+                <div className="space-y-1.5 animate-fade-in font-sans">
+                  <label>自动轮询周期频度 (小时/h)</label>
+                  <select 
+                    value={syncForm.syncInterval}
+                    onChange={(e)=>setSyncForm({...syncForm, syncInterval: Number(e.target.value)})}
+                    className="w-full text-xs p-2.5 border border-slate-200 rounded-xl bg-slate-50 focus:outline-none font-semibold text-slate-700"
+                  >
+                    <option value={1}>每隔 1 小时 (轮询检测)</option>
+                    <option value={6}>每隔 6 小时</option>
+                    <option value={12}>每隔 12 小时</option>
+                    <option value={24}>每隔 24 小时 (每日晚间同步)</option>
+                  </select>
+                </div>
+              )}
+
+              <div className="space-y-1.5 font-sans" id="sync_form_isp_block">
+                <label>强制将导入的直播源设置为特定运营商 (ISP)</label>
+                <select 
+                  value={syncForm.isp}
+                  onChange={(e)=>setSyncForm({...syncForm, isp: e.target.value})}
+                  className="w-full text-xs p-2.5 border border-slate-200 rounded-xl bg-slate-50 focus:outline-none text-slate-700 font-bold"
+                >
+                  <option value="">自动解析并智能提取</option>
+                  <option value="电信">中国电信</option>
+                  <option value="联通">中国联通</option>
+                  <option value="移动">中国移动</option>
+                  <option value="广电">中国广电</option>
+                  <option value="BGP">多线 BGP 专线</option>
+                  <option value="其它">其它</option>
+                </select>
+                <p className="text-[10px] text-slate-400 font-normal">指定后，该订阅拉取产生的所有直播源都将统一且强制被赋予此 ISP 属性。</p>
+              </div>
+
+              <div className="flex gap-3 pt-3">
+                <button 
+                  type="button" 
+                  onClick={()=>setIsSyncModalOpen(false)}
+                  className="w-1/3 py-2.5 border border-slate-200 hover:bg-slate-50 text-slate-600 rounded-xl cursor-pointer text-center font-bold font-sans"
+                >
+                  取消
+                </button>
+                <button 
+                  type="submit" 
+                  className="w-2/3 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-slate-50 rounded-xl cursor-pointer text-center font-bold font-sans shadow-md"
+                >
+                  {editingSync ? "保存修改" : "建立同步订阅"}
                 </button>
               </div>
             </form>
@@ -4633,13 +4750,13 @@ export default function App() {
                 <button 
                   type="button" 
                   onClick={()=>setIsSourceModalOpen(false)}
-                  className="w-1/3 py-2.5 border border-slate-200 hover:bg-slate-50 text-slate-600 rounded-xl cursor-pointer text-center font-bold"
+                  className="w-1/3 py-2.5 border border-slate-200 hover:bg-slate-50 text-slate-600 rounded-xl cursor-pointer text-center font-bold font-sans"
                 >
-                  放弃取消
+                  取消
                 </button>
                 <button 
                   type="submit" 
-                  className="w-2/3 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-slate-50 rounded-xl cursor-pointer text-center font-bold"
+                  className="w-2/3 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-slate-50 rounded-xl cursor-pointer text-center font-bold font-sans shadow-md"
                 >
                   保存直播源
                 </button>
@@ -4649,115 +4766,99 @@ export default function App() {
         </div>
       )}
 
-      {/* 3. Modal Dialog: Create/Update Scheduled Sync Subscription */}
-      {isSyncModalOpen && (
-        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4" id="sync_modal">
-          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-100 space-y-5 flex flex-col animate-fade-in">
+      {/* 4. Modal Dialog: Batch Update Group */}
+      {isBatchGroupModalOpen && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 font-sans" id="batch_group_modal">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-100 space-y-5 flex flex-col animate-fade-in font-sans">
             <div className="flex justify-between items-center">
-              <h3 className="text-sm font-bold text-slate-800">{editingSync ? "修改定时拉取任务" : "建立新增从网络 URL 拉取同步"}</h3>
-              <button className="text-slate-400 hover:text-slate-600 font-bold" onClick={()=>setIsSyncModalOpen(false)}>✕</button>
+              <h3 className="text-sm font-bold text-slate-800 font-sans">批量修改/调整频道分类 (共选中 {selectedChannelIds.length} 条频道)</h3>
+              <button className="text-slate-400 hover:text-slate-600 font-bold" onClick={()=>setIsBatchGroupModalOpen(false)}>✕</button>
             </div>
             
-            <form onSubmit={handleSaveSync} className="space-y-4 text-xs font-semibold text-slate-600">
-              <div className="space-y-1.5">
-                <label>同步任务备注名称 *</label>
-                <input 
-                  type="text"
-                  required
-                  value={syncForm.name}
-                  onChange={(e)=>setSyncForm({...syncForm, name: e.target.value})}
-                  placeholder="如: Github 超速 M3U IPv6 源"
-                  className="w-full text-xs p-2.5 border border-slate-200 rounded-xl focus:border-indigo-500 bg-slate-50 dark:border-slate-700 focus:outline-none"
-                />
-              </div>
-
-              <div className="space-y-1.5">
-                <label>远程 M3U / TXT 源文件地址 URL *</label>
-                <input 
-                  type="url"
-                  required
-                  value={syncForm.url}
-                  onChange={(e)=>setSyncForm({...syncForm, url: e.target.value})}
-                  placeholder="https://raw.githubusercontent.com/..."
-                  className="w-full text-xs p-2.5 border border-slate-200 rounded-xl focus:border-indigo-500 bg-slate-50 focus:outline-none font-mono"
-                />
-                <p className="text-[10px] text-slate-400 font-medium">支持从 Github 转换 raw url 后直接请求导入新源。</p>
-              </div>
-
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-1.5">
-                  <label>文件类型 (Format Type)</label>
-                  <select 
-                    value={syncForm.type}
-                    onChange={(e)=>setSyncForm({...syncForm, type: e.target.value as "m3u" | "txt"})}
-                    className="w-full text-xs p-2.5 border border-slate-200 rounded-xl bg-slate-50 focus:outline-none font-bold text-slate-700"
-                  >
-                    <option value="m3u">M3U Playlist 格式</option>
-                    <option value="txt">TVBox TXT 格式</option>
-                  </select>
-                </div>
-
-                <div className="space-y-1.5">
-                  <label>自动定时同步后台自动拉取</label>
-                  <div className="flex items-center gap-2.5 h-10">
-                    <input 
-                      type="checkbox" 
-                      checked={syncForm.autoSync}
-                      onChange={(e)=>setSyncForm({...syncForm, autoSync: e.target.checked})}
-                      className="w-4 h-4 text-indigo-600 rounded"
+            <form onSubmit={handleBatchGroupSubmit} className="space-y-4 text-xs font-semibold text-slate-600">
+              <div className="space-y-1.5 font-sans">
+                <label className="text-slate-700 block col-span-2">操作模式 *</label>
+                <div className="flex gap-4 p-2.5 bg-slate-50 border border-slate-200 rounded-xl">
+                  <label className="flex items-center gap-2 cursor-pointer select-none">
+                    <input
+                      type="radio"
+                      name="batchGroupMode"
+                      checked={batchGroupForm.mode === "append"}
+                      onChange={() => setBatchGroupForm({ ...batchGroupForm, mode: "append" })}
+                      className="w-4 h-4 text-indigo-600 border-slate-300 focus:ring-indigo-500 cursor-pointer"
                     />
-                    <span>定时轮询拉取</span>
-                  </div>
+                    <span className="text-xs font-bold text-slate-700">追加分组 (保留并累加分类)</span>
+                  </label>
+                  <label className="flex items-center gap-2 cursor-pointer select-none">
+                    <input
+                      type="radio"
+                      name="batchGroupMode"
+                      checked={batchGroupForm.mode === "replace"}
+                      onChange={() => setBatchGroupForm({ ...batchGroupForm, mode: "replace" })}
+                      className="w-4 h-4 text-indigo-600 border-slate-300 focus:ring-indigo-500 cursor-pointer"
+                    />
+                    <span className="text-xs font-bold text-slate-700">替换分组 (彻底重置原分类)</span>
+                  </label>
                 </div>
               </div>
 
-              {syncForm.autoSync && (
-                <div className="space-y-1.5">
-                  <label>自动轮询周期频度 (小时/h)</label>
-                  <select 
-                    value={syncForm.syncInterval}
-                    onChange={(e)=>setSyncForm({...syncForm, syncInterval: Number(e.target.value)})}
-                    className="w-full text-xs p-2.5 border border-slate-200 rounded-xl bg-slate-50 focus:outline-none font-semibold text-slate-700"
-                  >
-                    <option value={1}>每隔 1 小时 (轮询检测)</option>
-                    <option value={6}>每隔 6 小时</option>
-                    <option value={12}>每隔 12 小时</option>
-                    <option value={24}>每隔 24 小时 (每日晚间同步)</option>
-                  </select>
+              <div className="space-y-2">
+                <label className="text-slate-700 block">选择目标分类 (可单选或多选) *</label>
+                <div className="grid grid-cols-2 gap-2 max-h-48 overflow-y-auto p-2.5 bg-slate-50/50 border border-slate-200 rounded-xl">
+                  {groups.map((group) => {
+                    const isGroupChecked = batchGroupForm.groupIds.includes(group.id);
+                    return (
+                      <label 
+                        key={group.id} 
+                        className={`flex items-center gap-2 p-2 rounded-lg border cursor-pointer select-none transition ${
+                          isGroupChecked 
+                            ? "bg-blue-50/60 border-blue-200 text-blue-700 font-bold" 
+                            : "bg-white border-slate-200 text-slate-600 hover:bg-slate-50"
+                        }`}
+                      >
+                        <input
+                          type="checkbox"
+                          className="w-3.5 h-3.5 text-blue-600 border-slate-300 rounded focus:ring-blue-500 cursor-pointer"
+                          checked={isGroupChecked}
+                          onChange={(e) => {
+                            if (e.target.checked) {
+                              setBatchGroupForm({
+                                ...batchGroupForm,
+                                groupIds: [...batchGroupForm.groupIds, group.id]
+                              });
+                            } else {
+                              setBatchGroupForm({
+                                ...batchGroupForm,
+                                groupIds: batchGroupForm.groupIds.filter(id => id !== group.id)
+                              });
+                            }
+                          }}
+                        />
+                        <span className="truncate">{group.name}</span>
+                      </label>
+                    );
+                  })}
                 </div>
-              )}
-
-              <div className="space-y-1.5" id="sync_form_isp_block">
-                <label>强制将导入的直播源设置为特定运营商 (ISP)</label>
-                <select 
-                  value={syncForm.isp}
-                  onChange={(e)=>setSyncForm({...syncForm, isp: e.target.value})}
-                  className="w-full text-xs p-2.5 border border-slate-200 rounded-xl bg-slate-50 focus:outline-none text-slate-700 font-bold"
-                >
-                  <option value="">自动解析并智能提取</option>
-                  <option value="电信">中国电信</option>
-                  <option value="联通">中国联通</option>
-                  <option value="移动">中国移动</option>
-                  <option value="广电">中国广电</option>
-                  <option value="BGP">多线 BGP 专线</option>
-                  <option value="其它">其它</option>
-                </select>
-                <p className="text-[10px] text-slate-400 font-normal">指定后，该订阅拉取产生的所有直播源都将统一且强制被赋予此 ISP 属性。</p>
+                <p className="text-[10px] text-slate-400 font-medium font-sans leading-relaxed">
+                  {batchGroupForm.mode === "append" 
+                    ? "追加模式说明：所选频道如果原本不属于这些组，会被追加进去，原有的其他分组关系会被完整保留。" 
+                    : "覆盖替换说明：所选频道原有的所有分组关系都将被清除，仅归属于在这个选择框里勾选的新分组。"}
+                </p>
               </div>
 
               <div className="flex gap-3 pt-3">
                 <button 
                   type="button" 
-                  onClick={()=>setIsSyncModalOpen(false)}
+                  onClick={() => setIsBatchGroupModalOpen(false)}
                   className="w-1/3 py-2.5 border border-slate-200 hover:bg-slate-50 text-slate-600 rounded-xl cursor-pointer text-center font-bold"
                 >
                   取消
                 </button>
                 <button 
                   type="submit" 
-                  className="w-2/3 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-slate-50 rounded-xl cursor-pointer text-center font-bold"
+                  className="w-2/3 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-slate-50 rounded-xl cursor-pointer text-center font-bold shadow-md shadow-indigo-150"
                 >
-                  建立同步订阅
+                  确认批量更新分组
                 </button>
               </div>
             </form>
@@ -4864,80 +4965,7 @@ export default function App() {
         </div>
       )}
 
-      {/* 3.1. Modal Dialog: Batch Update Channel Groups */}
-      {isBatchGroupModalOpen && (
-        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 font-sans" id="batch_group_modal">
-          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-100 space-y-5 flex flex-col animate-fade-in">
-            <div className="flex justify-between items-center">
-              <h3 className="text-sm font-bold text-slate-800">批量设置 {selectedChannelIds.length} 个视讯的分组</h3>
-              <button 
-                className="text-slate-400 hover:text-slate-600 font-bold" 
-                onClick={() => setIsBatchGroupModalOpen(false)}
-              >
-                ✕
-              </button>
-            </div>
-            
-            <form onSubmit={handleBatchGroupSubmit} className="space-y-4 text-xs font-semibold text-slate-600">
-              <div className="space-y-2">
-                <label className="text-slate-700 block">选择目标分组 *</label>
-                <div className="grid grid-cols-2 gap-2 max-h-48 overflow-y-auto p-2.5 bg-slate-50/50 border border-slate-200 rounded-xl">
-                  {groups.map((group) => {
-                    const isGroupChecked = batchGroupForm.groupIds.includes(group.id);
-                    return (
-                      <label 
-                        key={group.id} 
-                        className={`flex items-center gap-2 p-2 rounded-lg border cursor-pointer select-none transition ${
-                          isGroupChecked 
-                            ? "bg-blue-50/60 border-blue-200 text-blue-700" 
-                            : "bg-white border-slate-200 text-slate-600 hover:bg-slate-50"
-                        }`}
-                      >
-                        <input
-                          type="checkbox"
-                          className="w-3.5 h-3.5 text-blue-600 border-slate-300 rounded focus:ring-blue-500 cursor-pointer"
-                          checked={isGroupChecked}
-                          onChange={(e) => {
-                            if (e.target.checked) {
-                              setBatchGroupForm({
-                                groupIds: [...batchGroupForm.groupIds, group.id]
-                              });
-                            } else {
-                              setBatchGroupForm({
-                                groupIds: batchGroupForm.groupIds.filter(id => id !== group.id)
-                              });
-                            }
-                          }}
-                        />
-                        <span className="truncate">{group.name}</span>
-                      </label>
-                    );
-                  })}
-                </div>
-                <p className="text-[10px] text-slate-400 font-medium font-sans">
-                  提示：选中的频道将被分配到勾选的所有分组中，不在勾选列表中的分组关系将被剥离。
-                </p>
-              </div>
 
-              <div className="flex gap-3 pt-3">
-                <button 
-                  type="button" 
-                  onClick={() => setIsBatchGroupModalOpen(false)}
-                  className="w-1/3 py-2.5 border border-slate-200 hover:bg-slate-50 text-slate-605 rounded-xl cursor-pointer text-center font-bold"
-                >
-                  取消
-                </button>
-                <button 
-                  type="submit" 
-                  className="w-2/3 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-slate-50 rounded-xl cursor-pointer text-center font-bold shadow-md shadow-indigo-150"
-                >
-                  确认批量更新分组
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
 
 
        {/* 3.2. Modal Dialog: Batch Update Playback Sources ISP / Province */}

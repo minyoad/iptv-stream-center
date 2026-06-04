@@ -111,17 +111,20 @@ function stripBitrateAndResolution(name: string): string {
   if (!name) return "";
   let clean = name.trim();
 
-  // Remove bracketed resolution or bitrate, e.g. "[1080p]", "(4M1080)", "[7.5M1080]", "(1080p50)"
-  clean = clean.replace(/[\[(]\s*(?:480|576|720|1080|1280|1440|1920|2160|4320|[48][kK]|\d+(?:\.\d+)?[Mm]\d*)[pPiI]?\s*[\])]/gi, "");
+  // Remove common Chinese/English quality tags optionally appended mid-string or at the end
+  clean = clean.replace(/(?:\s+|-|_)*(?:高清|超清|标清|蓝光|原画|1080[pPiI]|720[pPiI]|576[pPiI]|480[pPiI]|4[kK]|8[kK]|HEVC|hevc|H265|h265|H264|h264)+/g, " ");
 
-  // Remove obvious trailing bitrate patterns, e.g. " 4M1080", " 7.5M1080", " 8M", " 10Mbps"
-  clean = clean.replace(/(?:\s+|-|_)+(?:\d+(?:\.\d+)?[Mm](?:[bB][pP][sS])?\d*[pPiI]?)(?=\s|$|[#])/gi, "");
+  // Remove bracketed resolution or bitrate, e.g. "[1080p]", "(4M1080)", "[7.5M1080]"
+  clean = clean.replace(/[\[(]\s*(?:480|576|720|1080|1280|1440|1920|2160|4320|[48][kK]|\d+(?:\.\d+)?[MmGg]\d*)[pPiI]?\s*[\])]/gi, "");
 
-  // Remove standard resolution numbers, e.g. " 1080i", " 4K", " 576", " 1080p50"
-  clean = clean.replace(/(?:\s+|-|_)+(?:(?:480|576|720|1080|1280|1440|1920|2160|4320|[48][kK])(?:[pPiI]\d*|fps|FPS)?|\d+[pPiI]\d*)(?=\s|$|[#])/gi, "");
+  // Remove trailing or mid-string bandwidth and pixel specs (e.g., " 4M1080", " 7.5M1080", " 8M")
+  clean = clean.replace(/(?:\s+|-|_)+(?:\d+(?:\.\d+)?[MmGg](?:[bB][pP][sS])?\d*[pPiI]?)/gi, "");
 
-  // Remove leftover empty brackets or parentheses containing quality/format descriptors
-  clean = clean.replace(/(?:\s+|-|_)*[\[(](?:高清|超清|标清|蓝光|原画)*[\])]/g, "");
+  // Remove trailing or mid-string numerical resolution tags (e.g., " 1080", " 720")
+  clean = clean.replace(/(?:\s+|-|_)+(?:(?:480|576|720|1080|1280|1440|1920|2160|4320|[48][kK])(?:[pPiI]\d*|fps|FPS)?|\d+[pPiI]\d*)/gi, "");
+
+  // Remove empty brackets or parentheses remaining from substitutions
+  clean = clean.replace(/(?:\s+|-|_)*[\[()\]]/g, "");
 
   return clean.trim();
 }
@@ -1912,7 +1915,7 @@ async function startServer() {
 
   // Batch update channel groups
   app.post("/api/channels/batch-groups", (req, res) => {
-    const { channelIds, groupIds } = req.body;
+    const { channelIds, groupIds, mode } = req.body;
     if (!Array.isArray(channelIds) || channelIds.length === 0) {
       return res.status(400).json({ error: "请提供目标频道 ID 列表" });
     }
@@ -1923,7 +1926,17 @@ async function startServer() {
     let updatedCount = 0;
     channels.forEach((c) => {
       if (channelIds.includes(c.id)) {
-        c.groupIds = groupIds;
+        if (!Array.isArray(c.groupIds)) {
+          c.groupIds = [];
+        }
+        if (mode === "append") {
+          // Append selected groupIds to existing groupIds, preserving other categories
+          const merged = new Set([...c.groupIds, ...groupIds]);
+          c.groupIds = Array.from(merged);
+        } else {
+          // Replace mode (default): overwrite existing categories with selected ones
+          c.groupIds = groupIds;
+        }
         updatedCount++;
       }
     });
