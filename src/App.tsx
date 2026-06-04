@@ -144,6 +144,7 @@ export default function App() {
   const [clientTestProvince, setClientTestProvince] = useState("上海");
   const [showApiDoc, setShowApiDoc] = useState(false);
   const [clientThreadCount, setClientThreadCount] = useState(4); // concurrent threads for client probe testing
+  const [clientTestOnlyActive, setClientTestOnlyActive] = useState(false); // only test currently active sources
   const [isDetectingIp, setIsDetectingIp] = useState(false);
   const [detectedIp, setDetectedIp] = useState("");
 
@@ -1131,12 +1132,16 @@ export default function App() {
   };
 
   const runClientSideProbeTest = async () => {
-    const listToTest = selectedGlobalSourceIds.length > 0
+    let listToTest = selectedGlobalSourceIds.length > 0
       ? filteredGlobalSources.filter((s) => selectedGlobalSourceIds.includes(s.id))
       : filteredGlobalSources;
 
+    if (clientTestOnlyActive) {
+      listToTest = listToTest.filter((s) => s.status === "active");
+    }
+
     if (listToTest.length === 0) {
-      showFeedback("info", "当前匹配的可测速线路为空");
+      showFeedback("info", "当前匹配的可测速线路为空 (如果是首次集成，请先导入直播源)");
       return;
     }
 
@@ -2869,6 +2874,22 @@ export default function App() {
                               className="w-full text-xs p-2 border border-slate-200 rounded-lg bg-white focus:outline-none focus:border-sky-500 font-bold text-slate-700"
                             />
                           </div>
+                        </div>
+
+                        {/* 测速筛选：仅测当前可用(Active)的线路 */}
+                        <div className="flex items-center justify-between text-[11px] bg-sky-50/20 px-3 py-2 rounded-lg border border-sky-100/50 hover:bg-sky-50/40 transition">
+                          <label className="flex items-center gap-2 cursor-pointer select-none w-full">
+                            <input
+                              type="checkbox"
+                              checked={clientTestOnlyActive}
+                              onChange={(e) => setClientTestOnlyActive(e.target.checked)}
+                              className="w-3.5 h-3.5 text-sky-600 border-slate-300 rounded focus:ring-sky-500 cursor-pointer"
+                            />
+                            <span className="font-bold text-slate-700">仅加载与检测当前状态为 [可用(Active)] 的物理线路</span>
+                          </label>
+                          <span className="text-[10px] bg-sky-100 text-sky-800 px-1.5 py-0.5 rounded shrink-0 font-extrabold font-mono">
+                            {filteredGlobalSources.filter(s => s.status === "active").length} 条
+                          </span>
                         </div>
 
                         {/* 智能网络感知归属探测行 */}

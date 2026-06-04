@@ -1687,6 +1687,15 @@ async function startServer() {
   });
 
   app.get("/api/channels", (req, res) => {
+    const { status, only_active } = req.query;
+    if (status === "active" || only_active === "true") {
+      // Clean clone and only return channels having active physical sources
+      const filtered = channels.map((ch) => ({
+        ...ch,
+        sources: (ch.sources || []).filter((src) => src.status === "active")
+      })).filter((ch) => ch.sources.length > 0);
+      return res.json(filtered);
+    }
     res.json(channels);
   });
 

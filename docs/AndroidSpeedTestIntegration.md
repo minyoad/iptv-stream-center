@@ -69,18 +69,20 @@ object IPTVProbeService {
      * @param serverBaseUrl IPTV 服务器主站地址 (如: "https://your-iptv-server.com")
      * @param isp 当前 Android 硬件运行网络环境 (如: "电信"、"联通"、"移动")
      * @param province 所在地区归属 (如: "浙江"、"北京")
+     * @param onlyActive 是否只获取当前标记为可用的在线线路进行探测
      */
     fun startBackgroudProbe(
         serverBaseUrl: String,
         isp: String,
         province: String,
+        onlyActive: Boolean = true,
         onComplete: (successCount: Int) -> Unit
     ) {
         // 在后台 IO 协程中执行
         CoroutineScope(Dispatchers.IO).launch {
             try {
                 Log.i(TAG, "正在准备从云端获取最新的 IPTV 电视频道播放线路...")
-                val channels = fetchChannels(serverBaseUrl)
+                val channels = fetchChannels(serverBaseUrl, onlyActive)
                 if (channels.isEmpty()) {
                     Log.w(TAG, "拉取到的可测试频道和线路为空，任务结束")
                     return@launch
@@ -119,10 +121,12 @@ object IPTVProbeService {
 
     /**
      * 1. 批量下载电视频道配置列表
+     * @param onlyActive 是否只获取当前标记为可用的在线线路 (设置为 true 可以大幅节省低端电视设备的探测开销)
      */
-    private fun fetchChannels(baseUrl: String): List<SimpleChannel> {
+    private fun fetchChannels(baseUrl: String, onlyActive: Boolean = true): List<SimpleChannel> {
+        val url = if (onlyActive) "$baseUrl/api/channels?status=active" else "$baseUrl/api/channels"
         val request = Request.Builder()
-            .url("$baseUrl/api/channels")
+            .url(url)
             .get()
             .build()
 
