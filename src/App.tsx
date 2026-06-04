@@ -398,7 +398,7 @@ export default function App() {
   const fetchData = async () => {
     try {
       const [resChannels, resSync, resGroups, resSettings] = await Promise.all([
-        fetch("/api/channels"),
+        fetch("/api/channels?full=true"),
         fetch("/api/sync-configs"),
         fetch("/api/groups"),
         fetch("/api/settings")
@@ -468,7 +468,7 @@ export default function App() {
           setTestingStatus(statusData);
           if (statusData.status === "running") {
             // Refresh channel data live to show checked progress
-            const resChannels = await fetch("/api/channels");
+            const resChannels = await fetch("/api/channels?full=true");
             if (resChannels.ok && isMounted) {
               setChannels(await resChannels.json());
             }

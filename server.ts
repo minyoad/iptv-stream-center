@@ -979,6 +979,34 @@ function sortSourcesByGeo(sources: LiveSource[], clientProvince: string, clientI
   });
 }
 
+function getPlayableSources(sources: LiveSource[], targetIsp: string, targetProvince: string): LiveSource[] {
+  let filtered = [...sources];
+  
+  if (targetIsp) {
+    const normTargetIsp = targetIsp.trim();
+    filtered = filtered.filter(src => {
+      const srcIsp = (src.isp || "").trim();
+      if (!srcIsp || srcIsp === "其它" || srcIsp === "其他") {
+        return true;
+      }
+      const isBGP = srcIsp.toUpperCase().includes("BGP") || srcIsp.toUpperCase().includes("BPG");
+      if (isBGP) {
+        return true;
+      }
+      if (srcIsp === normTargetIsp) {
+        return true;
+      }
+      return false;
+    });
+  }
+
+  if (targetIsp || targetProvince) {
+    filtered = sortSourcesByGeo(filtered, targetProvince, targetIsp);
+  }
+
+  return filtered;
+}
+
 async function fetchBufferWithFallback(urlStr: string, userAgent: string): Promise<{ buffer: Buffer; isGzipped: boolean }> {
   const downloadDirectly = (targetUrlStr: string, maxRedirects = 5): Promise<{ buffer: Buffer; isGzipped: boolean }> => {
     return new Promise((resolve, reject) => {
@@ -1686,17 +1714,67 @@ async function startServer() {
     res.json({ success: true, message: "分组删除成功" });
   });
 
-  app.get("/api/channels", (req, res) => {
-    const { status, only_active } = req.query;
-    if (status === "active" || only_active === "true") {
-      // Clean clone and only return channels having active physical sources
-      const filtered = channels.map((ch) => ({
-        ...ch,
-        sources: (ch.sources || []).filter((src) => src.status === "active")
-      })).filter((ch) => ch.sources.length > 0);
-      return res.json(filtered);
+  app.get("/api/channels", async (req, res) => {
+    const { status, only_active, full, all, isp, province, ip, clientIp } = req.query;
+
+    if (full === "true" || all === "true") {
+      if (status === "active" || only_active === "true") {
+        const filtered = channels.map((ch) => ({
+          ...ch,
+          sources: (ch.sources || []).filter((src) => src.status === "active")
+        })).filter((ch) => ch.sources.length > 0);
+        return res.json(filtered);
+      }
+      return res.json(channels);
     }
-    res.json(channels);
+
+    let targetProvince = province ? String(province) : "";
+    let targetIsp = isp ? String(isp) : "";
+
+    if (!province && !isp) {
+      let resolvedClientIp = "";
+      if (typeof ip === "string" && ip) {
+        resolvedClientIp = ip;
+      } else if (typeof clientIp === "string" && clientIp) {
+        resolvedClientIp = clientIp;
+      } else if (typeof req.headers["x-forwarded-for"] === "string") {
+        resolvedClientIp = req.headers["x-forwarded-for"].split(",")[0].trim();
+      } else if (Array.isArray(req.headers["x-forwarded-for"])) {
+        resolvedClientIp = req.headers["x-forwarded-for"][0].trim();
+      } else if (typeof req.headers["x-real-ip"] === "string") {
+        resolvedClientIp = req.headers["x-real-ip"].trim();
+      } else {
+        resolvedClientIp = req.socket.remoteAddress || "";
+      }
+
+      if (resolvedClientIp) {
+        try {
+          const geo = await getClientIpGeo(resolvedClientIp);
+          targetProvince = geo.province;
+          targetIsp = geo.isp;
+          console.log(`[CHANNELS AUTO-IP] Client IP ${resolvedClientIp} matched Province: ${targetProvince}, ISP: ${targetIsp}`);
+        } catch (e) {
+          console.error("[CHANNELS AUTO-IP ERROR]", e);
+        }
+      }
+    }
+
+    const results = channels.map((ch) => {
+      let list = ch.sources || [];
+
+      if (status === "active" || only_active === "true") {
+        list = list.filter((src) => src.status === "active");
+      }
+
+      list = getPlayableSources(list, targetIsp, targetProvince);
+
+      return {
+        ...ch,
+        sources: list
+      };
+    }).filter((ch) => ch.sources.length > 0);
+
+    res.json(results);
   });
 
   app.post("/api/channels", (req, res) => {
@@ -3028,14 +3106,13 @@ ${JSON.stringify(scoredList.map(c => ({ epgId: c.epgId, names: c.displayNames, s
         if (category && groupName !== String(category) && gId !== String(category)) return;
 
         let processedSources = channel.sources;
-        if (province || isp) {
-          processedSources = channel.sources.filter(source => {
-            if (province && source.province !== String(province)) return false;
-            if (isp && source.isp !== String(isp)) return false;
-            return true;
-          });
-        } else if (targetProvince || targetIsp) {
-          processedSources = sortSourcesByGeo(channel.sources, targetProvince, targetIsp);
+        const finalIsp = isp ? String(isp) : targetIsp;
+        const finalProvince = province ? String(province) : targetProvince;
+
+        processedSources = getPlayableSources(processedSources, finalIsp, finalProvince);
+
+        if (province) {
+          processedSources = processedSources.filter(source => source.province === String(province));
         }
 
         processedSources.forEach((source) => {
@@ -3107,14 +3184,13 @@ ${JSON.stringify(scoredList.map(c => ({ epgId: c.epgId, names: c.displayNames, s
         if (category && groupName !== String(category) && gId !== String(category)) return;
 
         let processedSources = channel.sources;
-        if (province || isp) {
-          processedSources = channel.sources.filter(source => {
-            if (province && source.province !== String(province)) return false;
-            if (isp && source.isp !== String(isp)) return false;
-            return true;
-          });
-        } else if (targetProvince || targetIsp) {
-          processedSources = sortSourcesByGeo(channel.sources, targetProvince, targetIsp);
+        const finalIsp = isp ? String(isp) : targetIsp;
+        const finalProvince = province ? String(province) : targetProvince;
+
+        processedSources = getPlayableSources(processedSources, finalIsp, finalProvince);
+
+        if (province) {
+          processedSources = processedSources.filter(source => source.province === String(province));
         }
 
         processedSources.forEach((source) => {
