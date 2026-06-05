@@ -97,6 +97,13 @@ export default function App() {
   const [importSubscriptionsMerge, setImportSubscriptionsMerge] = useState(true); // true = merge, false = overwrite
   const [isQuickBackupAvailable, setIsQuickBackupAvailable] = useState(!!localStorage.getItem("iptv_sync_configs_backup"));
 
+  // Progressive rendering / pagination states for large list optimizations to prevent browser out of memory (900MB+)
+  const [channelPage, setChannelPage] = useState(1);
+  const CHANNELS_PER_PAGE = 80;
+
+  const [globalSourcePage, setGlobalSourcePage] = useState(1);
+  const SOURCES_PER_PAGE = 200;
+
   // Manual Text Import paste box
   const [pasteContent, setPasteContent] = useState("");
   const [pasteType, setPasteType] = useState<"m3u" | "txt">("m3u");
@@ -136,6 +143,15 @@ export default function App() {
     province: "",
     status: ""
   });
+
+  // Auto-reset current pagination page limit back to 1 when search filters change
+  useEffect(() => {
+    setChannelPage(1);
+  }, [searchQuery, selectedCategory]);
+
+  useEffect(() => {
+    setGlobalSourcePage(1);
+  }, [globalSourceSearch, globalSourceIsp, globalSourceProvince, globalSourceStatus]);
 
   // Option 2 Client Local Speed Test engine and dynamic state
   const [isClientTesting, setIsClientTesting] = useState(false);
@@ -249,6 +265,10 @@ export default function App() {
       return matchesText && matchesIsp && matchesProvince && matchesStatus;
     });
   }, [channels, globalSourceSearch, globalSourceIsp, globalSourceProvince, globalSourceStatus]);
+
+  const slicedGlobalSources = useMemo(() => {
+    return filteredGlobalSources.slice(0, globalSourcePage * SOURCES_PER_PAGE);
+  }, [filteredGlobalSources, globalSourcePage]);
 
   // Backup-specific React States and Functions
   const [backups, setBackups] = useState<any[]>([]);
@@ -1720,6 +1740,10 @@ export default function App() {
     return matchesSearch && matchesCategory;
   });
 
+  const slicedChannels = useMemo(() => {
+    return filteredChannels.slice(0, channelPage * CHANNELS_PER_PAGE);
+  }, [filteredChannels, channelPage]);
+
   const getExportQueries = () => {
     const parts = [];
     if (exportParams.isp) parts.push(`isp=${encodeURIComponent(exportParams.isp)}`);
@@ -2345,7 +2369,7 @@ export default function App() {
                         <p className="text-xs font-medium mt-3">未检索到适配该条件的电视频道</p>
                       </div>
                     ) : (
-                      filteredChannels.map((ch) => {
+                      slicedChannels.map((ch) => {
                         const isSelected = selectedChannel?.id === ch.id;
                         const isChecked = selectedChannelIds.includes(ch.id);
                         const activeCount = ch.sources.filter(s => s.status === "active").length;
@@ -2430,6 +2454,16 @@ export default function App() {
                           </div>
                         );
                       })
+                    )}
+                    {filteredChannels.length > slicedChannels.length && (
+                      <div className="p-4 text-center bg-slate-50/50 border-t border-slate-100">
+                        <button
+                          onClick={() => setChannelPage(prev => prev + 1)}
+                          className="text-[11px] font-black text-blue-600 hover:text-blue-700 bg-blue-50/80 hover:bg-blue-100 px-4 py-2 rounded-xl transition cursor-pointer"
+                        >
+                          显示更多频道 (已显示 {slicedChannels.length} / 共 {filteredChannels.length} 条)
+                        </button>
+                      </div>
                     )}
                   </div>
                 </div>
@@ -3235,36 +3269,37 @@ export default function App() {
                         <p className="text-[11px] text-slate-400 mt-1 max-w-sm leading-relaxed font-semibold">无满足当前运营商、省份、连通性及搜素输入限制的物理线路，请清理当前过滤器重试。</p>
                       </div>
                     ) : (
-                      <div className="overflow-x-auto max-h-[600px] overflow-y-auto">
-                        <table className="w-full text-left border-collapse" id="global_sources_table">
-                          <thead className="sticky top-0 bg-slate-50 border-b border-slate-200 shadow-xs z-10">
-                            <tr className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">
-                              <th className="py-4 px-4 w-12 text-center">
-                                <input 
-                                  type="checkbox"
-                                  className="w-4 h-4 text-indigo-650 border-slate-300 rounded focus:ring-indigo-500 cursor-pointer"
-                                  checked={filteredGlobalSources.length > 0 && filteredGlobalSources.every(s => selectedGlobalSourceIds.includes(s.id))}
-                                  onChange={(e) => {
-                                    if (e.target.checked) {
-                                      const allIds = filteredGlobalSources.map(s => s.id);
-                                      setSelectedGlobalSourceIds(prev => Array.from(new Set([...prev, ...allIds])));
-                                    } else {
-                                      const allIds = filteredGlobalSources.map(s => s.id);
-                                      setSelectedGlobalSourceIds(prev => prev.filter(id => !allIds.includes(id)));
-                                    }
-                                  }}
-                                />
-                              </th>
-                              <th className="py-4 px-3 w-48">所属电视频道</th>
-                              <th className="py-4 px-3">全量播放播放源链接</th>
-                              <th className="py-4 px-3 w-32">运营商 (ISP)</th>
-                              <th className="py-4 px-3 w-32">地区省份</th>
-                              <th className="py-4 px-3 w-32">网络连通状态</th>
-                              <th className="py-4 px-4 w-32 text-right">线路日常管理</th>
-                            </tr>
-                          </thead>
-                          <tbody className="divide-y divide-slate-100 text-xs text-slate-650">
-                            {filteredGlobalSources.map((item) => {
+                      <>
+                        <div className="overflow-x-auto max-h-[600px] overflow-y-auto">
+                          <table className="w-full text-left border-collapse" id="global_sources_table">
+                            <thead className="sticky top-0 bg-slate-50 border-b border-slate-200 shadow-xs z-10">
+                              <tr className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">
+                                <th className="py-4 px-4 w-12 text-center">
+                                  <input 
+                                    type="checkbox"
+                                    className="w-4 h-4 text-indigo-650 border-slate-300 rounded focus:ring-indigo-500 cursor-pointer"
+                                    checked={filteredGlobalSources.length > 0 && filteredGlobalSources.every(s => selectedGlobalSourceIds.includes(s.id))}
+                                    onChange={(e) => {
+                                      if (e.target.checked) {
+                                        const allIds = filteredGlobalSources.map(s => s.id);
+                                        setSelectedGlobalSourceIds(prev => Array.from(new Set([...prev, ...allIds])));
+                                      } else {
+                                        const allIds = filteredGlobalSources.map(s => s.id);
+                                        setSelectedGlobalSourceIds(prev => prev.filter(id => !allIds.includes(id)));
+                                      }
+                                    }}
+                                  />
+                                </th>
+                                <th className="py-4 px-3 w-48">所属电视频道</th>
+                                <th className="py-4 px-3">全量播放播放源链接</th>
+                                <th className="py-4 px-3 w-32">运营商 (ISP)</th>
+                                <th className="py-4 px-3 w-32">地区省份</th>
+                                <th className="py-4 px-3 w-32">网络连通状态</th>
+                                <th className="py-4 px-4 w-32 text-right">线路日常管理</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-100 text-xs text-slate-650">
+                              {slicedGlobalSources.map((item) => {
                               const isChecked = selectedGlobalSourceIds.includes(item.id);
                               return (
                                 <tr key={item.id} className={`hover:bg-slate-50/50 transition-colors ${isChecked ? "bg-indigo-50/20" : ""}`}>
@@ -3421,8 +3456,19 @@ export default function App() {
                           </tbody>
                         </table>
                       </div>
-                    )}
-                  </div>
+                      {filteredGlobalSources.length > slicedGlobalSources.length && (
+                        <div className="p-4 border-t border-slate-100 bg-slate-50/50 flex justify-center items-center">
+                          <button
+                            onClick={() => setGlobalSourcePage(prev => prev + 1)}
+                            className="text-xs font-black text-indigo-650 hover:text-indigo-800 bg-indigo-50/80 hover:bg-indigo-100 px-5 py-2.5 rounded-xl transition cursor-pointer flex items-center gap-1.5 shadow-xs"
+                          >
+                            显示更多物理线路 (已显示 {slicedGlobalSources.length} / 共 {filteredGlobalSources.length} 条)
+                          </button>
+                        </div>
+                      )}
+                    </>
+                  )}
+                </div>
                 </div>
               )}
             </div>
