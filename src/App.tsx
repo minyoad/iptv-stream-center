@@ -1161,7 +1161,7 @@ export default function App() {
       : filteredGlobalSources;
 
     if (clientTestOnlyActive) {
-      listToTest = listToTest.filter((s) => s.status === "active");
+      listToTest = listToTest.filter((s) => s.status === "active" || s.status === "unknown" || s.status === "checking");
     }
 
     if (listToTest.length === 0) {
@@ -2680,17 +2680,17 @@ export default function App() {
                                         {/* Connectivity Latency Status Pill */}
                                         {src.status === "active" && (
                                           <span className="text-emerald-700 font-bold bg-emerald-100/50 px-1.5 py-0.5 rounded text-[10px] font-mono">
-                                            延迟: {src.latency !== undefined ? `${src.latency}ms` : "在线"}
+                                            有效/可用{src.latency !== undefined ? ` (${src.latency}ms)` : ""}
                                           </span>
                                         )}
                                         {src.status === "inactive" && (
                                           <span className="text-rose-700 font-bold bg-rose-100/50 px-1.5 py-0.5 rounded text-[10px]">
-                                            连接超时 (DEAD)
+                                            失效/离线
                                           </span>
                                         )}
                                         {src.status === "checking" && (
                                           <span className="text-blue-700 font-bold bg-blue-100 animate-pulse px-1.5 py-0.5 rounded text-[10px]">
-                                            正在验证中...
+                                            测试中
                                           </span>
                                         )}
                                         {src.status === "unknown" && (
@@ -2753,7 +2753,7 @@ export default function App() {
                     </div>
                     <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs flex items-center justify-between">
                       <div>
-                        <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">活跃健康源</span>
+                        <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">有效/可用线路</span>
                         <div className="text-xl font-black text-emerald-600 mt-1 font-mono">
                           {filteredGlobalSources.filter(s => s.status === "active").length} <span className="text-xs text-slate-500 font-sans">条</span>
                         </div>
@@ -2764,7 +2764,7 @@ export default function App() {
                     </div>
                     <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs flex items-center justify-between">
                       <div>
-                        <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">失效/无法连通</span>
+                        <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">失效/离线线路</span>
                         <div className="text-xl font-black text-rose-600 mt-1 font-mono">
                           {filteredGlobalSources.filter(s => s.status === "inactive").length} <span className="text-xs text-slate-500 font-sans">条</span>
                         </div>
@@ -2775,7 +2775,7 @@ export default function App() {
                     </div>
                     <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs flex items-center justify-between">
                       <div>
-                        <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">检测排队中/未知</span>
+                        <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">测试中/未测试线路</span>
                         <div className="text-xl font-black text-amber-600 mt-1 font-mono">
                           {filteredGlobalSources.filter(s => s.status === "checking" || s.status === "unknown").length} <span className="text-xs text-slate-500 font-sans">条</span>
                         </div>
@@ -2938,7 +2938,7 @@ export default function App() {
                           </div>
                         </div>
 
-                        {/* 测速筛选：仅测当前可用(Active)的线路 */}
+                        {/* 测速筛选：仅测当前有效和未测试的线路 */}
                         <div className="flex items-center justify-between text-[11px] bg-sky-50/20 px-3 py-2 rounded-lg border border-sky-100/50 hover:bg-sky-50/40 transition">
                           <label className="flex items-center gap-2 cursor-pointer select-none w-full">
                             <input
@@ -2947,10 +2947,10 @@ export default function App() {
                               onChange={(e) => setClientTestOnlyActive(e.target.checked)}
                               className="w-3.5 h-3.5 text-sky-600 border-slate-300 rounded focus:ring-sky-500 cursor-pointer"
                             />
-                            <span className="font-bold text-slate-700">仅加载与检测当前状态为 [可用(Active)] 的物理线路</span>
+                            <span className="font-bold text-slate-700">仅加载与检测状态为 [有效/可用] 与 [未测试] 的物理线路（过滤失效死链）</span>
                           </label>
                           <span className="text-[10px] bg-sky-100 text-sky-800 px-1.5 py-0.5 rounded shrink-0 font-extrabold font-mono">
-                            {filteredGlobalSources.filter(s => s.status === "active").length} 条
+                            {filteredGlobalSources.filter(s => s.status === "active" || s.status === "unknown" || s.status === "checking").length} 条
                           </span>
                         </div>
 
@@ -3151,10 +3151,10 @@ export default function App() {
                           className="w-full text-xs p-2.5 border border-slate-200 rounded-xl bg-slate-50 focus:outline-none focus:border-indigo-500 font-bold"
                         >
                           <option value="all">全部网络状态 (不限)</option>
-                          <option value="active">🟢 稳定连通/活跃 (Active)</option>
-                          <option value="inactive">🔴 故障断连/失效 (Inactive)</option>
-                          <option value="checking">🟡 正在测试延迟 (Checking)</option>
-                          <option value="unknown">⚪ 未匹配测速 (Unknown)</option>
+                          <option value="active">🟢 有效/可用 (Active)</option>
+                          <option value="inactive">🔴 失效/离线 (Inactive)</option>
+                          <option value="checking">🟡 测试中 (Checking)</option>
+                          <option value="unknown">⚪ 未测试 (Unknown)</option>
                         </select>
                       </div>
                     </div>
@@ -3333,9 +3333,9 @@ export default function App() {
                                         item.status === "checking" ? "bg-amber-500 animate-pulse shadow-xs shadow-amber-500" : "bg-slate-350"
                                       }`} />
                                       <span className="font-extrabold text-slate-700">
-                                        {item.status === "active" ? "极速/可用" :
-                                         item.status === "inactive" ? "不可连通/离线" :
-                                         item.status === "checking" ? "正在探测延迟" : "未测速/未知"}
+                                        {item.status === "active" ? "有效/可用" :
+                                         item.status === "inactive" ? "失效/离线" :
+                                         item.status === "checking" ? "测试中" : "未测试"}
                                       </span>
                                       {item.latency !== undefined && (
                                         <span className="text-[10px] text-slate-400 font-black font-mono">({item.latency}ms)</span>

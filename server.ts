@@ -2056,6 +2056,12 @@ async function startServer() {
           sources: (ch.sources || []).filter((src) => src.status === "active")
         })).filter((ch) => ch.sources.length > 0);
         return res.json(filtered);
+      } else if (status === "test" || status === "testable" || status === "active,unknown" || status === "active,untested") {
+        const filtered = channels.map((ch) => ({
+          ...ch,
+          sources: (ch.sources || []).filter((src) => src.status === "active" || src.status === "unknown" || src.status === "checking")
+        })).filter((ch) => ch.sources.length > 0);
+        return res.json(filtered);
       }
       return res.json(channels);
     }
@@ -2096,6 +2102,8 @@ async function startServer() {
 
       if (status === "active" || only_active === "true") {
         list = list.filter((src) => src.status === "active");
+      } else if (status === "test" || status === "testable" || status === "active,unknown" || status === "active,untested") {
+        list = list.filter((src) => src.status === "active" || src.status === "unknown" || src.status === "checking");
       }
 
       list = getPlayableSources(list, targetIsp, targetProvince);

@@ -69,7 +69,7 @@ object IPTVProbeService {
      * @param serverBaseUrl IPTV 服务器主站地址 (如: "https://your-iptv-server.com")
      * @param isp 当前 Android 硬件运行网络环境 (如: "电信"、"联通"、"移动")
      * @param province 所在地区归属 (如: "浙江"、"北京")
-     * @param onlyActive 是否只获取当前标记为可用的在线线路进行探测
+     * @param onlyActive 是否只获取当前标记为有效和未测试的线路进行探测（过滤掉已知失效的线路）
      */
     fun startBackgroudProbe(
         serverBaseUrl: String,
@@ -121,10 +121,10 @@ object IPTVProbeService {
 
     /**
      * 1. 批量下载电视频道配置列表
-     * @param onlyActive 是否只获取当前标记为可用的在线线路 (设置为 true 可以大幅节省低端电视设备的探测开销)
+     * @param onlyActive 是否只获取当前标记为有效和未测试的线路 (设置为 true 可以过滤掉已知失效的死链)
      */
     private fun fetchChannels(baseUrl: String, onlyActive: Boolean = true): List<SimpleChannel> {
-        val url = if (onlyActive) "$baseUrl/api/channels?status=active" else "$baseUrl/api/channels"
+        val url = if (onlyActive) "$baseUrl/api/channels?status=testable" else "$baseUrl/api/channels"
         val request = Request.Builder()
             .url(url)
             .get()

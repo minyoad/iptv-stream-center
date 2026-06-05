@@ -53,9 +53,9 @@ logger = logging.getLogger("IPTV_Probe")
 
 
 async def fetch_channels(session: aiohttp.ClientSession) -> list:
-    """从主管理系统云拉取当前所有的电视频道及全部播放源线路
+    """从主管理系统云拉取当前所有的电视频道及全部待测试（有效+未测试）播放源线路
     """
-    url = f"{SERVER_BASE_URL}/api/channels"
+    url = f"{SERVER_BASE_URL}/api/channels?status=testable"
     logger.info(f"正在从云端拉取配置列表: {url}")
     try:
         async with session.get(url, timeout=10) as response:
@@ -389,8 +389,8 @@ async def main():
 
     connector = aiohttp.TCPConnector(ssl=False, limit=50)
     async with aiohttp.ClientSession(connector=connector) as session:
-        # 拉取在中枢配置的所有线路
-        url = f"{SERVER_BASE_URL}/api/channels"
+        # 拉取在中枢配置的所有待测线路（有效+未测试，过滤掉已知失效死链）
+        url = f"{SERVER_BASE_URL}/api/channels?status=testable"
         logger.info(f"正在从云端拉取配置列表: {url}")
         try:
             async with session.get(url, timeout=10) as resp:
