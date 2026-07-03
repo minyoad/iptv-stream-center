@@ -3791,10 +3791,9 @@ ${JSON.stringify(scoredList.map(c => ({ epgId: c.epgId, names: c.displayNames, s
 
     try {
       const compressed = zlib.gzipSync(Buffer.from(fullXml, "utf-8"));
-      res.setHeader("Content-Type", "application/x-gzip");
-      res.setHeader("Content-Encoding", "gzip");
+      res.setHeader("Content-Type", "application/gzip");
       res.setHeader("Content-Disposition", "attachment; filename=\"epg.xml.gz\"");
-      res.send(compressed);
+      res.end(compressed);
     } catch (err: any) {
       console.error("[EPG GZIP COMPRESSION ERROR]", err);
       res.status(500).send("Internal Server Error during compression");
