@@ -343,7 +343,11 @@ export default function App() {
 
       const matchesIsp = globalSourceIsp === "all" || item.isp === globalSourceIsp;
       const matchesProvince = globalSourceProvince === "all" || item.province === globalSourceProvince;
-      const matchesStatus = globalSourceStatus === "all" || item.status === globalSourceStatus;
+      let matchesStatus = false;
+      if (globalSourceStatus === "all") matchesStatus = !item.isolated;
+      else if (globalSourceStatus === "all_with_isolated") matchesStatus = true;
+      else if (globalSourceStatus === "isolated") matchesStatus = !!item.isolated;
+      else matchesStatus = !item.isolated && item.status === globalSourceStatus;
 
       return matchesText && matchesIsp && matchesProvince && matchesStatus;
     });
@@ -3447,7 +3451,9 @@ export default function App() {
                           onChange={(e) => setGlobalSourceStatus(e.target.value)}
                           className="w-full text-xs p-2.5 border border-slate-200 rounded-xl bg-slate-50 focus:outline-none focus:border-indigo-500 font-bold"
                         >
-                          <option value="all">全部网络状态 (不限)</option>
+                          <option value="all">全部状态 (默认, 不含隔离)</option>
+                          <option value="all_with_isolated">全部状态 (含已隔离)</option>
+                          <option value="isolated">🟠 已隔离 (Isolated)</option>
                           <option value="active">🟢 有效/可用 (Active)</option>
                           <option value="inactive">🔴 失效/离线 (Inactive)</option>
                           <option value="checking">🟡 测试中 (Checking)</option>
@@ -3565,7 +3571,7 @@ export default function App() {
                               {slicedGlobalSources.map((item) => {
                               const isChecked = selectedGlobalSourceIds.includes(item.id);
                               return (
-                                <tr key={item.id} className={`hover:bg-slate-50/50 transition-colors ${isChecked ? "bg-indigo-50/20" : ""}`}>
+                                <tr key={item.id} className={`hover:bg-slate-50/50 transition-colors ${isChecked ? "bg-indigo-50/20" : item.isolated ? "bg-orange-50/10 opacity-75" : ""}`}>
                                   <td className="py-3.5 px-4 text-center">
                                     <input 
                                       type="checkbox"
@@ -3626,12 +3632,14 @@ export default function App() {
                                   <td className="py-3.5 px-3">
                                     <div className="flex items-center gap-2">
                                       <span className={`w-2 h-2 rounded-full ${
+                                        item.isolated ? "bg-orange-500 shadow-xs shadow-orange-500" :
                                         item.status === "active" ? "bg-emerald-500 shadow-xs shadow-emerald-500" :
                                         item.status === "inactive" ? "bg-rose-500 shadow-xs shadow-rose-500" :
                                         item.status === "checking" ? "bg-amber-500 animate-pulse shadow-xs shadow-amber-500" : "bg-slate-350"
                                       }`} />
                                       <span className="font-extrabold text-slate-700">
-                                        {item.status === "active" ? "有效/可用" :
+                                        {item.isolated ? "已隔离" :
+                                         item.status === "active" ? "有效/可用" :
                                          item.status === "inactive" ? "失效/离线" :
                                          item.status === "checking" ? "测试中" : "未测试"}
                                       </span>
@@ -3641,6 +3649,29 @@ export default function App() {
                                     </div>
                                   </td>
                                   <td className="py-3.5 px-4 text-right space-x-2.5">
+                                    <button
+                                      onClick={async (e) => {
+                                        e.stopPropagation();
+                                        try {
+                                          const res = await fetch(`/api/channels/${item.channelId}/sources/${item.id}/isolate`, {
+                                            method: "POST",
+                                            headers: { "Content-Type": "application/json" },
+                                            body: JSON.stringify({ isolated: !item.isolated })
+                                          });
+                                          if (res.ok) {
+                                            showFeedback("success", !item.isolated ? "直播线路已隔离 (软删除)" : "直播线路已从隔离中恢复");
+                                            await fetchData();
+                                          } else {
+                                            showFeedback("error", "操作失败");
+                                          }
+                                        } catch(e) {
+                                          showFeedback("error", "网络超时");
+                                        }
+                                      }}
+                                      className={`text-[11px] font-bold ${item.isolated ? "text-emerald-600 hover:text-emerald-800" : "text-orange-600 hover:text-orange-800"} hover:underline cursor-pointer transition-all`}
+                                    >
+                                      {item.isolated ? "恢复" : "隔离"}
+                                    </button>
                                     <button 
                                       onClick={async (e) => {
                                         e.stopPropagation();
