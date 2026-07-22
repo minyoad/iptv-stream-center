@@ -2179,6 +2179,31 @@ async function startServer() {
     res.json(group);
   });
 
+  
+  app.post("/api/groups/reorder", (req, res) => {
+    const { groupIds } = req.body;
+    if (!Array.isArray(groupIds)) {
+      return res.status(400).json({ error: "请提供合法的分组 ID 列表" });
+    }
+    
+    const newGroups: typeof groups = [];
+    groupIds.forEach(id => {
+      const g = groups.find(g => g.id === id);
+      if (g) newGroups.push(g);
+    });
+    
+    // Add any missing groups to the end
+    groups.forEach(g => {
+      if (!newGroups.some(ng => ng.id === g.id)) {
+        newGroups.push(g);
+      }
+    });
+    
+    groups = newGroups;
+    saveData();
+    res.json({ success: true });
+  });
+
   app.delete("/api/groups/:id", (req, res) => {
     const { id } = req.params;
     groups = groups.filter((g) => g.id !== id);
@@ -2344,6 +2369,31 @@ async function startServer() {
 
     saveData();
     res.json(channel);
+  });
+
+  
+  app.post("/api/channels/reorder", (req, res) => {
+    const { channelIds } = req.body;
+    if (!Array.isArray(channelIds)) {
+      return res.status(400).json({ error: "请提供合法的频道 ID 列表" });
+    }
+    
+    const newChannels: typeof channels = [];
+    channelIds.forEach(id => {
+      const c = channels.find(c => c.id === id);
+      if (c) newChannels.push(c);
+    });
+    
+    // Add any missing channels to the end
+    channels.forEach(c => {
+      if (!newChannels.some(nc => nc.id === c.id)) {
+        newChannels.push(c);
+      }
+    });
+    
+    channels = newChannels;
+    saveData();
+    res.json({ success: true });
   });
 
   app.delete("/api/channels/:id", (req, res) => {
@@ -3681,10 +3731,14 @@ ${JSON.stringify(scoredList.map(c => ({ epgId: c.epgId, names: c.displayNames, s
     let count = 0;
     const maxLimit = limit ? Number(limit) : Infinity;
 
-    channels.forEach((channel) => {
-      channel.groupIds.forEach((gId) => {
-        const group = groups.find((g) => g.id === gId);
-        const groupName = group ? group.name : "其它频道";
+    const orderedGroups = [...groups, { id: "g_other", name: "其它频道" }];
+    orderedGroups.forEach((group) => {
+      channels.forEach((channel) => {
+        const isInGroup = channel.groupIds.includes(group.id);
+        const isFallback = group.id === "g_other" && (channel.groupIds.length === 0 || !channel.groupIds.some(id => groups.find(g => g.id === id)));
+        if (!isInGroup && !isFallback) return;
+        const gId = group.id;
+        const groupName = group.name;
 
         // Filter group level if specific category selected
         if (category && groupName !== String(category) && gId !== String(category)) return;
@@ -3760,10 +3814,14 @@ ${JSON.stringify(scoredList.map(c => ({ epgId: c.epgId, names: c.displayNames, s
     let count = 0;
     const maxLimit = limit ? Number(limit) : Infinity;
 
-    channels.forEach((channel) => {
-      channel.groupIds.forEach((gId) => {
-        const group = groups.find((g) => g.id === gId);
-        const groupName = group ? group.name : "其它频道";
+    const orderedGroups = [...groups, { id: "g_other", name: "其它频道" }];
+    orderedGroups.forEach((group) => {
+      channels.forEach((channel) => {
+        const isInGroup = channel.groupIds.includes(group.id);
+        const isFallback = group.id === "g_other" && (channel.groupIds.length === 0 || !channel.groupIds.some(id => groups.find(g => g.id === id)));
+        if (!isInGroup && !isFallback) return;
+        const gId = group.id;
+        const groupName = group.name;
 
         if (category && groupName !== String(category) && gId !== String(category)) return;
 

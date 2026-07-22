@@ -27,7 +27,9 @@ import {
   FileText,
   Database,
   Shield,
-  GitMerge
+  GitMerge,
+  ChevronUp,
+  ChevronDown
 } from "lucide-react";
 import { Channel, LiveSource, SyncConfig, TestStatus, EpgGuide, Group, EpgSource } from "./types";
 import DashboardView from "./components/DashboardView";
@@ -1015,6 +1017,63 @@ export default function App() {
     }
     setBatchGroupForm({ groupIds: [], mode: "append" }); // Default to append since user requested adding/appending logic as a primary feature
     setIsBatchGroupModalOpen(true);
+  };
+
+
+  const handleMoveGroup = async (index: number, direction: 'up' | 'down') => {
+    if (direction === 'up' && index === 0) return;
+    if (direction === 'down' && index === groups.length - 1) return;
+    
+    const newGroups = [...groups];
+    const swapIndex = direction === 'up' ? index - 1 : index + 1;
+    [newGroups[index], newGroups[swapIndex]] = [newGroups[swapIndex], newGroups[index]];
+    
+    // Optistic UI
+    setGroups(newGroups);
+
+    try {
+      const res = await fetch("/api/groups/reorder", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ groupIds: newGroups.map(g => g.id) })
+      });
+      if (!res.ok) {
+        showFeedback("error", "重新排序失败");
+        await fetchData();
+      }
+    } catch (e) {
+      showFeedback("error", "重新排序失败");
+      await fetchData();
+    }
+  };
+
+  const handleMoveChannel = async (id: string, direction: 'up' | 'down') => {
+    const index = channels.findIndex(c => c.id === id);
+    if (index === -1) return;
+    if (direction === 'up' && index === 0) return;
+    if (direction === 'down' && index === channels.length - 1) return;
+    
+    const newChannels = [...channels];
+    const swapIndex = direction === 'up' ? index - 1 : index + 1;
+    [newChannels[index], newChannels[swapIndex]] = [newChannels[swapIndex], newChannels[index]];
+    
+    // Optistic UI update
+    setChannels(newChannels);
+
+    try {
+      const res = await fetch("/api/channels/reorder", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ channelIds: newChannels.map(c => c.id) })
+      });
+      if (!res.ok) {
+        showFeedback("error", "重新排序失败");
+        await fetchData();
+      }
+    } catch (e) {
+      showFeedback("error", "重新排序失败");
+      await fetchData();
+    }
   };
 
   const handleBatchGroupSubmit = async (e: React.FormEvent) => {
@@ -2286,6 +2345,23 @@ export default function App() {
                               <p className="text-[10px] text-slate-400 font-medium">关联频道: <span className="font-mono text-slate-600 font-bold">{countChannels}</span> 个</p>
                             </div>
 
+                            <div className="flex flex-col items-center gap-1 mr-2">
+                              <button
+                                onClick={() => handleMoveGroup(groups.findIndex(x => x.id === g.id), 'up')}
+                                className="p-1 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded transition"
+                                title="上移"
+                              >
+                                <ChevronUp className="w-3 h-3" />
+                              </button>
+                              <button
+                                onClick={() => handleMoveGroup(groups.findIndex(x => x.id === g.id), 'down')}
+                                className="p-1 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded transition"
+                                title="下移"
+                              >
+                                <ChevronDown className="w-3 h-3" />
+                              </button>
+                            </div>
+
                             <button
                               onClick={async () => {
                                 if (g.id === "g_other" || g.name === "其它频道") {
@@ -2519,6 +2595,26 @@ export default function App() {
 
                               {/* Small Quick Action Panel */}
                               <div className="flex gap-1.5">
+                                <button 
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleMoveChannel(ch.id, 'up');
+                                  }}
+                                  className="p-1 hover:bg-slate-100 text-slate-400 hover:text-indigo-600 rounded transition"
+                                  title="上移"
+                                >
+                                  <ChevronUp className="w-3 h-3" />
+                                </button>
+                                <button 
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleMoveChannel(ch.id, 'down');
+                                  }}
+                                  className="p-1 hover:bg-slate-100 text-slate-400 hover:text-indigo-600 rounded transition"
+                                  title="下移"
+                                >
+                                  <ChevronDown className="w-3 h-3" />
+                                </button>
                                 <button 
                                   onClick={(e) => {
                                     e.stopPropagation();
