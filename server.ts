@@ -1923,6 +1923,16 @@ async function startServer() {
 
   app.use(express.json({ limit: "50mb" }));
 
+  // Prevent browser caching for all API routes
+  app.use("/api", (req, res, next) => {
+    res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+    res.setHeader("Pragma", "no-cache");
+    res.setHeader("Expires", "0");
+    res.setHeader("Surrogate-Control", "no-store");
+    next();
+  });
+
+
   // ==================== CRON JOBS ENDPOINTS ====================
   app.get("/api/cron-jobs", (req, res) => {
     try {

@@ -494,10 +494,10 @@ export default function App() {
   const fetchData = async () => {
     try {
       const [resChannels, resSync, resGroups, resSettings] = await Promise.all([
-        fetch("/api/channels?full=true"),
-        fetch("/api/sync-configs"),
-        fetch("/api/groups"),
-        fetch("/api/settings")
+        fetch(`/api/channels?full=true&_t=${Date.now()}`),
+        fetch(`/api/sync-configs?_t=${Date.now()}`),
+        fetch(`/api/groups?_t=${Date.now()}`),
+        fetch(`/api/settings?_t=${Date.now()}`)
       ]);
       if (resChannels.ok) {
         const data = await resChannels.json();
@@ -532,7 +532,7 @@ export default function App() {
 
   const fetchEpgSourcesInternal = async () => {
     try {
-      const res = await fetch("/api/epg-sources");
+      const res = await fetch(`/api/epg-sources?_t=${Date.now()}`);
       if (res.ok) {
         setEpgSources(await res.json());
       }
@@ -715,7 +715,7 @@ export default function App() {
         setIsAuthenticated(true);
         showFeedback("success", "解锁成功！欢迎回到 IPTV 管理终端");
         setAdminPasswordInput("");
-        fetchData();
+        await fetchData();
       } else {
          const err = await verifyRes.json();
          setAuthError(err.error || "密码错误，请重新输入");
@@ -905,7 +905,7 @@ export default function App() {
         showFeedback("success", editingChannel ? "频道修改成功" : "添加频道成功");
         setIsChannelModalOpen(false);
         setEditingChannel(null);
-        fetchData();
+        await fetchData();
       } else {
         const err = await res.json();
         showFeedback("error", err.error || "操作频道失败");
@@ -927,7 +927,7 @@ export default function App() {
             if (selectedChannel?.id === id) {
               setSelectedChannel(null);
             }
-            fetchData();
+            await fetchData();
           } else {
             showFeedback("error", "删除失败");
           }
@@ -957,7 +957,7 @@ export default function App() {
             showFeedback("success", `成功批量删除 ${selectedChannelIds.length} 个频道`);
             setSelectedChannelIds([]);
             setSelectedChannel(null);
-            fetchData();
+            await fetchData();
           } else {
             const err = await res.json();
             showFeedback("error", err.error || "批量删除失败");
@@ -996,7 +996,7 @@ export default function App() {
             showFeedback("success", data.message || "频道的合并已成功完成！");
             setSelectedChannelIds([]);
             setSelectedChannel(null);
-            fetchData();
+            await fetchData();
           } else {
             const err = await res.json();
             showFeedback("error", err.error || "合并频道作业失败");
@@ -1040,7 +1040,7 @@ export default function App() {
         showFeedback("success", `成功将已选的 ${selectedChannelIds.length} 个频道的分组更新`);
         setIsBatchGroupModalOpen(false);
         setSelectedChannelIds([]);
-        fetchData();
+        await fetchData();
       } else {
         const err = await res.json();
         showFeedback("error", err.error || "批量设置分组失败");
@@ -1075,7 +1075,7 @@ export default function App() {
           if (res.ok) {
             showFeedback("success", `已成功将 ${selectedChannelIds.length} 个频道从 [${activeGroup.name}] 分组中移除`);
             setSelectedChannelIds([]);
-            fetchData();
+            await fetchData();
           } else {
             const err = await res.json();
             showFeedback("error", err.error || "从分组移除失败");
@@ -1106,7 +1106,7 @@ export default function App() {
           if (res.ok) {
             showFeedback("success", `成功批量删除 ${selectedSourceIds.length} 条播放线路`);
             setSelectedSourceIds([]);
-            fetchData();
+            await fetchData();
           } else {
             const err = await res.json();
             showFeedback("error", err.error || "批量删除失败");
@@ -1150,7 +1150,7 @@ export default function App() {
         showFeedback("success", `成功批量更新选中的 ${selectedSourceIds.length} 条直播线路`);
         setIsBatchSourceModalOpen(false);
         setSelectedSourceIds([]);
-        fetchData();
+        await fetchData();
       } else {
         const err = await res.json();
         showFeedback("error", err.error || "批量更新播放线路失败");
@@ -1179,7 +1179,7 @@ export default function App() {
             const data = await res.json();
             showFeedback("success", `成功跨频道批量删除了 ${data.count} 条播放线路`);
             setSelectedGlobalSourceIds([]);
-            fetchData();
+            await fetchData();
           } else {
             const err = await res.json();
             showFeedback("error", err.error || "全域批量删除失败");
@@ -1216,7 +1216,7 @@ export default function App() {
         showFeedback("success", `成功跨频道更新了 ${data.count} 条直播线路的属性配置`);
         setIsBatchGlobalSourceModalOpen(false);
         setSelectedGlobalSourceIds([]);
-        fetchData();
+        await fetchData();
       } else {
         const err = await res.json();
         showFeedback("error", err.error || "全域批量更新失败");
@@ -1351,7 +1351,7 @@ export default function App() {
         setClientTestResults([]);
         setClientTestProgress(0);
         setClientTestTotal(0);
-        fetchData();
+        await fetchData();
       } else {
         const err = await res.json();
         showFeedback("error", err.error || "回传测试数据被拒绝");
@@ -1412,7 +1412,7 @@ export default function App() {
         showFeedback("success", isEdit ? "修改线路成功" : "新增线路成功");
         setIsSourceModalOpen(false);
         setEditingSource(null);
-        fetchData();
+        await fetchData();
       } else {
         const err = await res.json();
         showFeedback("error", err.error || "操作线路失败");
@@ -1434,7 +1434,7 @@ export default function App() {
           });
           if (res.ok) {
             showFeedback("success", "直播线路已删除");
-            fetchData();
+            await fetchData();
           } else {
             showFeedback("error", "线路删除失败");
           }
@@ -1483,7 +1483,7 @@ export default function App() {
         showFeedback("success", isEdit ? "同步订阅保存成功" : "添加同步任务成功");
         setIsSyncModalOpen(false);
         setEditingSync(null);
-        fetchData();
+        await fetchData();
       } else {
         const err = await res.json();
         showFeedback("error", err.error || "配置操作失败");
@@ -1502,7 +1502,7 @@ export default function App() {
           const res = await fetch(`/api/sync-configs/${id}`, { method: "DELETE" });
           if (res.ok) {
             showFeedback("success", "订阅已删除");
-            fetchData();
+            await fetchData();
           }
         } catch (e) {
            showFeedback("error", "删除发生问题");
@@ -1546,7 +1546,7 @@ export default function App() {
         showFeedback("success", data.message || "成功导入订阅配置");
         setIsImportSubscriptionsOpen(false);
         setImportSubscriptionsContent("");
-        fetchData();
+        await fetchData();
       } else {
         const err = await res.json();
         showFeedback("error", err.error || "导入失败");
@@ -1590,7 +1590,7 @@ export default function App() {
 
           if (res.ok) {
             showFeedback("success", "订阅源快速恢复成功");
-            fetchData();
+            await fetchData();
           } else {
             showFeedback("error", "快速恢复订阅失败");
           }
@@ -1608,7 +1608,7 @@ export default function App() {
       const data = await res.json();
       if (res.ok) {
         showFeedback("success", data.message || "手动拉取并同步数据完成");
-        fetchData();
+        await fetchData();
       } else {
         showFeedback("error", data.error || "拉取过程产生错误");
       }
@@ -1626,7 +1626,7 @@ export default function App() {
       const data = await res.json();
       if (res.ok) {
         showFeedback("success", data.message || "批量订阅同步已顺利完成！");
-        fetchData();
+        await fetchData();
       } else {
         showFeedback("error", data.error || "批量同步发生服务错误");
       }
@@ -1646,7 +1646,7 @@ export default function App() {
       });
       if (res.ok) {
         showFeedback("success", `已成功${!currentDisabled ? "禁用" : "启用"}该同步配置！`);
-        fetchData();
+        await fetchData();
       } else {
         showFeedback("error", "更新同步源状态失败");
       }
@@ -1679,7 +1679,7 @@ export default function App() {
           const data = await res.json();
           if (res.ok) {
             showFeedback("success", data.message || "失效源清理完成");
-            fetchData();
+            await fetchData();
           }
         } catch (err) {
           showFeedback("error", "系统交互错误");
@@ -1708,7 +1708,7 @@ export default function App() {
       if (res.ok) {
         showFeedback("success", data.message || "直连导入成功");
         setPasteContent("");
-        fetchData();
+        await fetchData();
       } else {
         showFeedback("error", data.error || "直连导入解析失败");
       }
@@ -1950,9 +1950,9 @@ export default function App() {
           </button>
 
           <button 
-            onClick={() => {
+            onClick={async () => {
               setActiveTab("channels");
-              fetchData();
+              await fetchData();
             }}
             className={`w-full flex items-center gap-3.5 px-4 py-3 rounded-xl transition text-xs font-semibold ${
               activeTab === "channels" 
@@ -1992,7 +1992,7 @@ export default function App() {
           </button>
 
           <button 
-            onClick={() => {
+            onClick={async () => {
               setActiveTab("epg");
               fetchEpgSources();
             }}
@@ -2034,7 +2034,7 @@ export default function App() {
           </button>
 
           <button 
-            onClick={() => {
+            onClick={async () => {
               setPasswordForm({ oldPassword: "", newPassword: "", confirmPassword: "" });
               setIsSettingPasswordModalOpen(true);
             }}
@@ -2222,7 +2222,7 @@ export default function App() {
                           if (res.ok) {
                             showFeedback("success", "分组创建成功！");
                             target.reset();
-                            fetchData();
+                            await fetchData();
                           } else {
                             const err = await res.json();
                             showFeedback("error", err.error || "创建分组失败");
@@ -2271,7 +2271,7 @@ export default function App() {
                                     });
                                     if (res.ok) {
                                       showFeedback("success", "分组改名成功！");
-                                      fetchData();
+                                      await fetchData();
                                     } else {
                                       e.target.value = g.name; // reset
                                       showFeedback("error", "改名失败");
@@ -2287,7 +2287,7 @@ export default function App() {
                             </div>
 
                             <button
-                              onClick={() => {
+                              onClick={async () => {
                                 if (g.id === "g_other" || g.name === "其它频道") {
                                   showFeedback("error", "系统保护的内置备用分组，无法被手动删除");
                                   return;
@@ -2300,7 +2300,7 @@ export default function App() {
                                       const res = await fetch(`/api/groups/${g.id}`, { method: "DELETE" });
                                       if (res.ok) {
                                         showFeedback("success", "分组删除成功");
-                                        fetchData();
+                                        await fetchData();
                                       } else {
                                         showFeedback("error", "删除失败");
                                       }
@@ -2464,7 +2464,7 @@ export default function App() {
                         return (
                           <div 
                             key={ch.id}
-                            onClick={() => {
+                            onClick={async () => {
                               setSelectedChannel(ch);
                               setEpgGuide(null); // Clear EPG view since state modified
                               setSelectedSourceIds([]); // Clear source selection
@@ -2652,7 +2652,7 @@ export default function App() {
                                             if (res.ok) {
                                               showFeedback("success", `EPG ID 已成功纠正为 "${rec.epgId}"`);
                                               setAiRecommends([]);
-                                              fetchData();
+                                              await fetchData();
                                               const updatedCh = { ...selectedChannel, epgId: rec.epgId };
                                               setSelectedChannel(updatedCh);
                                               // Immediately re-trigger fetching with newly saved channel values
@@ -3285,7 +3285,7 @@ export default function App() {
                       <div className="flex justify-between items-center pt-2 border-t border-slate-100">
                         <span className="text-[10px] text-slate-400 font-semibold">🔍 当前筛选出 {filteredGlobalSources.length} 条符合物理描述的直播源</span>
                         <button 
-                          onClick={() => {
+                          onClick={async () => {
                             setGlobalSourceSearch("");
                             setGlobalSourceIsp("all");
                             setGlobalSourceProvince("all");
@@ -3315,7 +3315,7 @@ export default function App() {
 
                       <div className="flex flex-wrap gap-2">
                         <button
-                          onClick={() => {
+                          onClick={async () => {
                             setBatchGlobalSourceForm({ isp: "", province: "", status: "" });
                             setIsBatchGlobalSourceModalOpen(true);
                           }}
@@ -3477,7 +3477,7 @@ export default function App() {
                                           });
                                           if (res.ok) {
                                             showFeedback("success", "已向后台提交独立测速...");
-                                            fetchData();
+                                            await fetchData();
                                           } else {
                                             showFeedback("error", "测速指令异常");
                                           }
@@ -3523,7 +3523,7 @@ export default function App() {
                                               });
                                               if (res.ok) {
                                                 showFeedback("success", "直播线路已断开连接并物理移除");
-                                                fetchData();
+                                                await fetchData();
                                               } else {
                                                 showFeedback("error", "移除直播线路失败");
                                               }
@@ -3778,7 +3778,7 @@ export default function App() {
                       <Download className="w-3 h-3" /> 导出备份 (JSON)
                     </button>
                     <button
-                      onClick={() => {
+                      onClick={async () => {
                         setImportSubscriptionsContent("");
                         setIsImportSubscriptionsOpen(true);
                       }}
@@ -3907,7 +3907,7 @@ export default function App() {
                             
                             <div className="flex gap-2">
                               <button 
-                                onClick={() => {
+                                onClick={async () => {
                                   setEditingSync(cfg);
                                   setSyncForm({
                                     name: cfg.name,
@@ -4201,7 +4201,7 @@ export default function App() {
                       <span className="text-[10px] text-slate-500 font-mono uppercase tracking-wider">整合输出 XMLTV EPG 接口</span>
                       <p className="text-xs font-mono text-emerald-400 truncate">{getFullHostUrl()}/api/export/epg.xml</p>
                       <button
-                        onClick={() => {
+                        onClick={async () => {
                           copyTextToClipboard(`${getFullHostUrl()}/api/export/epg.xml`);
                           showFeedback("success", "已复制 EPG 输出接口链接");
                         }}
@@ -4214,7 +4214,7 @@ export default function App() {
                       <span className="text-[10px] text-slate-500 font-mono uppercase tracking-wider">整合输出 XMLTV EPG.XML.GZ 压缩接口</span>
                       <p className="text-xs font-mono text-emerald-400 truncate">{getFullHostUrl()}/api/export/epg.xml.gz</p>
                       <button
-                        onClick={() => {
+                        onClick={async () => {
                           copyTextToClipboard(`${getFullHostUrl()}/api/export/epg.xml.gz`);
                           showFeedback("success", "已复制 Gzip 压缩 EPG 链接");
                         }}
@@ -4235,7 +4235,7 @@ export default function App() {
                     <p className="text-[10px] text-slate-400 mt-0.5">激活的 EPG 会在执行后台/手动同步时自动拉取。系统根据频道 EPG ID 自动匹配它们。</p>
                   </div>
                   <button
-                    onClick={() => {
+                    onClick={async () => {
                       setEpgForm({ id: "", name: "", url: "", active: true });
                       setIsEpgFormOpen(true);
                     }}
@@ -4312,7 +4312,7 @@ export default function App() {
                         <div className="flex justify-between items-center pt-2 border-t border-slate-100 gap-2">
                           <div className="flex gap-1">
                             <button
-                              onClick={() => {
+                              onClick={async () => {
                                 setEpgForm({ id: source.id, name: source.name, url: source.url, active: source.active });
                                 setIsEpgFormOpen(true);
                               }}
@@ -4934,7 +4934,7 @@ export default function App() {
                       {aiRecommends.map((rec) => (
                         <div 
                           key={rec.epgId}
-                          onClick={() => {
+                          onClick={async () => {
                             setChannelForm({ ...channelForm, epgId: rec.epgId });
                             showFeedback("success", `已填充 "${rec.epgId}"`);
                           }}
