@@ -36,6 +36,7 @@ import {
 } from "lucide-react";
 import { Channel, LiveSource, SyncConfig, TestStatus, EpgGuide, Group, EpgSource } from "./types";
 import DashboardView from "./components/DashboardView";
+import StatsView from "./components/StatsView";
 
 export default function App() {
   const [channels, setChannels] = useState<Channel[]>([]);
@@ -2053,6 +2054,19 @@ export default function App() {
             <Tv className="w-4 h-4" />
             频道与线路编辑
           </button>
+          
+          <button 
+            onClick={() => setActiveTab("stats")}
+            className={`w-full flex items-center gap-3.5 px-4 py-3 rounded-xl transition text-xs font-semibold ${
+              activeTab === "stats" 
+              ? "bg-blue-50/75 text-blue-700 font-bold" 
+              : "text-slate-500 hover:bg-slate-50 hover:text-slate-800"
+            }`}
+            id="nav_stats"
+          >
+            <Activity className="w-4 h-4" />
+            线路质量与统计
+          </button>
 
           <button 
             onClick={() => setActiveTab("sync")}
@@ -2187,6 +2201,7 @@ export default function App() {
             <h1 className="text-base font-bold text-slate-800">
               {activeTab === "dashboard" && "直播管理中心一览 (Dashboard)"}
               {activeTab === "channels" && "频道列表与线路维护中心"}
+              {activeTab === "stats" && "线路质量与统计分析 (Stream Statistics)"}
               {activeTab === "sync" && "M3U / TXT 网络同步订阅与自定义文件导入"}
               {activeTab === "export" && "播放接口配置生成工具"}
               {activeTab === "epg" && "EPG XML 国际电视频道节目单同步与多源整合合并中心"}
@@ -2245,6 +2260,10 @@ export default function App() {
             />
           )}
 
+          {activeTab === "stats" && (
+            <StatsView channels={channels} />
+          )}
+          
           {/* VIEW: CHANNELS & SOURCE EDITOR */}
           {activeTab === "channels" && (
             <div className="space-y-6 animate-fade-in" id="tab_channels_view">

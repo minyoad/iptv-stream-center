@@ -1696,6 +1696,10 @@ async function performSync(config: SyncConfig, force = false) {
                 }
               });
             }
+            // Update logo if current logo is auto-generated
+            if (currentInfo!.logo && (!channel!.logo || channel!.logo.includes("unsplash.com") || channel!.logo === "")) {
+              channel!.logo = currentInfo!.logo;
+            }
           }
 
           // Add source if URL not already there
@@ -2964,6 +2968,10 @@ async function startServer() {
                     channel!.alias.push(a);
                   }
                 });
+              }
+              // Update logo if current logo is auto-generated
+              if (currentInfo.logo && (!channel!.logo || channel!.logo.includes("unsplash.com") || channel!.logo === "")) {
+                channel!.logo = currentInfo.logo;
               }
             }
 
