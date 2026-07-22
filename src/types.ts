@@ -8,6 +8,7 @@ export interface LiveSource {
   lastChecked?: string;
   clientIspReported?: string;
   clientProvinceReported?: string;
+  isolated?: boolean;
 }
 
 export interface Group {

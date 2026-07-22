@@ -6,7 +6,9 @@ import {
   CheckCircle, 
   XCircle, 
   Plus, 
-  Trash2, 
+  Trash2,
+  Archive,
+  ArchiveRestore, 
   Edit2, 
   RefreshCw, 
   Download, 
@@ -29,7 +31,8 @@ import {
   Shield,
   GitMerge,
   ChevronUp,
-  ChevronDown
+  ChevronDown,
+  X
 } from "lucide-react";
 import { Channel, LiveSource, SyncConfig, TestStatus, EpgGuide, Group, EpgSource } from "./types";
 import DashboardView from "./components/DashboardView";
@@ -46,6 +49,9 @@ export default function App() {
   const [epgSources, setEpgSources] = useState<EpgSource[]>([]);
   const [isEpgLoading, setIsEpgLoading] = useState(false);
   const [epgForm, setEpgForm] = useState({ id: "", name: "", url: "", active: true });
+  const [isMappingStatusOpen, setIsMappingStatusOpen] = useState(false);
+  const [epgMappingData, setEpgMappingData] = useState<any>(null);
+  const [epgMappingLoading, setEpgMappingLoading] = useState(false);
   const [isEpgFormOpen, setIsEpgFormOpen] = useState(false);
   const [syncingEpgId, setSyncingEpgId] = useState<string | null>(null);
   const [isSyncingAllEpg, setIsSyncingAllEpg] = useState(false);
@@ -201,6 +207,7 @@ export default function App() {
 
   // Batch live source operations state
   const [selectedSourceIds, setSelectedSourceIds] = useState<string[]>([]);
+  const [sourceFilterStatus, setSourceFilterStatus] = useState<"all" | "all_with_isolated" | "active" | "inactive" | "isolated" | "unknown">("all");
   const [isBatchSourceModalOpen, setIsBatchSourceModalOpen] = useState(false);
   const [batchSourceForm, setBatchSourceForm] = useState({
     isp: "",
@@ -1478,6 +1485,25 @@ export default function App() {
       }
     } catch (e) {
       showFeedback("error", "操作线路出错");
+    }
+  };
+
+  const handleIsolateSource = async (srcId: string, isolated: boolean) => {
+    if (!selectedChannel) return;
+    try {
+      const res = await fetch(`/api/channels/${selectedChannel.id}/sources/${srcId}/isolate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ isolated })
+      });
+      if (res.ok) {
+        showFeedback("success", isolated ? "直播线路已隔离 (软删除)" : "直播线路已从隔离中恢复");
+        await fetchData();
+      } else {
+        showFeedback("error", "操作失败");
+      }
+    } catch(e) {
+      showFeedback("error", "网络超时");
     }
   };
 
@@ -2817,8 +2843,31 @@ export default function App() {
                                   }
                                 }}
                               />
-                              <span className="text-xs font-bold text-slate-500">已接入线路列表 ({selectedChannel.sources.length} 条)</span>
+                              {(() => {
+                                const filteredCount = selectedChannel.sources.filter(src => {
+                                  if (sourceFilterStatus === "all") return !src.isolated;
+                                  if (sourceFilterStatus === "all_with_isolated") return true;
+                                  if (sourceFilterStatus === "isolated") return src.isolated;
+                                  if (src.isolated) return false;
+                                  return src.status === sourceFilterStatus || (sourceFilterStatus === "unknown" && src.status === "checking");
+                                }).length;
+                                return (
+                                  <span className="text-xs font-bold text-slate-500">已接入线路列表 ({filteredCount} 条)</span>
+                                );
+                              })()}
                             </div>
+                            <select
+                              value={sourceFilterStatus}
+                              onChange={(e) => setSourceFilterStatus(e.target.value as any)}
+                              className="text-xs border-slate-200 rounded px-2 py-1 bg-white outline-none focus:border-blue-400"
+                            >
+                              <option value="all">全部状态 (默认)</option>
+                              <option value="all_with_isolated">全部 (含已隔离)</option>
+                              <option value="active">有效/可用</option>
+                              <option value="inactive">失效/离线</option>
+                              <option value="unknown">未测试</option>
+                              <option value="isolated">已隔离 (软删除)</option>
+                            </select>
                           </div>
 
                           {selectedSourceIds.length > 0 && (
@@ -2857,7 +2906,13 @@ export default function App() {
                           </div>
                         ) : (
                           <div className="space-y-2.5 max-h-[480px] overflow-y-auto pr-1">
-                            {selectedChannel.sources.map((src, index) => {
+                            {selectedChannel.sources.filter(src => {
+                                if (sourceFilterStatus === "all") return !src.isolated;
+                                if (sourceFilterStatus === "all_with_isolated") return true;
+                                if (sourceFilterStatus === "isolated") return src.isolated;
+                                if (src.isolated) return false;
+                                return src.status === sourceFilterStatus || (sourceFilterStatus === "unknown" && src.status === "checking");
+                              }).map((src, index) => {
                               const isChecked = selectedSourceIds.includes(src.id);
                               return (
                                 <div 
@@ -2865,6 +2920,7 @@ export default function App() {
                                   className={`p-3.5 rounded-xl border flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs transition-colors ${
                                     isChecked ? "bg-blue-50/20 border-blue-200" :
                                     src.status === "active" ? "bg-emerald-50/15 border-emerald-100" :
+                                    src.isolated ? "bg-orange-50/20 border-orange-200 opacity-75" :
                                     src.status === "inactive" ? "bg-rose-50/15 border-rose-100" : "bg-slate-50/30 border-slate-200"
                                   }`}
                                 >
@@ -2916,6 +2972,11 @@ export default function App() {
                                             未测试
                                           </span>
                                         )}
+                                        {src.isolated && (
+                                          <span className="text-orange-700 font-bold bg-orange-100 px-1.5 py-0.5 rounded text-[10px]">
+                                            已隔离
+                                          </span>
+                                        )}
                                       </div>
                                       
                                       <p className="font-mono text-[10px] text-slate-500 truncate select-all">{src.url}</p>
@@ -2929,8 +2990,26 @@ export default function App() {
                                     >
                                       <Edit2 className="w-3.5 h-3.5" />
                                     </button>
+                                    {src.isolated ? (
+                                      <button
+                                        onClick={() => handleIsolateSource(src.id, false)}
+                                        title="恢复线路"
+                                        className="p-2 border border-emerald-200 hover:border-emerald-350 bg-white rounded-lg hover:bg-emerald-50 transition text-emerald-600 p-1.5"
+                                      >
+                                        <ArchiveRestore className="w-3.5 h-3.5" />
+                                      </button>
+                                    ) : (
+                                      <button
+                                        onClick={() => handleIsolateSource(src.id, true)}
+                                        title="软删除隔离(禁止自动同步此地址)"
+                                        className="p-2 border border-orange-200 hover:border-orange-350 bg-white rounded-lg hover:bg-orange-50 transition text-orange-500 p-1.5"
+                                      >
+                                        <Archive className="w-3.5 h-3.5" />
+                                      </button>
+                                    )}
                                     <button 
                                       onClick={() => handleDeleteSource(src.id)}
+                                      title="彻底删除"
                                       className="p-2 border border-rose-200 hover:border-rose-350 bg-white rounded-lg hover:bg-rose-50 transition text-rose-500 p-1.5"
                                     >
                                       <Trash2 className="w-3.5 h-3.5" />
@@ -4330,16 +4409,126 @@ export default function App() {
                     <h3 className="text-xs font-bold text-slate-700">EPG 节目单来源配置列表 ({epgSources.length})</h3>
                     <p className="text-[10px] text-slate-400 mt-0.5">激活的 EPG 会在执行后台/手动同步时自动拉取。系统根据频道 EPG ID 自动匹配它们。</p>
                   </div>
-                  <button
-                    onClick={async () => {
-                      setEpgForm({ id: "", name: "", url: "", active: true });
-                      setIsEpgFormOpen(true);
-                    }}
-                    className="px-2.5 py-1.5 bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold rounded-xl transition cursor-pointer"
-                  >
-                    添加外部 EPG 来源
-                  </button>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={async () => {
+                        if (isMappingStatusOpen) {
+                          setIsMappingStatusOpen(false);
+                        } else {
+                          setIsMappingStatusOpen(true);
+                          setEpgMappingLoading(true);
+                          try {
+                            const res = await fetch("/api/epg/mapping-status");
+                            if (res.ok) {
+                              const data = await res.json();
+                              setEpgMappingData(data);
+                            }
+                          } catch(err) {
+                            console.error(err);
+                          } finally {
+                            setEpgMappingLoading(false);
+                          }
+                        }
+                      }}
+                      className="px-2.5 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-600 text-xs font-bold rounded-xl transition cursor-pointer border border-indigo-200"
+                    >
+                      查看 EPG 映射状态
+                    </button>
+                    <button
+                      onClick={async () => {
+                        setEpgForm({ id: "", name: "", url: "", active: true });
+                        setIsEpgFormOpen(true);
+                      }}
+                      className="px-2.5 py-1.5 bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold rounded-xl transition cursor-pointer"
+                    >
+                      添加外部 EPG 来源
+                    </button>
+                  </div>
                 </div>
+                
+                {/* EPG Mapping Status View */}
+                {isMappingStatusOpen && (
+                  <div className="bg-white border border-indigo-100 rounded-2xl p-6 shadow-sm mb-4 animate-fade-in">
+                    <div className="flex justify-between items-center mb-4">
+                      <div>
+                        <h3 className="font-bold text-slate-800 text-sm">频道 EPG 匹配映射报告</h3>
+                        <p className="text-[10px] text-slate-500 mt-0.5">展示当前启用的电视频道与已缓存的 EPG 资源库匹配结果。</p>
+                      </div>
+                      <button onClick={() => setIsMappingStatusOpen(false)} className="text-slate-400 hover:text-slate-600">
+                        <X className="w-4 h-4" />
+                      </button>
+                    </div>
+                    
+                    {epgMappingLoading ? (
+                      <div className="flex items-center justify-center py-8">
+                        <span className="w-5 h-5 border-2 border-indigo-200 border-t-indigo-500 rounded-full animate-spin"></span>
+                      </div>
+                    ) : epgMappingData ? (
+                      <div className="space-y-4">
+                        <div className="grid grid-cols-3 gap-4">
+                          <div className="bg-slate-50 border border-slate-100 rounded-xl p-3 text-center">
+                            <p className="text-[10px] text-slate-400 font-bold mb-1">缓存 EPG 频道总数</p>
+                            <p className="text-lg font-bold text-slate-700">{epgMappingData.epgTotalChannels}</p>
+                          </div>
+                          <div className="bg-emerald-50 border border-emerald-100 rounded-xl p-3 text-center">
+                            <p className="text-[10px] text-emerald-600 font-bold mb-1">成功匹配频道</p>
+                            <p className="text-lg font-bold text-emerald-700">{epgMappingData.mappedChannels.length}</p>
+                          </div>
+                          <div className="bg-rose-50 border border-rose-100 rounded-xl p-3 text-center">
+                            <p className="text-[10px] text-rose-600 font-bold mb-1">未匹配频道</p>
+                            <p className="text-lg font-bold text-rose-700">{epgMappingData.unmappedChannels.length}</p>
+                          </div>
+                        </div>
+                        
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-4">
+                          <div className="border border-rose-100 rounded-xl overflow-hidden flex flex-col h-[300px]">
+                            <div className="bg-rose-50 px-3 py-2 border-b border-rose-100 flex justify-between items-center">
+                              <span className="text-[11px] font-bold text-rose-700">未匹配频道 (需处理)</span>
+                              <span className="text-[10px] bg-rose-200 text-rose-800 px-1.5 rounded-full">{epgMappingData.unmappedChannels.length}</span>
+                            </div>
+                            <div className="flex-1 overflow-y-auto p-2 space-y-1 bg-white">
+                              {epgMappingData.unmappedChannels.length === 0 ? (
+                                <p className="text-center text-[10px] text-slate-400 py-4">完美！所有频道均已匹配 EPG</p>
+                              ) : (
+                                epgMappingData.unmappedChannels.map((ch: any) => (
+                                  <div key={ch.id} className="flex justify-between items-center p-2 rounded-lg bg-rose-50/50 hover:bg-rose-50">
+                                    <div className="truncate flex-1 pr-2">
+                                      <p className="text-xs font-bold text-slate-700 truncate">{ch.name}</p>
+                                      <p className="text-[9px] text-slate-400 font-mono mt-0.5 truncate">EPG_ID: {ch.epgId}</p>
+                                    </div>
+                                    <span className="text-[9px] px-1.5 py-0.5 rounded border border-rose-200 text-rose-500 flex-shrink-0">未找到映射</span>
+                                  </div>
+                                ))
+                              )}
+                            </div>
+                          </div>
+                          
+                          <div className="border border-emerald-100 rounded-xl overflow-hidden flex flex-col h-[300px]">
+                            <div className="bg-emerald-50 px-3 py-2 border-b border-emerald-100 flex justify-between items-center">
+                              <span className="text-[11px] font-bold text-emerald-700">已成功匹配频道</span>
+                              <span className="text-[10px] bg-emerald-200 text-emerald-800 px-1.5 rounded-full">{epgMappingData.mappedChannels.length}</span>
+                            </div>
+                            <div className="flex-1 overflow-y-auto p-2 space-y-1 bg-white">
+                              {epgMappingData.mappedChannels.length === 0 ? (
+                                <p className="text-center text-[10px] text-slate-400 py-4">暂无频道匹配成功</p>
+                              ) : (
+                                epgMappingData.mappedChannels.map((ch: any) => (
+                                  <div key={ch.id} className="flex justify-between items-center p-2 rounded-lg hover:bg-slate-50 border border-transparent hover:border-slate-100">
+                                    <div className="truncate flex-1 pr-2">
+                                      <p className="text-xs font-bold text-slate-700 truncate">{ch.name}</p>
+                                      <p className="text-[9px] text-slate-400 font-mono mt-0.5 truncate">映射到: {ch.matchedName} ({ch.matchedId})</p>
+                                    </div>
+                                    <span className="text-[9px] px-1.5 py-0.5 rounded border border-emerald-200 text-emerald-600 flex-shrink-0 truncate max-w-[80px]" title={ch.sourceName}>{ch.sourceName}</span>
+                                  </div>
+                                ))
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    ) : null}
+                  </div>
+                )}
 
                 {isEpgLoading ? (
                   <div className="flex flex-col items-center justify-center py-12 gap-2 text-xs text-slate-400 bg-slate-50 border border-slate-100 rounded-xl">

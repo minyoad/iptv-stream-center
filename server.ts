@@ -21,6 +21,7 @@ interface LiveSource {
   lastChecked?: string;
   clientIspReported?: string;
   clientProvinceReported?: string;
+  isolated?: boolean;
 }
 
 interface Group {
@@ -640,9 +641,9 @@ function loadData() {
           status: "never",
         },
         {
-          id: "epg_51zmt",
-          name: "51zmt 经典公开 EPG XML 源",
-          url: "http://epg.51zmt.top:11111/e.xml",
+          id: "epg_pw",
+          name: "EPG.pw 公开 XML 源",
+          url: "https://epg.pw/xmltv/epg_CN.xml",
           active: true,
           status: "never",
         }
@@ -652,6 +653,17 @@ function loadData() {
 
     // Run Migration: if groups collection or channel groupIds are missing
     let updated = false;
+    
+    // Migrate dead EPG sources
+    epgSources.forEach((s) => {
+      if (s.url === "http://epg.51zmt.top:11111/e.xml" || s.id === "epg_51zmt") {
+        s.url = "https://epg.pw/xmltv/epg_CN.xml";
+        s.name = "EPG.pw 公开 XML 源";
+        s.id = "epg_pw";
+        updated = true;
+      }
+    });
+
     if (groups.length === 0) {
       const uniqueCats = new Set<string>();
       channels.forEach((c: any) => {
@@ -1339,7 +1351,7 @@ function sortSourcesByGeo(sources: LiveSource[], clientProvince: string, clientI
 }
 
 function getPlayableSources(sources: LiveSource[], targetIsp: string, targetProvince: string): LiveSource[] {
-  let filtered = [...sources];
+  let filtered = [...sources].filter(s => !s.isolated);
   
   if (targetIsp) {
     const normTargetIsp = targetIsp.trim();
@@ -1779,6 +1791,8 @@ async function performSync(config: SyncConfig, force = false) {
             importedChannelsCount++;
           } else {
             if (stdInfo) {
+              // FORCE UPDATE channel name to the official alias template name
+              channel.name = stdInfo.templateName;
               stdInfo.aliases.forEach(a => {
                 if (!channel!.alias.includes(a)) {
                   channel!.alias.push(a);
@@ -2148,6 +2162,24 @@ async function startServer() {
   });
 
   // Group CRUD Endpoints
+  
+  // Isolate (soft-delete) or restore a source
+  app.post("/api/channels/:channelId/sources/:sourceId/isolate", (req, res) => {
+    const { channelId, sourceId } = req.params;
+    const { isolated } = req.body;
+    
+    const channel = channels.find((c) => c.id === channelId);
+    if (!channel) return res.status(404).json({ error: "Channel not found" });
+    
+    const source = channel.sources.find((s) => s.id === sourceId);
+    if (!source) return res.status(404).json({ error: "Source not found" });
+    
+    source.isolated = !!isolated;
+    saveData();
+    
+    res.json({ success: true, isolated: source.isolated });
+  });
+
   app.get("/api/groups", (req, res) => {
     res.json(groups);
   });
@@ -2233,13 +2265,13 @@ async function startServer() {
       if (status === "active" || only_active === "true") {
         const filtered = channels.map((ch) => ({
           ...ch,
-          sources: (ch.sources || []).filter((src) => src.status === "active")
+          sources: (ch.sources || []).filter((src) => src.status === "active" && !src.isolated)
         })).filter((ch) => ch.sources.length > 0);
         return res.json(filtered);
       } else if (status === "test" || status === "testable" || status === "active,unknown" || status === "active,untested") {
         const filtered = channels.map((ch) => ({
           ...ch,
-          sources: (ch.sources || []).filter((src) => src.status === "active" || src.status === "unknown" || src.status === "checking")
+          sources: (ch.sources || []).filter((src) => !src.isolated && (src.status === "active" || src.status === "unknown" || src.status === "checking"))
         })).filter((ch) => ch.sources.length > 0);
         return res.json(filtered);
       }
@@ -3014,6 +3046,8 @@ async function startServer() {
               importedChannelsCount++;
             } else {
               if (stdInfo) {
+                // FORCE UPDATE channel name to the official alias template name
+                channel.name = stdInfo.templateName;
                 stdInfo.aliases.forEach(a => {
                   if (!channel!.alias.includes(a)) {
                     channel!.alias.push(a);
@@ -3406,6 +3440,102 @@ async function startServer() {
     }
   });
 
+  // EPG Mapping Status
+  app.get("/api/epg/mapping-status", (req, res) => {
+    const activeEpgSrcs = epgSources.filter(s => s.active);
+    const combinedCache: Record<string, { displayNames: string[], programs: any[], sourceId: string, sourceName: string }> = {};
+    
+    // Merge caches
+    for (const src of activeEpgSrcs) {
+      const cache = getEpgCache(src.id);
+      if (cache) {
+        for (const [key, value] of Object.entries(cache)) {
+          if (!combinedCache[key]) {
+            combinedCache[key] = { ...value, sourceId: src.id, sourceName: src.name };
+          }
+        }
+      }
+    }
+
+    const epgTotalChannels = Object.keys(combinedCache).length;
+
+    const mappedChannels = [];
+    const unmappedChannels = [];
+
+    for (const ch of channels) {
+      // Find matching entry
+      let matchedEntry = null;
+      let matchedOriginalId = null;
+
+      // Duplicate find logic inline or reuse
+      if (ch.epgId) {
+        if (combinedCache[ch.epgId]) {
+           matchedEntry = combinedCache[ch.epgId];
+           matchedOriginalId = ch.epgId;
+        } else {
+           const foundKey = Object.keys(combinedCache).find(k => k.toLowerCase() === ch.epgId.toLowerCase());
+           if (foundKey) {
+             matchedEntry = combinedCache[foundKey];
+             matchedOriginalId = foundKey;
+           }
+        }
+      }
+
+      if (!matchedEntry) {
+        const chNameNorm = normalizeChannelName(ch.name);
+        const aliasNorms = (ch.alias || []).map(a => normalizeChannelName(a)).filter(Boolean);
+        for (const originalId of Object.keys(combinedCache)) {
+          const entry = combinedCache[originalId];
+          const originalIdNorm = normalizeChannelName(originalId);
+          if (ch.epgId && originalIdNorm === normalizeChannelName(ch.epgId)) {
+            matchedEntry = entry;
+            matchedOriginalId = originalId;
+            break;
+          }
+          if (originalIdNorm === chNameNorm || aliasNorms.includes(originalIdNorm)) {
+            matchedEntry = entry;
+            matchedOriginalId = originalId;
+            break;
+          }
+          let foundInDisp = false;
+          for (const disp of entry.displayNames) {
+            const dispNorm = normalizeChannelName(disp);
+            if (dispNorm === chNameNorm || aliasNorms.includes(dispNorm)) {
+              matchedEntry = entry;
+              matchedOriginalId = originalId;
+              foundInDisp = true;
+              break;
+            }
+          }
+          if (foundInDisp) break;
+        }
+      }
+
+      if (matchedEntry) {
+        mappedChannels.push({
+          id: ch.id,
+          name: ch.name,
+          epgId: ch.epgId,
+          matchedId: matchedOriginalId,
+          matchedName: matchedEntry.displayNames[0] || matchedOriginalId,
+          sourceName: matchedEntry.sourceName
+        });
+      } else {
+        unmappedChannels.push({
+          id: ch.id,
+          name: ch.name,
+          epgId: ch.epgId
+        });
+      }
+    }
+
+    res.json({
+      epgTotalChannels,
+      mappedChannels,
+      unmappedChannels
+    });
+  });
+
   // EPG Generator Timeline Helper
   // Yields simulated EPG guide timelines for Chinese Television stations
   app.get("/api/epg/guide", (req, res) => {
@@ -3726,7 +3856,10 @@ ${JSON.stringify(scoredList.map(c => ({ epgId: c.epgId, names: c.displayNames, s
       }
     }
 
-    let playlistRows = ["#EXTM3U x-tvg-url=\"http://epg.51zmt.top:12182/xml/chinas.xml.gz\""];
+    const host = req.headers.host || "localhost:3000";
+    const protocol = req.headers['x-forwarded-proto'] || req.protocol || 'http';
+    const baseUrl = `${protocol}://${host}`;
+    let playlistRows = [`#EXTM3U x-tvg-url="${baseUrl}/api/export/epg.xml.gz"`];
 
     let count = 0;
     const maxLimit = limit ? Number(limit) : Infinity;
@@ -3758,10 +3891,8 @@ ${JSON.stringify(scoredList.map(c => ({ epgId: c.epgId, names: c.displayNames, s
           if (status && source.status !== String(status)) return;
 
           // Extra details label
-          const suffix = (source.province && source.province !== "全国") || source.isp
-            ? ` (${source.province || ""}${source.isp ? " " + source.isp : ""})`
-            : "";
-          const channelDisplayName = `${channel.name}${suffix}`;
+          // (User requested to remove suffix with ISP/Province from M3U export)
+          const channelDisplayName = channel.name;
 
           playlistRows.push(
             `#EXTINF:-1 tvg-id="${channel.epgId}" tvg-name="${channel.name}" tvg-logo="${channel.logo}" group-title="${groupName}",${channelDisplayName}`
@@ -4017,13 +4148,16 @@ ${JSON.stringify(scoredList.map(c => ({ epgId: c.epgId, names: c.displayNames, s
   app.post("/api/cleanup/inactive", (req, res) => {
     let affectedCount = 0;
     channels.forEach((channel) => {
-      const initialLength = channel.sources.length;
-      channel.sources = channel.sources.filter((s) => s.status !== "inactive");
-      affectedCount += (initialLength - channel.sources.length);
+      channel.sources.forEach((s) => {
+        if (s.status === "inactive" && !s.isolated) {
+          s.isolated = true;
+          affectedCount++;
+        }
+      });
     });
 
     saveData();
-    res.json({ success: true, message: `成功清理 ${affectedCount} 个失效链接直播源` });
+    res.json({ success: true, message: `成功隔离 (软删除) ${affectedCount} 个失效链接直播源` });
   });
 
   // DB Manual Backup & Restore APIs
