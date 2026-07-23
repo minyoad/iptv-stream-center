@@ -227,7 +227,8 @@ function stripBitrateAndResolution(name: string): string {
   clean = clean.replace(/(?:\s+|-|_)+(?:(?:480|576|720|1080|1280|1440|1920|2160|4320|[48][kK])(?:[pPiI]\d*|fps|FPS)?|\d+[pPiI]\d*)/gi, "");
 
   // Remove empty brackets or parentheses remaining from substitutions
-  clean = clean.replace(/(?:\s+|-|_)*[\[()\]]/g, "");
+  clean = clean.replace(/[\[(（【]\s*[\])）】]/g, ""); // First remove empty pairs like ( ) or （ ）
+  clean = clean.replace(/(?:\s+|-|_)*[\[()（）【】\]]/g, ""); // Then remove leftover standalone bracket characters
 
   return clean.trim();
 }
@@ -4153,6 +4154,25 @@ ${JSON.stringify(scoredList.map(c => ({ epgId: c.epgId, names: c.displayNames, s
   });
 
   // Clean-up and optimization APIs
+  app.post("/api/cleanup/duplicates", (req, res) => {
+    let affectedCount = 0;
+    channels.forEach((channel) => {
+      const urlMap = new Set<string>();
+      const uniqueSources: any[] = [];
+      channel.sources.forEach((s) => {
+        if (!urlMap.has(s.url)) {
+          urlMap.add(s.url);
+          uniqueSources.push(s);
+        } else {
+          affectedCount++;
+        }
+      });
+      channel.sources = uniqueSources;
+    });
+    saveData();
+    res.json({ success: true, message: `成功清理并物理移除了 ${affectedCount} 个完全重复的直播线路` });
+  });
+
   app.post("/api/cleanup/inactive", (req, res) => {
     let affectedCount = 0;
     channels.forEach((channel) => {

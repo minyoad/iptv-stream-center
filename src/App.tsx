@@ -1758,6 +1758,26 @@ export default function App() {
     setIsSyncModalOpen(true);
   };
 
+  // Clean duplicate sources
+  const cleanupDuplicateSources = () => {
+    triggerConfirm(
+      "一键清理重复线路",
+      "这将会自动扫描并清理同一个电视频道内链接完全重复的直播源，保留唯一源以减少测速无效流量。确定继续吗？",
+      async () => {
+        try {
+          const res = await fetch("/api/cleanup/duplicates", { method: "POST" });
+          const data = await res.json();
+          if (res.ok) {
+            showFeedback("success", data.message || "重复线路清理完成");
+            await fetchData();
+          }
+        } catch (err) {
+          showFeedback("error", "系统交互错误");
+        }
+      }
+    );
+  };
+
   // Clean invalid sources
   const cleanupInvalidSources = () => {
     triggerConfirm(
@@ -2484,6 +2504,13 @@ export default function App() {
                 </div>
 
                 <div className="flex gap-2">
+                  <button 
+                    onClick={cleanupDuplicateSources}
+                    className="px-3.5 py-2 border border-orange-200 text-orange-600 hover:bg-orange-50 text-[11px] font-bold rounded-xl transition cursor-pointer flex items-center"
+                  >
+                    <Zap className="w-3.5 h-3.5 mr-1" />
+                    清理重复源
+                  </button>
                   <button 
                     onClick={cleanupInvalidSources}
                     className="px-3.5 py-2 border border-rose-200 text-rose-600 hover:bg-rose-50 text-[11px] font-bold rounded-xl transition cursor-pointer flex items-center"
