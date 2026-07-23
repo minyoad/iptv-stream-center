@@ -222,6 +222,8 @@ export default function App() {
   const [globalSourceStatus, setGlobalSourceStatus] = useState("all");
   const [selectedGlobalSourceIds, setSelectedGlobalSourceIds] = useState<string[]>([]);
   const [isBatchGlobalSourceModalOpen, setIsBatchGlobalSourceModalOpen] = useState(false);
+  const [isMergeModalOpen, setIsMergeModalOpen] = useState(false);
+  const [primaryMergeChannelId, setPrimaryMergeChannelId] = useState<string>("auto");
   const [batchGlobalSourceForm, setBatchGlobalSourceForm] = useState({
     isp: "",
     province: "",
@@ -988,38 +990,34 @@ export default function App() {
       showFeedback("info", "合并频道功能需要至少选择 2 个频道项目");
       return;
     }
-    const selectedNames = channels
-      .filter(ch => selectedChannelIds.includes(ch.id))
-      .map(ch => ch.name);
+    setPrimaryMergeChannelId("auto");
+    setIsMergeModalOpen(true);
+  };
 
-    triggerConfirm(
-      "合并选中频道",
-      `确定要将选中的 ${selectedChannelIds.length} 个项目合并为一个频道吗？
-系统将智能化推荐/保留属性（Logo、EPG等）最完整的电视频道作为主电视频道，其它的频道名称将被设定为此主频道的关联“别名”，并且会自动合并、去重所有的直播播放线路。
-
-拟合并的频道: [ ${selectedNames.join(" | ")} ]`,
-      async () => {
-        try {
-          const res = await fetch("/api/channels/merge", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ channelIds: selectedChannelIds })
-          });
-          if (res.ok) {
-            const data = await res.json();
-            showFeedback("success", data.message || "频道的合并已成功完成！");
-            setSelectedChannelIds([]);
-            setSelectedChannel(null);
-            await fetchData();
-          } else {
-            const err = await res.json();
-            showFeedback("error", err.error || "合并频道作业失败");
-          }
-        } catch (e) {
-          showFeedback("error", "网络连接超时，请稍后重试");
-        }
+  const executeMerge = async () => {
+    try {
+      const res = await fetch("/api/channels/merge", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ 
+          channelIds: selectedChannelIds,
+          primaryId: primaryMergeChannelId === "auto" ? null : primaryMergeChannelId 
+        })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        showFeedback("success", data.message || "频道的合并已成功完成！");
+        setIsMergeModalOpen(false);
+        setSelectedChannelIds([]);
+        setSelectedChannel(null);
+        await fetchData();
+      } else {
+        const err = await res.json();
+        showFeedback("error", err.error || "合并频道作业失败");
       }
-    );
+    } catch (e) {
+      showFeedback("error", "网络连接超时，请稍后重试");
+    }
   };
 
   const openBatchGroupModal = () => {
@@ -5902,6 +5900,64 @@ export default function App() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Merge Modal */ }
+      {isMergeModalOpen && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 font-sans" id="merge_modal">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-100 space-y-5 flex flex-col animate-fade-in">
+            <div className="flex justify-between items-center">
+              <h3 className="text-sm font-bold text-slate-800">合并 {selectedChannelIds.length} 个电视频道</h3>
+              <button 
+                className="text-slate-400 hover:text-slate-600 font-bold" 
+                onClick={() => setIsMergeModalOpen(false)}
+              >
+                ✕
+              </button>
+            </div>
+            
+            <div className="space-y-4">
+              <p className="text-xs text-slate-600 leading-relaxed">
+                请选择一个电视频道作为<b>主频道</b>。合并后，主频道的名称、分组将作为基础，其他频道的名称会被加入别名列表，所有播放线路将自动合并并去重。
+              </p>
+              
+              <div className="space-y-2">
+                <label className="block text-[11px] font-bold text-slate-700 uppercase tracking-wider">
+                  选择主频道
+                </label>
+                <select 
+                  value={primaryMergeChannelId}
+                  onChange={(e) => setPrimaryMergeChannelId(e.target.value)}
+                  className="w-full text-xs p-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none transition"
+                >
+                  <option value="auto">🌟 自动选择 (推荐完整度最高的)</option>
+                  {channels
+                    .filter(ch => selectedChannelIds.includes(ch.id))
+                    .map(ch => (
+                      <option key={ch.id} value={ch.id}>{ch.name}</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-2 pt-2">
+              <button 
+                type="button"
+                onClick={() => setIsMergeModalOpen(false)}
+                className="px-4 py-2 bg-white border border-slate-200 text-slate-600 text-xs font-bold rounded-xl hover:bg-slate-50 transition cursor-pointer"
+              >
+                取消
+              </button>
+              <button 
+                type="button"
+                onClick={executeMerge}
+                className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-xl shadow-md transition cursor-pointer flex items-center gap-1.5"
+              >
+                确认合并
+              </button>
+            </div>
           </div>
         </div>
       )}

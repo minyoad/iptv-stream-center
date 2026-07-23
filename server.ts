@@ -2462,7 +2462,7 @@ async function startServer() {
 
   // Merge multiple channels
   app.post("/api/channels/merge", (req, res) => {
-    const { channelIds } = req.body;
+    const { channelIds, primaryId } = req.body;
     if (!Array.isArray(channelIds) || channelIds.length < 2) {
       return res.status(400).json({ error: "请提供至少两个要合并的频道 ID" });
     }
@@ -2505,7 +2505,15 @@ async function startServer() {
     };
 
     const sortedByCompleteness = [...targetChannels].sort((a, b) => getScore(b) - getScore(a));
-    const primaryChannel = sortedByCompleteness[0];
+    
+    // Pick primary channel: either specified by user, or fallback to auto (best completeness score)
+    let primaryChannel = sortedByCompleteness[0];
+    if (primaryId) {
+      const explicitPrimary = targetChannels.find(c => c.id === primaryId);
+      if (explicitPrimary) {
+        primaryChannel = explicitPrimary;
+      }
+    }
 
     // If one of the target channels being merged can be matched to a canonical channel list template name,
     // we use that standard name as the main channel name
