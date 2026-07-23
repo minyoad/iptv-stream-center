@@ -2555,6 +2555,10 @@ async function startServer() {
 
     targetChannels.forEach(c => {
       if (c.name) allNames.add(c.name.trim());
+      // 添加其他频道的名称作为别名
+      if (c.id !== primaryChannel.id && c.name) {
+        allAliases.add(c.name.trim());
+      }
       if (c.alias && Array.isArray(c.alias)) {
         c.alias.forEach(a => {
           if (a) allAliases.add(a.trim());
@@ -2572,11 +2576,14 @@ async function startServer() {
     });
 
     let bestLogo = primaryChannel.logo || "";
-    const httpLogo = logoCandidates.find(l => l.startsWith("http://") || l.startsWith("https://"));
-    if (httpLogo) {
-      bestLogo = httpLogo;
-    } else if (logoCandidates.length > 0) {
-      bestLogo = logoCandidates[0];
+    const isSystemGenerated = (logo: string) => !logo || logo.includes("unsplash.com");
+    
+    // 只有主频道logo为空或系统生成的，才选取其他频道的logo
+    if (isSystemGenerated(bestLogo)) {
+      const alternativeLogo = logoCandidates.find(l => !isSystemGenerated(l));
+      if (alternativeLogo) {
+        bestLogo = alternativeLogo;
+      }
     }
 
     let bestEpgId = primaryChannel.epgId || "";
