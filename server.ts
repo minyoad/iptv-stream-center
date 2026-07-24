@@ -1,6 +1,10 @@
 import express from "express";
 import path from "path";
 import fs from "fs";
+
+// Ensure local time is interpreted as CST (UTC+8) by default if not specified
+process.env.TZ = process.env.TZ || 'Asia/Shanghai';
+
 import { createServer as createViteServer } from "vite";
 import net from "net";
 import { XMLParser } from "fast-xml-parser";
