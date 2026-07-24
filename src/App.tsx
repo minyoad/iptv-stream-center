@@ -3001,8 +3001,14 @@ export default function App() {
                                         
                                         {/* Connectivity Latency Status Pill */}
                                         {src.status === "active" && (
-                                          <span className="text-emerald-700 font-bold bg-emerald-100/50 px-1.5 py-0.5 rounded text-[10px] font-mono">
-                                            有效/可用{src.latency !== undefined ? ` (${src.latency}ms)` : ""}
+                                          <span className="text-emerald-700 font-bold bg-emerald-100/50 px-1.5 py-0.5 rounded text-[10px] font-mono inline-flex items-center gap-1">
+                                            <span>有效/可用</span>
+                                            {src.latency !== undefined && <span className="bg-emerald-200/50 px-1 rounded text-emerald-800">{src.latency}ms</span>}
+                                            {src.testCount !== undefined && src.testCount > 0 && src.successCount !== undefined && (
+                                              <span className="text-emerald-600 border border-emerald-200/50 px-1 rounded" title={`测试 ${src.testCount} 次，成功 ${src.successCount} 次`}>
+                                                可靠度 {Math.round((src.successCount / src.testCount) * 100)}%
+                                              </span>
+                                            )}
                                           </span>
                                         )}
                                         {src.status === "inactive" && (
@@ -3689,6 +3695,11 @@ export default function App() {
                                       </span>
                                       {item.latency !== undefined && (
                                         <span className="text-[10px] text-slate-400 font-black font-mono">({item.latency}ms)</span>
+                                      )}
+                                      {item.testCount !== undefined && item.testCount > 0 && item.successCount !== undefined && (
+                                        <span className="text-[10px] text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded-md font-bold" title={`测试 ${item.testCount} 次，成功 ${item.successCount} 次`}>
+                                          可靠度 {Math.round((item.successCount / item.testCount) * 100)}%
+                                        </span>
                                       )}
                                     </div>
                                   </td>

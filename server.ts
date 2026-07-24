@@ -26,6 +26,8 @@ interface LiveSource {
   clientIspReported?: string;
   clientProvinceReported?: string;
   isolated?: boolean;
+  testCount?: number;
+  successCount?: number;
 }
 
 interface Group {
@@ -181,11 +183,20 @@ function initSqlite() {
     );
   `);
 
+  
   // Ensure optimized indices for speedy lookups
   db.exec(`
     CREATE INDEX IF NOT EXISTS idx_sources_channelId ON sources(channelId);
     CREATE INDEX IF NOT EXISTS idx_sources_status ON sources(status);
   `);
+
+  // Add new columns if they don't exist
+  try {
+    db.exec("ALTER TABLE sources ADD COLUMN testCount INTEGER DEFAULT 0");
+  } catch (e) {}
+  try {
+    db.exec("ALTER TABLE sources ADD COLUMN successCount INTEGER DEFAULT 0");
+  } catch (e) {}
 
   // Seed default cron jobs if empty
   const hasCronJobs = db.prepare("SELECT COUNT(*) as count FROM cron_jobs").get() as { count: number };
@@ -597,7 +608,9 @@ function loadData() {
           latency: row.latency !== null ? row.latency : undefined,
           lastChecked: row.lastChecked || undefined,
           clientIspReported: row.clientIspReported || undefined,
-          clientProvinceReported: row.clientProvinceReported || undefined
+          clientProvinceReported: row.clientProvinceReported || undefined,
+          testCount: row.testCount || 0,
+          successCount: row.successCount || 0
         };
         if (!sourceMap.has(row.channelId)) {
           sourceMap.set(row.channelId, []);
@@ -767,8 +780,8 @@ function saveData() {
 
       const insertChannel = db.prepare("INSERT INTO channels (id, name, logo, groupIds, alias, epgId) VALUES (?, ?, ?, ?, ?, ?)");
       const insertSource = db.prepare(`
-        INSERT INTO sources (id, channelId, url, province, isp, status, latency, lastChecked, clientIspReported, clientProvinceReported)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO sources (id, channelId, url, province, isp, status, latency, lastChecked, clientIspReported, clientProvinceReported, testCount, successCount)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
 
       for (const ch of channels) {
@@ -793,7 +806,9 @@ function saveData() {
               s.latency !== undefined ? s.latency : null,
               s.lastChecked || "",
               s.clientIspReported || "",
-              s.clientProvinceReported || ""
+              s.clientProvinceReported || "",
+              s.testCount || 0,
+              s.successCount || 0
             );
           }
         }
@@ -3380,12 +3395,38 @@ async function startServer() {
         if (channelId && c.id !== channelId) return;
         const src = c.sources.find((s) => s.id === sourceId);
         if (src) {
-          src.status = status;
-          if (latency !== undefined) {
-            src.latency = latency;
+          // Update test counts
+          src.testCount = (src.testCount || 0) + 1;
+          if (status === "active") {
+            src.successCount = (src.successCount || 0) + 1;
           }
+
+          // Exponential Moving Average for latency to smooth out anomalies
+          if (latency !== undefined && latency > 0) {
+            if (src.latency && src.latency > 0) {
+               src.latency = Math.round(src.latency * 0.7 + latency * 0.3);
+            } else {
+               src.latency = latency;
+            }
+          }
+
+          // Smart ISP/Province Discovery:
+          // If the source lacks ISP/Province info, and the client had a great connection (<100ms)
+          if (status === "active" && latency !== undefined && latency <= 100) {
+            if ((!src.isp || src.isp === "未知") && clientIsp) {
+              src.isp = clientIsp;
+            }
+            if ((!src.province || src.province === "未知") && clientProvince) {
+              src.province = clientProvince;
+            }
+          }
+
+          // Decide status based on reliability if we have enough tests
+          // E.g., if it failed now, but has > 50% success rate historically, we might keep it active
+          // But to be responsive to actual outages, we just use the latest status.
+          src.status = status;
           src.lastChecked = new Date().toISOString();
-          // Annotate that it's validated by local client ISP
+          
           src.clientIspReported = clientIsp || "宿主";
           src.clientProvinceReported = clientProvince || "本地";
           updatedCount++;

@@ -9,6 +9,8 @@ export interface LiveSource {
   clientIspReported?: string;
   clientProvinceReported?: string;
   isolated?: boolean;
+  testCount?: number;
+  successCount?: number;
 }
 
 export interface Group {
