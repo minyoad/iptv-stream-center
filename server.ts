@@ -758,7 +758,16 @@ function loadData() {
 }
 
 // Save Database to SQLite disk
+let saveTimer: NodeJS.Timeout | null = null;
 function saveData() {
+  if (saveTimer) return;
+  saveTimer = setTimeout(() => {
+    saveTimer = null;
+    saveDataSync();
+  }, 1000);
+}
+
+function saveDataSync() {
   try {
     const syncDb = db.transaction(() => {
       // 1. Sync settings
