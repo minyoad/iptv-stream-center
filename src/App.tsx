@@ -2196,19 +2196,7 @@ export default function App() {
           </div>
         </div>
 
-        {/* Sidebar Footer Copyable Endpoint info */}
-        <div className="p-4 border-t border-slate-100">
-          <div className="bg-slate-900 rounded-2xl p-4 text-white">
-            <p className="text-[10px] text-slate-400 mb-1 font-mono uppercase tracking-wider">标准 M3U 播放源 URL</p>
-            <p className="text-xs font-mono truncate text-blue-300">{getFullHostUrl()}/api/export/m3u</p>
-            <button 
-              onClick={() => copyTextToClipboard(`${getFullHostUrl()}/api/export/m3u`)}
-              className="mt-3 w-full py-1.5 bg-slate-800 hover:bg-slate-700 text-[10px] font-bold tracking-wide rounded-lg scroll-px-1.5 transition-colors cursor-pointer text-slate-200"
-            >
-              一键复制源链接
-            </button>
-          </div>
-        </div>
+
       </aside>
 
       {/* Main Content Pane */}
