@@ -1438,7 +1438,7 @@ export default function App() {
       name: "",
       groupIds: groups.length > 0 ? [groups[0].id] : [],
       newGroupsString: "",
-      logo: "https://vfiles.gtimg.cn/vupload/20210729/cf2b0d1627514936398.png",
+      logo: "",
       alias: "",
       epgId: ""
     });
@@ -2175,25 +2175,6 @@ export default function App() {
               {isAuthRequired ? "启用" : "未设"}
             </span>
           </button>
-
-          {/* Quick Stats sidebar banner */}
-          <div className="pt-6 border-t border-slate-100 mt-6 px-1">
-            <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">系统健康率</span>
-            <div className="mt-2.5 bg-slate-50 rounded-xl p-3 border border-slate-100/50">
-              <div className="flex justify-between items-center text-[11px] mb-1 font-semibold text-slate-500">
-                <span>总共 {channels.length} 频道</span>
-                <span className="text-emerald-600 font-bold">
-                  {channels.length ? Math.round((channels.filter(c => c.sources.some(s => s.status === "active")).length / channels.length) * 100) : 0}% 良好率
-                </span>
-              </div>
-              <div className="w-full bg-slate-200/60 h-1.5 rounded-full overflow-hidden">
-                <div 
-                  className="bg-emerald-500 h-full rounded-full transition-all duration-300" 
-                  style={{ width: `${channels.length ? (channels.filter(c => c.sources.some(s => s.status === "active")).length / channels.length) * 100 : 0}%` }}
-                />
-              </div>
-            </div>
-          </div>
         </div>
 
 
@@ -2630,12 +2611,18 @@ export default function App() {
                                   }
                                 }}
                               />
-                              <img 
-                                src={ch.logo || "https://images.unsplash.com/photo-1598257006458-087169a1f08d?auto=format&fit=crop&w=48&h=48&q=80"}
-                                alt="logo"
-                                className="w-8 h-8 rounded-lg object-contain bg-slate-100 p-0.5 shadow-xs flex-shrink-0"
-                                onError={(e)=>{ (e.target as HTMLImageElement).src="https://images.unsplash.com/photo-1598257006458-087169a1f08d?auto=format&fit=crop&w=48&h=48&q=80" }}
-                              />
+                              {ch.logo ? (
+                                <img
+                                  src={ch.logo}
+                                  alt="logo"
+                                  className="w-8 h-8 rounded-lg object-contain bg-slate-100 p-0.5 shadow-xs flex-shrink-0"
+                                  onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
+                                />
+                              ) : (
+                                <div className="w-8 h-8 rounded-lg bg-slate-50 border border-slate-100 flex items-center justify-center flex-shrink-0 text-slate-400 shadow-xs">
+                                  <Tv className="w-4 h-4" />
+                                </div>
+                              )}
                               <div className="min-w-0">
                                 <p className="text-xs font-bold text-slate-800 flex items-center gap-1.5 truncate">
                                   {ch.name}
@@ -2722,12 +2709,18 @@ export default function App() {
                       {/* Sub header for channel detail view */}
                       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 pb-4 border-b border-slate-100">
                         <div className="flex items-center gap-3">
-                          <img 
-                            src={selectedChannel.logo} 
-                            alt="logo" 
-                            className="w-10 h-10 rounded-xl object-contain bg-slate-50 border p-1"
-                            onError={(e)=>{ (e.target as HTMLImageElement).src="https://images.unsplash.com/photo-1598257006458-087169a1f08d?auto=format&fit=crop&w=48&h=48&q=80" }}
-                          />
+                          {selectedChannel.logo ? (
+                              <img 
+                                src={selectedChannel.logo} 
+                                alt="logo" 
+                                className="w-10 h-10 rounded-xl object-contain bg-slate-50 border border-slate-100 p-1 shadow-sm" 
+                                onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
+                              />
+                            ) : (
+                              <div className="w-10 h-10 rounded-xl bg-slate-50 border border-slate-200 flex items-center justify-center text-slate-400 shadow-sm">
+                                <Tv className="w-5 h-5" />
+                              </div>
+                            )}
                           <div>
                             <div className="flex items-center gap-2">
                               <h3 className="font-bold text-slate-800 text-sm leading-tight">{selectedChannel.name}</h3>
