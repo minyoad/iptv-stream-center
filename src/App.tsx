@@ -778,7 +778,7 @@ export default function App() {
       if (res.ok) {
         const data = await res.json();
         setAutoCreateChannel(data.autoCreateChannel !== false);
-        showFeedback("success", `全局设置已更新：自动同步时${val ? "允许" : "静默禁止"}新建频道`);
+        showFeedback("success", `全局设置已更新：导入与同步时${val ? "允许" : "静默禁止"}新建频道、分组与分类`);
       } else {
         showFeedback("error", "更新全局设置失败");
       }
@@ -3961,10 +3961,10 @@ export default function App() {
 
                 <div className="flex items-center justify-between bg-slate-50 p-4 rounded-xl border border-slate-100 hover:bg-slate-100/50 transition">
                   <div className="flex-1 pr-4">
-                    <span className="font-bold text-slate-700 text-xs block">允许在自动同步时创建新频道</span>
+                    <span className="font-bold text-slate-700 text-xs block">允许在导入与自动同步时创建新频道、分组与分类</span>
                     <span className="text-[11px] text-slate-400 mt-0.5 block leading-relaxed">
-                      开启时：拉取订阅源后，若发现未录入的频道名称，将被自动生成并分类；<br />
-                      关闭时：不创建任何新频道，只对系统里已被添加或存在的现有频道，维护更新其对应的直播源线路。
+                      开启时：导入文件或同步订阅源时，若发现未录入的频道或分组分类，将被自动创建生成；<br />
+                      关闭时：静默禁止创建新频道、新分组与新分类，仅对系统里已存在的频道匹配更新其直播源线路。
                     </span>
                   </div>
                   <div className="relative flex items-center shrink-0">

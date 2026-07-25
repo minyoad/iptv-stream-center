@@ -1673,13 +1673,17 @@ async function performSync(config: SyncConfig, force = false) {
           for (const catName of catNames) {
             let existingGroup = groups.find(g => g.name.toLowerCase() === catName.toLowerCase());
             if (!existingGroup) {
-              existingGroup = {
-                id: "g_" + Math.random().toString(36).substring(2, 10),
-                name: catName,
-              };
-              groups.push(existingGroup);
+              if (autoCreateChannel) {
+                existingGroup = {
+                  id: "g_" + Math.random().toString(36).substring(2, 10),
+                  name: catName,
+                };
+                groups.push(existingGroup);
+                matchedGroupIds.push(existingGroup.id);
+              }
+            } else {
+              matchedGroupIds.push(existingGroup.id);
             }
-            matchedGroupIds.push(existingGroup.id);
           }
 
           // Find standard template/alias group from default aliases
@@ -1782,13 +1786,17 @@ async function performSync(config: SyncConfig, force = false) {
           for (const catName of catNames) {
             let existingGroup = groups.find(g => g.name.toLowerCase() === catName.toLowerCase());
             if (!existingGroup) {
-              existingGroup = {
-                id: "g_" + Math.random().toString(36).substring(2, 10),
-                name: catName,
-              };
-              groups.push(existingGroup);
+              if (autoCreateChannel) {
+                existingGroup = {
+                  id: "g_" + Math.random().toString(36).substring(2, 10),
+                  name: catName,
+                };
+                groups.push(existingGroup);
+                matchedGroupIds.push(existingGroup.id);
+              }
+            } else {
+              matchedGroupIds.push(existingGroup.id);
             }
-            matchedGroupIds.push(existingGroup.id);
           }
 
           const stdInfo = findAliasTemplate(name);
@@ -2970,13 +2978,17 @@ async function startServer() {
             for (const catName of catNames) {
               let existingGroup = groups.find((g) => g.name.toLowerCase() === catName.toLowerCase());
               if (!existingGroup) {
-                existingGroup = {
-                  id: "g_" + Math.random().toString(36).substring(2, 10),
-                  name: catName,
-                };
-                groups.push(existingGroup);
+                if (autoCreateChannel) {
+                  existingGroup = {
+                    id: "g_" + Math.random().toString(36).substring(2, 10),
+                    name: catName,
+                  };
+                  groups.push(existingGroup);
+                  matchedGroupIds.push(existingGroup.id);
+                }
+              } else {
+                matchedGroupIds.push(existingGroup.id);
               }
-              matchedGroupIds.push(existingGroup.id);
             }
 
             const stdInfo = findAliasTemplate(currentInfo.name);
@@ -2990,6 +3002,10 @@ async function startServer() {
             );
 
             if (!channel) {
+              if (!autoCreateChannel) {
+                currentInfo = null;
+                continue;
+              }
               const cleanName = stdInfo ? stdInfo.templateName : currentInfo.name;
               const cleanAliases = stdInfo
                 ? Array.from(new Set([cleanName, currentInfo.name, ...stdInfo.aliases]))
@@ -3061,13 +3077,17 @@ async function startServer() {
             for (const catName of catNames) {
               let existingGroup = groups.find((g) => g.name.toLowerCase() === catName.toLowerCase());
               if (!existingGroup) {
-                existingGroup = {
-                  id: "g_" + Math.random().toString(36).substring(2, 10),
-                  name: catName,
-                };
-                groups.push(existingGroup);
+                if (autoCreateChannel) {
+                  existingGroup = {
+                    id: "g_" + Math.random().toString(36).substring(2, 10),
+                    name: catName,
+                  };
+                  groups.push(existingGroup);
+                  matchedGroupIds.push(existingGroup.id);
+                }
+              } else {
+                matchedGroupIds.push(existingGroup.id);
               }
-              matchedGroupIds.push(existingGroup.id);
             }
 
             const stdInfo = findAliasTemplate(name);
@@ -3081,6 +3101,9 @@ async function startServer() {
             );
 
             if (!channel) {
+              if (!autoCreateChannel) {
+                continue;
+              }
               const cleanName = stdInfo ? stdInfo.templateName : name;
               const cleanAliases = stdInfo
                 ? Array.from(new Set([cleanName, name, ...stdInfo.aliases]))
