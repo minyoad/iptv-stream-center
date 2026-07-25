@@ -1319,16 +1319,22 @@ export default function App() {
   };
 
   const runClientSideProbeTest = async () => {
-    let listToTest = selectedGlobalSourceIds.length > 0
-      ? filteredGlobalSources.filter((s) => selectedGlobalSourceIds.includes(s.id))
-      : filteredGlobalSources;
-
-    if (clientTestOnlyActive) {
-      listToTest = listToTest.filter((s) => s.status === "active" || s.status === "unknown" || s.status === "checking");
+    // Client speed test runs independently of UI search filters/selection
+    // Dynamically fetch the matching target ISP + BGP/多线/未知 sources directly from backend
+    let listToTest: any[] = [];
+    try {
+      const queryUrl = `/api/sources/client-test-list?isp=${encodeURIComponent(clientTestIsp)}&province=${encodeURIComponent(clientTestProvince)}&onlyActive=${clientTestOnlyActive}`;
+      const res = await fetch(queryUrl);
+      if (res.ok) {
+        const data = await res.json();
+        listToTest = data.sources || [];
+      }
+    } catch (e) {
+      console.error("无法拉取客户端代测线路清单:", e);
     }
 
     if (listToTest.length === 0) {
-      showFeedback("info", "当前匹配的可测速线路为空 (如果是首次集成，请先导入直播源)");
+      showFeedback("info", `当前 [${clientTestIsp}] 归属及 BGP/多线 可测线路为空，请确认数据库中已包含直播源`);
       return;
     }
 
@@ -1355,24 +1361,66 @@ export default function App() {
         let status: "active" | "inactive" = "inactive";
         let latency = 9999;
 
-        try {
-          // Bypassing cors errors for active checking
-          await fetch(item.url, {
-            method: "GET",
-            mode: "no-cors",
-            cache: "no-cache",
-            signal: controller.signal
-          });
-          clearTimeout(timer);
-          latency = Date.now() - startTime;
-          status = "active";
-        } catch (err: any) {
-          clearTimeout(timer);
-          // If the request was aborted, it means true offline/timeout.
-          // But if error is raised due to CORS restriction, it means the host responded fine!
-          if (err && err.name !== "AbortError") {
+        const urlLower = item.url.trim().toLowerCase();
+        const isNonHttpScheme = 
+          urlLower.startsWith("rtsp://") || 
+          urlLower.startsWith("rtmp://") || 
+          urlLower.startsWith("udp://") || 
+          urlLower.startsWith("rtp://") ||
+          urlLower.startsWith("p2p://");
+
+        if (isNonHttpScheme) {
+          // Special Handling for RTSP / RTMP / UDP in Browser DOM Probe:
+          // Browsers cannot open raw RTSP/RTMP sockets via fetch().
+          // Try HTTP fallback port (e.g. 554/1935/80) probe to test TCP connectivity without TypeError false-positives
+          let fallbackUrl = "";
+          if (urlLower.startsWith("rtsp://")) {
+            fallbackUrl = item.url.replace(/^rtsp:\/\//i, "http://");
+          } else if (urlLower.startsWith("rtmp://")) {
+            fallbackUrl = item.url.replace(/^rtmp:\/\//i, "http://");
+          } else {
+            fallbackUrl = item.url.replace(/^(udp|rtp|p2p):\/\//i, "http://");
+          }
+
+          try {
+            await fetch(fallbackUrl, {
+              method: "GET",
+              mode: "no-cors",
+              cache: "no-cache",
+              signal: controller.signal
+            });
+            clearTimeout(timer);
             latency = Date.now() - startTime;
             status = "active";
+          } catch (err: any) {
+            clearTimeout(timer);
+            // Ignore AbortError (timeout) or TypeError (unsupported scheme in browser)
+            if (err && err.name !== "AbortError" && err.name !== "TypeError") {
+              latency = Date.now() - startTime;
+              status = "active";
+            } else {
+              status = "inactive";
+            }
+          }
+        } else {
+          // Standard HTTP / HTTPS / HLS / FLV probe
+          try {
+            await fetch(item.url, {
+              method: "GET",
+              mode: "no-cors",
+              cache: "no-cache",
+              signal: controller.signal
+            });
+            clearTimeout(timer);
+            latency = Date.now() - startTime;
+            status = "active";
+          } catch (err: any) {
+            clearTimeout(timer);
+            // CORS error indicates the target HTTP stream server is alive and responding!
+            if (err && err.name !== "AbortError" && err.name !== "TypeError") {
+              latency = Date.now() - startTime;
+              status = "active";
+            }
           }
         }
 
@@ -1395,7 +1443,7 @@ export default function App() {
     await Promise.all(pool);
 
     setIsClientTesting(false);
-    showFeedback("success", `本地局域网探针测速完成！共评估出 ${resultsTemp.filter(r => r.status === "active").length} 条活跃源。请点按 [同步本地评估报告到云端] 按钮使生效！`);
+    showFeedback("success", `[${clientTestIsp} + BGP/多线] 探针测速完成！评估出 ${resultsTemp.filter(r => r.status === "active").length} 条可用源，可点按 [同步评估报告] 上报！`);
   };
 
   const submitClientSideProbeTest = async () => {
@@ -3325,9 +3373,7 @@ export default function App() {
                                 className="flex-1 py-2.5 bg-sky-600 hover:bg-sky-700 text-white font-extrabold text-[11px] rounded-xl transition cursor-pointer flex items-center justify-center gap-1.5 shrink-0"
                               >
                                 <Play className="w-3.5 h-3.5" />
-                                {selectedGlobalSourceIds.length > 0 
-                                  ? `运行已选 ${selectedGlobalSourceIds.length} 条代测` 
-                                  : "启动当前匹配项代测"}
+                                `启动 [${clientTestIsp} + BGP多线] 全量代测`
                               </button>
                               
                               {clientTestResults.length > 0 && (
@@ -3381,17 +3427,26 @@ export default function App() {
 
                       <div className="space-y-3.5 text-slate-300 leading-relaxed font-sans shrink-0">
                         <p className="text-xs font-semibold">
-                          我们提供高标准的开放 API 接口。任何外界硬件探针、机顶盒或定时脚本（如 Cron 命令行代测、Kodi 测速插件、TvBox 本地测速包）均可直接批量向该网关发送性能报告，自动重洗对应的健康度和延迟值！
+                          我们提供高标准的开放 API 接口。任何外界硬件探针、机顶盒或定时脚本（如 Cron 命令行代测、Kodi 测速插件、TvBox 本地测速包）均可直接批量向该网关发送性能报告。
+【协议特殊处理规则】：
+1. HTTP/HTTPS/HLS/FLV：利用探针无跨域限制探针直测并计算 RTT 响应延时。
+2. RTSP / RTMP：内置 RTSP(端口554) 与 RTMP(端口1935) 智能 TCP Socket 握手机制与协议端口转换降级探测，解决浏览器原生沙箱屏蔽与 TypeError 误判痛点。
                         </p>
 
                         <div className="space-y-1 bg-slate-950 p-3 rounded-xl border border-slate-800 text-[11px] font-mono">
-                          <span className="text-emerald-400 font-bold block pb-1">1. 接口网关地址 (URI Endpoint)：</span>
+                          <span className="text-emerald-400 font-bold block pb-1">1. 获取待测源清单接口 (Get Target Test Sources)：</span>
+                          <span className="text-white font-extrabold pr-2">GET</span>
+                          <span className="text-indigo-300 select-all">/api/sources/client-test-list?isp=中国电信&province=广东&onlyActive=true</span>
+                          <p className="text-[10.5px] text-slate-400 pt-1 font-sans">自动返回匹配指定运营商 (如中国电信) + 所有 BGP/多线/未知 专线的全量线路，不受管理后台 UI 筛选状态影响。</p>
+                        </div>
+                        <div className="space-y-1 bg-slate-950 p-3 rounded-xl border border-slate-800 text-[11px] font-mono">
+                          <span className="text-emerald-400 font-bold block pb-1">2. 提交测速结果报告接口 (Submit Test Report)：</span>
                           <span className="text-white font-extrabold pr-2">POST</span>
                           <span className="text-indigo-300 select-all">/api/sources/client-test-results</span>
                         </div>
 
                         <div className="space-y-1 bg-slate-950 p-3 rounded-xl border border-slate-800 text-[11px] font-mono">
-                          <span className="text-emerald-400 font-bold block pb-1">2. 协议 Payload 结构体 (Request Body JSON Schema)：</span>
+                          <span className="text-emerald-400 font-bold block pb-1">3. 协议 Payload 结构体 (Request Body JSON Schema)：</span>
                           <pre className="text-indigo-300 leading-snug overflow-x-auto select-all text-[10.5px]">
 {`{
   "clientIsp": "中国电信",      // [必填] 本次测速探针网络的归属运营商名称
@@ -3409,7 +3464,7 @@ export default function App() {
                         </div>
 
                         <div className="space-y-2 bg-slate-950 p-3 rounded-xl border border-slate-800 text-[11px] font-mono">
-                          <span className="text-emerald-400 font-bold block pb-1">3. 云端返回体样例 (Response Code & Format)：</span>
+                          <span className="text-emerald-400 font-bold block pb-1">4. 云端返回体样例 (Response Code & Format)：</span>
                           <span className="text-slate-400 leading-snug font-sans block">完成更新后返回 200 OK 实有更新数：</span>
                           <span className="text-emerald-300 block select-all">{`{"success": true, "count": 1}`}</span>
                         </div>

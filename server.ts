@@ -980,10 +980,14 @@ function parseIspAndProvince(name: string): { province: string; isp: string } {
 async function testSingleUrl(url: string, timeoutMs: number = 3000): Promise<{ status: "active" | "inactive"; latency: number }> {
   const startTime = Date.now();
 
-  // Support RTSP stream checks using standard TCP port check
-  if (url.startsWith("rtsp://")) {
+  // Support RTSP, RTMP, RTP stream checks using standard TCP port check
+  const urlLower = url.toLowerCase();
+  if (urlLower.startsWith("rtsp://") || urlLower.startsWith("rtmp://") || urlLower.startsWith("rtp://")) {
     try {
-      const withoutProtocol = url.substring(7);
+      const isRtmp = urlLower.startsWith("rtmp://");
+      const defaultPort = isRtmp ? 1935 : 554;
+      const protocolLength = isRtmp ? 7 : 7; // Both rtsp:// and rtmp:// are 7 chars
+      const withoutProtocol = url.substring(protocolLength);
       const slNameIndex = withoutProtocol.indexOf("/");
       const hostPortPart = slNameIndex === -1 ? withoutProtocol : withoutProtocol.substring(0, slNameIndex);
       
@@ -991,7 +995,7 @@ async function testSingleUrl(url: string, timeoutMs: number = 3000): Promise<{ s
       const endpointPart = atIndex === -1 ? hostPortPart : hostPortPart.substring(atIndex + 1);
       
       let host = "";
-      let port = 554; // default RTSP port
+      let port = defaultPort;
       
       if (endpointPart.startsWith("[")) {
         const closingBracket = endpointPart.indexOf("]");
@@ -999,7 +1003,7 @@ async function testSingleUrl(url: string, timeoutMs: number = 3000): Promise<{ s
           host = endpointPart.substring(1, closingBracket);
           const remaining = endpointPart.substring(closingBracket + 1);
           if (remaining.startsWith(":")) {
-            port = parseInt(remaining.substring(1), 10) || 554;
+            port = parseInt(remaining.substring(1), 10) || defaultPort;
           }
         } else {
           host = endpointPart;
@@ -1008,13 +1012,12 @@ async function testSingleUrl(url: string, timeoutMs: number = 3000): Promise<{ s
         const colonIndex = endpointPart.lastIndexOf(":");
         if (colonIndex !== -1) {
           host = endpointPart.substring(0, colonIndex);
-          port = parseInt(endpointPart.substring(colonIndex + 1), 10) || 554;
+          port = parseInt(endpointPart.substring(colonIndex + 1), 10) || defaultPort;
         } else {
           host = endpointPart;
-          port = 554;
+          port = defaultPort;
         }
       }
-
       return new Promise((resolve) => {
         const socket = net.connect({
           host,
@@ -1025,14 +1028,11 @@ async function testSingleUrl(url: string, timeoutMs: number = 3000): Promise<{ s
           socket.destroy();
           resolve({ status: "active", latency });
         });
-
         socket.on("error", () => {
           socket.destroy();
           resolve({ status: "inactive", latency: Date.now() - startTime });
         });
-
-        socket.on("timeout", () => {
-          socket.destroy();
+        socket.on("timeout", () => {          socket.destroy();
           resolve({ status: "inactive", latency: Date.now() - startTime });
         });
       });
@@ -2078,6 +2078,7 @@ async function startServer() {
       req.path === "/api/auth/status" ||
       req.path === "/api/auth/verify" ||
       req.path === "/api/sources/client-test-results" ||
+      req.path === "/api/sources/client-test-list" ||
       (req.path === "/api/channels" && req.method === "GET");
       
     if (isPublicPath) {
@@ -3385,6 +3386,61 @@ async function startServer() {
         total: targetSources.length,
         status: "running"
       }
+    });
+  });
+
+    // Endpoint to fetch test list for client/browser probes, filtered by ISP + BGP/多线/未知, independent of UI filters
+  app.get("/api/sources/client-test-list", (req, res) => {
+    const clientIsp = ((req.query.isp as string) || "").trim();
+    const clientProvince = ((req.query.province as string) || "").trim();
+    const onlyActive = req.query.onlyActive === "true";
+
+    const targetSources: any[] = [];
+
+    channels.forEach((channel) => {
+      if (!channel.sources) return;
+      channel.sources.forEach((s) => {
+        if (s.isolated) return;
+
+        if (onlyActive && s.status !== "active" && s.status !== "unknown" && s.status !== "checking") {
+          return;
+        }
+
+        let isIspMatch = false;
+        if (!clientIsp || clientIsp === "all" || clientIsp === "全部") {
+          isIspMatch = true;
+        } else {
+          const sIsp = (s.isp || "").toLowerCase();
+          const cIsp = clientIsp.toLowerCase();
+
+          if (!sIsp || sIsp === "未知" || sIsp.includes("bgp") || sIsp.includes("多线") || sIsp.includes("混合") || sIsp.includes("全网")) {
+            isIspMatch = true;
+          } else if (sIsp.includes(cIsp) || cIsp.includes(sIsp)) {
+            isIspMatch = true;
+          }
+        }
+
+        if (isIspMatch) {
+          targetSources.push({
+            id: s.id,
+            channelId: channel.id,
+            channelName: channel.name,
+            url: s.url,
+            isp: s.isp || "未知",
+            province: s.province || "全国",
+            status: s.status || "unknown",
+            latency: s.latency
+          });
+        }
+      });
+    });
+
+    res.json({
+      success: true,
+      count: targetSources.length,
+      clientIsp: clientIsp || "全部",
+      clientProvince: clientProvince || "全国",
+      sources: targetSources
     });
   });
 
