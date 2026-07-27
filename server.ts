@@ -2929,6 +2929,29 @@ async function startServer() {
     res.json({ success: true, count: updatedCount });
   });
 
+  // Global batch isolate/restore live sources
+  app.post("/api/sources/global-batch-isolate", (req, res) => {
+    const { sourceIds, isolated } = req.body;
+    if (!Array.isArray(sourceIds) || sourceIds.length === 0) {
+      return res.status(400).json({ error: "请提供要操作的直播线路 ID 列表" });
+    }
+
+    let updatedCount = 0;
+    channels.forEach((c) => {
+      c.sources.forEach((s) => {
+        if (sourceIds.includes(s.id)) {
+          s.isolated = !!isolated;
+          updatedCount++;
+        }
+      });
+    });
+
+    if (updatedCount > 0) {
+      saveData();
+    }
+    res.json({ success: true, count: updatedCount });
+  });
+
   // Global batch delete live sources
   app.post("/api/sources/global-batch-delete", (req, res) => {
     const { sourceIds } = req.body;

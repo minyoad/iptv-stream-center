@@ -1229,6 +1229,38 @@ export default function App() {
     }
   };
 
+  const handleGlobalBatchIsolate = (isolate: boolean) => {
+    if (selectedGlobalSourceIds.length === 0) {
+      showFeedback("info", "请先选择需要操作的线路");
+      return;
+    }
+    const actionName = isolate ? "批量隔离" : "批量恢复";
+    triggerConfirm(
+      `${actionName}全球直播线路`,
+      `确定要将选中的 ${selectedGlobalSourceIds.length} 条播放线路${actionName}吗？`,
+      async () => {
+        try {
+          const res = await fetch("/api/sources/global-batch-isolate", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ sourceIds: selectedGlobalSourceIds, isolated: isolate })
+          });
+          if (res.ok) {
+            const data = await res.json();
+            showFeedback("success", `成功跨频道${actionName}了 ${data.count} 条播放线路`);
+            setSelectedGlobalSourceIds([]);
+            await fetchData();
+          } else {
+            const err = await res.json();
+            showFeedback("error", err.error || `${actionName}失败`);
+          }
+        } catch (e) {
+          showFeedback("error", "网络超时或连接异常");
+        }
+      }
+    );
+  };
+
   const handleGlobalBatchDelete = () => {
     if (selectedGlobalSourceIds.length === 0) {
       showFeedback("info", "请先选择需要批量删除的线路");
@@ -3597,6 +3629,18 @@ export default function App() {
                         >
                           <Zap className="w-3.5 h-3.5" />
                           对齐多线程测速
+                        </button>
+                        <button
+                          onClick={() => handleGlobalBatchIsolate(true)}
+                          className="bg-orange-600 hover:bg-orange-700 text-white text-xs font-bold px-4 py-2.5 rounded-xl transition shadow-md shadow-orange-500/10 cursor-pointer flex items-center gap-1.5"
+                        >
+                          批量软隔离
+                        </button>
+                        <button
+                          onClick={() => handleGlobalBatchIsolate(false)}
+                          className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold px-4 py-2.5 rounded-xl transition shadow-md shadow-emerald-500/10 cursor-pointer flex items-center gap-1.5"
+                        >
+                          批量取消隔离
                         </button>
                         <button
                           onClick={handleGlobalBatchDelete}

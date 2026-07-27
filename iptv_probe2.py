@@ -199,66 +199,87 @@ async def main():
 
     # 首要物理扫描底层依赖
     ff_engine = detect_ff_player()
-
     connector = aiohttp.TCPConnector(ssl=False, limit=50)
+    
+    import urllib.parse
+    
     async with aiohttp.ClientSession(connector=connector) as session:
-        # 拉取在中枢配置的所有线路
-        url = f"{SERVER_BASE_URL}/api/channels?status=testable"
-        logger.info(f"正在从云端拉取配置列表: {url}")
-        try:
-            async with session.get(url, timeout=10) as resp:
-                if resp.status != 200:
-                    logger.error(f"拉取失败 HTTP: {resp.status}")
-                    return
-                channels = await resp.json()
-        except Exception as e:
-            logger.error(f"无法拉取配置: {e}")
-            return
-
-        sources_to_test = []
-        for channel in channels:
-            ch_id = channel.get("id")
-            for src in channel.get("sources", []):
-                sources_to_test.append((src.get("id"), ch_id, src.get("url")))
-
-        if not sources_to_test:
-            logger.warning("中枢系统上尚无可测试物理流线路。")
-            return
-
-        logger.info(f"成功导入 {len(sources_to_test)} 条线路。下发多通道多协程测速中...")
-
-        # 启动一二段管道模型
-        semaphore = asyncio.Semaphore(CONCURRENCY_LIMIT)
-        tasks = [
-            process_test_pipeline(session, semaphore, ff_engine, src_id, ch_id, url)
-            for src_id, ch_id, url in sources_to_test
-        ]
+        page = 1
+        limit = 50
         
-        # 搜集整体反馈
-        final_reports = await asyncio.gather(*tasks)
-
-        # 打包回传给主服务器，数据库将根据上报数据进行持久化和前端更新
-        active_count = sum(1 for r in final_reports if r["status"] == "active")
-        logger.info(f"=== 百川归海 · 测速测写完毕 ===")
-        logger.info(f"通过多维度校验之完美源: {active_count} 条 | 弃用黑库源: {len(final_reports) - active_count} 条")
-
-        # 提交上报
-        report_url = f"{SERVER_BASE_URL}/api/sources/client-test-results"
-        payload = {
-            "clientIsp": CLIENT_ISP,
-            "clientProvince": CLIENT_PROVINCE,
-            "results": final_reports
-        }
-        try:
-            async with session.post(report_url, json=payload, timeout=20) as post_resp:
-                if post_resp.status == 200:
-                    res_body = await post_resp.json()
-                    logger.info(f"🚀 【数据完全落地】回传在云端服务器重洗成功！热生效数量: {res_body.get('count', 0)} 条")
+        while True:
+            # 拉取在中枢配置的所有线路 (分批)
+            encoded_isp = urllib.parse.quote(CLIENT_ISP)
+            encoded_prov = urllib.parse.quote(CLIENT_PROVINCE)
+            url = f"{SERVER_BASE_URL}/api/sources/client-test-list?page={page}&limit={limit}&isp={encoded_isp}&province={encoded_prov}"
+            logger.info(f"正在从云端拉取测速列表 (第 {page} 页): {url}")
+            
+            try:
+                async with session.get(url, timeout=10) as resp:
+                    if resp.status != 200:
+                        logger.error(f"拉取失败 HTTP: {resp.status}")
+                        break
+                    data = await resp.json()
+            except Exception as e:
+                logger.error(f"无法拉取配置: {e}")
+                break
+                
+            sources = data.get("sources", [])
+            if not sources:
+                if page == 1:
+                    logger.warning("中枢系统上尚无可测试物理流线路。")
                 else:
-                    logger.error(f"上报被拒绝，HTTP: {post_resp.status}")
-        except Exception as ex:
-            logger.error(f"回传网络中断: {ex}")
+                    logger.warning(f"第 {page} 页无可测试物理流线路，测速结束。")
+                break
+                
+            sources_to_test = []
+            for src in sources:
+                sources_to_test.append((src.get("id"), src.get("channelId"), src.get("url")))
+                
+            if not sources_to_test:
+                break
+                
+            logger.info(f"成功导入第 {page} 页的 {len(sources_to_test)} 条线路。下发多通道多协程测速中...")
 
+            # 启动一二段管道模型
+            semaphore = asyncio.Semaphore(CONCURRENCY_LIMIT)
+            tasks = [
+                process_test_pipeline(session, semaphore, ff_engine, src_id, ch_id, test_url)
+                for src_id, ch_id, test_url in sources_to_test
+            ]
+            
+            # 搜集整体反馈
+            final_reports = await asyncio.gather(*tasks)
+
+            # 打包回传给主服务器，数据库将根据上报数据进行持久化和前端更新
+            active_count = sum(1 for r in final_reports if r["status"] == "active")
+            
+            logger.info(f"=== 第 {page} 页 测速测写完毕 ===")
+            logger.info(f"通过多维度校验之完美源: {active_count} 条 | 弃用黑库源: {len(final_reports) - active_count} 条")
+
+            # 提交上报
+            report_url = f"{SERVER_BASE_URL}/api/sources/client-test-results"
+            payload = {
+                "clientIsp": CLIENT_ISP,
+                "clientProvince": CLIENT_PROVINCE,
+                "results": final_reports
+            }
+            try:
+                async with session.post(report_url, json=payload, timeout=20) as post_resp:
+                    if post_resp.status == 200:
+                        res_body = await post_resp.json()
+                        logger.info(f"🚀 【数据完全落地】第 {page} 页回传在云端服务器重洗成功！热生效数量: {res_body.get('count', 0)} 条")
+                    else:
+                        logger.error(f"第 {page} 页上报被拒绝，HTTP: {post_resp.status}")
+            except Exception as ex:
+                logger.error(f"第 {page} 页回传网络中断: {ex}")
+                
+            # 分页逻辑
+            total = data.get("total", 0)
+            if page * limit >= total:
+                logger.info("所有页面测速完毕。")
+                break
+            page += 1
 
 if __name__ == "__main__":
     asyncio.run(main())
