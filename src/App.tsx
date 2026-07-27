@@ -4305,6 +4305,16 @@ export default function App() {
                       <label>单频道最大备线输出限制 (Number limit)</label>
                       <input 
                         type="number"
+                        value={exportParams.maxPerChannel}
+                        onChange={(e) => setExportParams({...exportParams, maxPerChannel: e.target.value})}
+                        placeholder="默认 15"
+                        className="w-full text-xs p-2.5 border border-slate-200 rounded-xl focus:outline-none focus:border-indigo-500"
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <label>全局总条数限制 (Global limit)</label>
+                      <input 
+                        type="number"
                         value={exportParams.limit}
                         onChange={(e) => setExportParams({...exportParams, limit: e.target.value})}
                         placeholder="不限制"
@@ -4322,9 +4332,30 @@ export default function App() {
                     {/* Live active dynamic preview params */}
                     {Object.values(exportParams).some(Boolean) && (
                       <div className="bg-amber-50/40 p-3 rounded-lg border border-amber-100 text-[10px] text-amber-900 leading-none">
-                        当前已应用过滤条件: {exportParams.isp && `[运营商:${exportParams.isp}]`} {exportParams.status && `[高可用:${exportParams.status}]`} {exportParams.province && `[省份:${exportParams.province}]`} {exportParams.limit && `[数量限制:${exportParams.limit}]`}
+                        当前已应用过滤条件: {exportParams.isp && `[运营商:${exportParams.isp}]`} {exportParams.status && `[高可用:${exportParams.status}]`} {exportParams.province && `[省份:${exportParams.province}]`} {exportParams.maxPerChannel && `[单频道备线:${exportParams.maxPerChannel}]`} {exportParams.limit && `[全局数量限制:${exportParams.limit}]`}
                       </div>
                     )}
+
+                    {/* Play API Dynamic URL */}
+                    <div className="p-4 rounded-xl border border-slate-100 bg-slate-50/50 space-y-2">
+                      <div className="flex justify-between items-center text-xs">
+                        <span className="font-bold text-slate-800 flex items-center">
+                          <Play className="w-4 h-4 mr-1.5 text-emerald-500" /> 独立频道播放接口 (Play API)
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className="flex-1 bg-white border border-slate-150 p-2.5 rounded-xl font-mono text-[10px] text-slate-600 truncate">
+                          {getFullHostUrl()}/api/play/CCTV-1{getExportQueries()}
+                        </span>
+                        <button 
+                          onClick={() => copyTextToClipboard(`${getFullHostUrl()}/api/play/CCTV-1${getExportQueries()}`)}
+                          className="bg-slate-900 hover:bg-slate-800 text-slate-50 p-2.5 rounded-xl transition flex-shrink-0 cursor-pointer"
+                        >
+                          <Copy className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                      <p className="text-[10px] text-slate-400">适配：壳子播放器、DIY客户端等。默认返回指定省份和ISP(或自动识别)下优先级最高且连通性最佳的单一原始直播源链接文本（示例以 CCTV-1 为例，可替换为任意频道名）。</p>
+                    </div>
 
                     {/* M3U Dynamic API Row */}
                     <div className="p-4 rounded-xl border border-slate-100 bg-slate-50/50 space-y-2">
@@ -4350,7 +4381,7 @@ export default function App() {
                           <Copy className="w-3.5 h-3.5" />
                         </button>
                       </div>
-                      <p className="text-[10px] text-slate-400">适配：Kodi, PotPlayer, Perfect Player 等全局播放器。</p>
+                      <p className="text-[10px] text-slate-400">适配：Kodi, PotPlayer, Perfect Player 等全局播放器。<br/>(导出时，系统会自动智能测算，每个频道按连通性和优先级生成至多 {exportParams.maxPerChannel || 15} 条优质可用线路，避免列表臃肿或死链过多)</p>
                     </div>
 
                     {/* TVBox TXT Simple Text Playlist API Rows */}
@@ -4377,7 +4408,7 @@ export default function App() {
                           <Copy className="w-3.5 h-3.5" />
                         </button>
                       </div>
-                      <p className="text-[10px] text-slate-400">适配：各类 TVBox 电视盒子客户端，直接通过短连接或源调取。</p>
+                      <p className="text-[10px] text-slate-400">适配：各类 TVBox 电视盒子客户端，直接通过短连接或源调取。<br/>(导出时，系统会自动智能测算，每个频道按连通性和优先级生成至多 {exportParams.maxPerChannel || 15} 条优质可用线路，避免列表臃肿或死链过多)</p>
                     </div>
 
                     {/* XMLTV XML EPG Timeline Guide row info */}

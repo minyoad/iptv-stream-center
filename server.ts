@@ -3996,7 +3996,7 @@ ${JSON.stringify(scoredList.map(c => ({ epgId: c.epgId, names: c.displayNames, s
   // Example usage: http://localhost:3000/api/export/m3u?isp=电信&status=active
   // Example usage: http://localhost:3000/api/export/txt?province=北京
   app.get("/api/export/m3u", async (req, res) => {
-    const { category, isp, province, status, limit, ip, clientIp } = req.query;
+    const { category, isp, province, status, limit, maxPerChannel: queryMaxPerChannel, ip, clientIp } = req.query;
 
     let targetProvince = province ? String(province) : "";
     let targetIsp = isp ? String(isp) : "";
@@ -4033,6 +4033,7 @@ ${JSON.stringify(scoredList.map(c => ({ epgId: c.epgId, names: c.displayNames, s
 
     let count = 0;
     const maxLimit = limit ? Number(limit) : Infinity;
+    const maxPerChannel = queryMaxPerChannel ? Number(queryMaxPerChannel) : 15;
 
     const orderedGroups = [...groups, { id: "g_other", name: "其它频道" }];
     orderedGroups.forEach((group) => {
@@ -4056,18 +4057,27 @@ ${JSON.stringify(scoredList.map(c => ({ epgId: c.epgId, names: c.displayNames, s
           processedSources = processedSources.filter(source => source.province === String(province));
         }
 
-        processedSources.forEach((source) => {
+        // Prioritize active and lowest latency
+        processedSources.sort((a, b) => {
+          const statusWeightA = a.status === "active" ? 3 : (a.status === "inactive" ? 1 : 2);
+          const statusWeightB = b.status === "active" ? 3 : (b.status === "inactive" ? 1 : 2);
+          if (statusWeightA !== statusWeightB) return statusWeightB - statusWeightA;
+          const latencyA = a.latency && a.latency > 0 ? a.latency : 9999;
+          const latencyB = b.latency && b.latency > 0 ? b.latency : 9999;
+          return latencyA - latencyB;
+        });
+
+        // 限制每个频道最大输出数量 (Limit max sources per channel)
+        const sourcesToExport = processedSources.slice(0, maxPerChannel);
+        sourcesToExport.forEach(bestSource => {
           if (count >= maxLimit) return;
-          if (status && source.status !== String(status)) return;
+          if (status && bestSource.status !== String(status)) return;
 
-          // Extra details label
-          // (User requested to remove suffix with ISP/Province from M3U export)
           const channelDisplayName = channel.name;
-
           playlistRows.push(
             `#EXTINF:-1 tvg-id="${channel.epgId}" tvg-name="${channel.name}" tvg-logo="${channel.logo}" group-title="${groupName}",${channelDisplayName}`
           );
-          playlistRows.push(source.url);
+          playlistRows.push(bestSource.url);
           count++;
         });
       });
@@ -4080,7 +4090,7 @@ ${JSON.stringify(scoredList.map(c => ({ epgId: c.epgId, names: c.displayNames, s
 
   // TXT (TVBox compatible) format
   app.get("/api/export/txt", async (req, res) => {
-    const { category, isp, province, status, limit, ip, clientIp } = req.query;
+    const { category, isp, province, status, limit, maxPerChannel: queryMaxPerChannel, ip, clientIp } = req.query;
 
     let targetProvince = province ? String(province) : "";
     let targetIsp = isp ? String(isp) : "";
@@ -4114,6 +4124,7 @@ ${JSON.stringify(scoredList.map(c => ({ epgId: c.epgId, names: c.displayNames, s
 
     let count = 0;
     const maxLimit = limit ? Number(limit) : Infinity;
+    const maxPerChannel = queryMaxPerChannel ? Number(queryMaxPerChannel) : 15;
 
     const orderedGroups = [...groups, { id: "g_other", name: "其它频道" }];
     orderedGroups.forEach((group) => {
@@ -4136,16 +4147,28 @@ ${JSON.stringify(scoredList.map(c => ({ epgId: c.epgId, names: c.displayNames, s
           processedSources = processedSources.filter(source => source.province === String(province));
         }
 
-        processedSources.forEach((source) => {
+        // Prioritize active and lowest latency
+        processedSources.sort((a, b) => {
+          const statusWeightA = a.status === "active" ? 3 : (a.status === "inactive" ? 1 : 2);
+          const statusWeightB = b.status === "active" ? 3 : (b.status === "inactive" ? 1 : 2);
+          if (statusWeightA !== statusWeightB) return statusWeightB - statusWeightA;
+          const latencyA = a.latency && a.latency > 0 ? a.latency : 9999;
+          const latencyB = b.latency && b.latency > 0 ? b.latency : 9999;
+          return latencyA - latencyB;
+        });
+
+        // 限制每个频道最大输出数量 (Limit max sources per channel)
+        const sourcesToExport = processedSources.slice(0, maxPerChannel);
+        sourcesToExport.forEach(bestSource => {
           if (count >= maxLimit) return;
-          if (status && source.status !== String(status)) return;
+          if (status && bestSource.status !== String(status)) return;
 
           const catName = groupName;
           if (!exportMap.has(catName)) {
             exportMap.set(catName, []);
           }
 
-          const channelDisplayStr = `${channel.name},${source.url}`;
+          const channelDisplayStr = `${channel.name},${bestSource.url}`;
           
           exportMap.get(catName)!.push(channelDisplayStr);
           count++;
@@ -4163,6 +4186,91 @@ ${JSON.stringify(scoredList.map(c => ({ epgId: c.epgId, names: c.displayNames, s
     res.setHeader("Content-Type", "text/plain; charset=utf-8");
     res.setHeader("Content-Disposition", "attachment; filename=\"iptv_custom.txt\"");
     res.send(fileRows.join("\n"));
+  });
+
+  // Dynamic Playback API - returns a single optimized raw URL
+  // Usage: GET /api/play/:channelName?isp=电信&province=广东
+  app.get("/api/play/:channelName", async (req, res) => {
+    try {
+      const channelName = req.params.channelName;
+      const { isp, province } = req.query;
+      
+      let targetProvince = province ? String(province) : "";
+      let targetIsp = isp ? String(isp) : "";
+      
+      // Auto detect client IP Geo if params are missing
+      let resolvedClientIp = "";
+      if (!province && !isp) {
+        if (typeof req.query.ip === "string" && req.query.ip) {
+          resolvedClientIp = req.query.ip;
+        } else if (typeof req.headers["x-forwarded-for"] === "string") {
+          resolvedClientIp = req.headers["x-forwarded-for"].split(",")[0].trim();
+        } else if (Array.isArray(req.headers["x-forwarded-for"])) {
+          resolvedClientIp = req.headers["x-forwarded-for"][0].trim();
+        } else if (typeof req.headers["x-real-ip"] === "string") {
+          resolvedClientIp = req.headers["x-real-ip"].trim();
+        } else {
+          resolvedClientIp = req.socket.remoteAddress || "";
+        }
+        
+        if (resolvedClientIp) {
+          const geo = await getClientIpGeo(resolvedClientIp);
+          targetProvince = geo.province;
+          targetIsp = geo.isp;
+        }
+      }
+      
+      // Normalize search
+      const normalizedQuery = normalizeChannelName(channelName);
+      const channel = channels.find(c => 
+        normalizeChannelName(c.name) === normalizedQuery || 
+        c.alias.some(a => normalizeChannelName(a) === normalizedQuery)
+      );
+
+      if (!channel || !channel.sources || channel.sources.length === 0) {
+        return res.status(404).send("Channel not found or no sources available");
+      }
+      
+      // Filter out isolated sources & filter by ISP via existing helper
+      let processedSources = getPlayableSources(channel.sources, targetIsp, targetProvince);
+      
+      // Prioritize active and lowest latency
+      processedSources.sort((a, b) => {
+        // Status weight: active > checking/unknown > inactive
+        const statusWeightA = a.status === "active" ? 3 : (a.status === "inactive" ? 1 : 2);
+        const statusWeightB = b.status === "active" ? 3 : (b.status === "inactive" ? 1 : 2);
+        if (statusWeightA !== statusWeightB) {
+          return statusWeightB - statusWeightA;
+        }
+        // Latency weight: lower latency is better
+        const latencyA = a.latency && a.latency > 0 ? a.latency : 9999;
+        const latencyB = b.latency && b.latency > 0 ? b.latency : 9999;
+        return latencyA - latencyB;
+      });
+
+      if (processedSources.length === 0) {
+        // Fallback to channel sources just in case ISP filtering was too aggressive
+        processedSources = channel.sources.filter(s => !s.isolated);
+        processedSources.sort((a, b) => {
+          const statusWeightA = a.status === "active" ? 3 : (a.status === "inactive" ? 1 : 2);
+          const statusWeightB = b.status === "active" ? 3 : (b.status === "inactive" ? 1 : 2);
+          if (statusWeightA !== statusWeightB) return statusWeightB - statusWeightA;
+          const latencyA = a.latency && a.latency > 0 ? a.latency : 9999;
+          const latencyB = b.latency && b.latency > 0 ? b.latency : 9999;
+          return latencyA - latencyB;
+        });
+      }
+      
+      if (processedSources.length === 0) {
+         return res.status(404).send("No valid non-isolated sources available");
+      }
+      
+      res.setHeader("Content-Type", "text/plain; charset=utf-8");
+      res.send(processedSources[0].url);
+      
+    } catch (e: any) {
+      res.status(500).send("Error generating play URL: " + e.message);
+    }
   });
 
   // Dynamic EPG XML TV interface
