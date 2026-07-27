@@ -3417,6 +3417,8 @@ async function startServer() {
     const clientIsp = ((req.query.isp as string) || "").trim();
     const clientProvince = ((req.query.province as string) || "").trim();
     const onlyActive = req.query.onlyActive === "true";
+    const limit = req.query.limit ? parseInt(req.query.limit as string) : 0;
+    const page = req.query.page ? parseInt(req.query.page as string) : 1;
 
     const targetSources: any[] = [];
 
@@ -3458,12 +3460,23 @@ async function startServer() {
       });
     });
 
+    const totalCount = targetSources.length;
+    let paginatedSources = targetSources;
+    
+    if (limit > 0) {
+      const startIndex = (page - 1) * limit;
+      paginatedSources = targetSources.slice(startIndex, startIndex + limit);
+    }
+
     res.json({
       success: true,
-      count: targetSources.length,
+      count: paginatedSources.length,
+      total: totalCount,
+      page: limit > 0 ? page : 1,
+      limit: limit > 0 ? limit : totalCount,
       clientIsp: clientIsp || "全部",
       clientProvince: clientProvince || "全国",
-      sources: targetSources
+      sources: paginatedSources
     });
   });
 
