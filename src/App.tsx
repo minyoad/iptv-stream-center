@@ -1049,7 +1049,7 @@ export default function App() {
       const res = await fetch("/api/groups/reorder", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ groupIds: newGroups.map((g) => g.id) }),
+        body: JSON.stringify({ groupIds: newGroups.map((g: Group) => g.id) }),
       });
       if (!res.ok) {
         showFeedback("error", "分组排序保存失败");

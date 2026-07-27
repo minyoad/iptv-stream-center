@@ -1402,10 +1402,39 @@ function sortSourcesByGeo(sources: LiveSource[], clientProvince: string, clientI
       } else {
         score += 1;   // No match
       }
+
+      // Priority bonus for RTSP lines (ISP dedicated high quality streams)
+      if ((s.url || "").trim().toLowerCase().startsWith("rtsp://")) {
+        score += 200;
+      }
+
       return score;
     };
 
     return getScore(b) - getScore(a);
+  });
+}
+
+function sortSourcesForExport(sources: LiveSource[]): LiveSource[] {
+  return [...sources].sort((a, b) => {
+    // 1. Status weight: active (3) > unknown/checking (2) > inactive (1)
+    const statusWeightA = a.status === "active" ? 3 : (a.status === "inactive" ? 1 : 2);
+    const statusWeightB = b.status === "active" ? 3 : (b.status === "inactive" ? 1 : 2);
+    if (statusWeightA !== statusWeightB) {
+      return statusWeightB - statusWeightA;
+    }
+
+    // 2. Protocol weight: RTSP lines get top priority because they are ISP-specific dedicated streams with higher quality
+    const isRtspA = (a.url || "").trim().toLowerCase().startsWith("rtsp://");
+    const isRtspB = (b.url || "").trim().toLowerCase().startsWith("rtsp://");
+    if (isRtspA !== isRtspB) {
+      return isRtspA ? -1 : 1;
+    }
+
+    // 3. Latency weight: lower latency is better
+    const latencyA = a.latency && a.latency > 0 ? a.latency : 9999;
+    const latencyB = b.latency && b.latency > 0 ? b.latency : 9999;
+    return latencyA - latencyB;
   });
 }
 
@@ -3660,7 +3689,7 @@ async function startServer() {
 
   app.get("/api/test-reports/:id", (req, res) => {
     try {
-      const report = db.prepare("SELECT * FROM test_reports WHERE id = ?").get(req.params.id);
+      const report = db.prepare("SELECT * FROM test_reports WHERE id = ?").get(req.params.id) as any;
       if (report) {
         report.details = JSON.parse(report.details);
         res.json(report);
@@ -4197,15 +4226,8 @@ ${JSON.stringify(scoredList.map(c => ({ epgId: c.epgId, names: c.displayNames, s
           processedSources = processedSources.filter(source => source.province === String(province));
         }
 
-        // Prioritize active and lowest latency
-        processedSources.sort((a, b) => {
-          const statusWeightA = a.status === "active" ? 3 : (a.status === "inactive" ? 1 : 2);
-          const statusWeightB = b.status === "active" ? 3 : (b.status === "inactive" ? 1 : 2);
-          if (statusWeightA !== statusWeightB) return statusWeightB - statusWeightA;
-          const latencyA = a.latency && a.latency > 0 ? a.latency : 9999;
-          const latencyB = b.latency && b.latency > 0 ? b.latency : 9999;
-          return latencyA - latencyB;
-        });
+        // Prioritize active, RTSP protocol, and lowest latency
+        processedSources = sortSourcesForExport(processedSources);
 
         // 限制每个频道最大输出数量 (Limit max sources per channel)
         const sourcesToExport = processedSources.slice(0, maxPerChannel);
@@ -4287,15 +4309,8 @@ ${JSON.stringify(scoredList.map(c => ({ epgId: c.epgId, names: c.displayNames, s
           processedSources = processedSources.filter(source => source.province === String(province));
         }
 
-        // Prioritize active and lowest latency
-        processedSources.sort((a, b) => {
-          const statusWeightA = a.status === "active" ? 3 : (a.status === "inactive" ? 1 : 2);
-          const statusWeightB = b.status === "active" ? 3 : (b.status === "inactive" ? 1 : 2);
-          if (statusWeightA !== statusWeightB) return statusWeightB - statusWeightA;
-          const latencyA = a.latency && a.latency > 0 ? a.latency : 9999;
-          const latencyB = b.latency && b.latency > 0 ? b.latency : 9999;
-          return latencyA - latencyB;
-        });
+        // Prioritize active, RTSP protocol, and lowest latency
+        processedSources = sortSourcesForExport(processedSources);
 
         // 限制每个频道最大输出数量 (Limit max sources per channel)
         const sourcesToExport = processedSources.slice(0, maxPerChannel);
@@ -4374,31 +4389,12 @@ ${JSON.stringify(scoredList.map(c => ({ epgId: c.epgId, names: c.displayNames, s
       // Filter out isolated sources & filter by ISP via existing helper
       let processedSources = getPlayableSources(channel.sources, targetIsp, targetProvince);
       
-      // Prioritize active and lowest latency
-      processedSources.sort((a, b) => {
-        // Status weight: active > checking/unknown > inactive
-        const statusWeightA = a.status === "active" ? 3 : (a.status === "inactive" ? 1 : 2);
-        const statusWeightB = b.status === "active" ? 3 : (b.status === "inactive" ? 1 : 2);
-        if (statusWeightA !== statusWeightB) {
-          return statusWeightB - statusWeightA;
-        }
-        // Latency weight: lower latency is better
-        const latencyA = a.latency && a.latency > 0 ? a.latency : 9999;
-        const latencyB = b.latency && b.latency > 0 ? b.latency : 9999;
-        return latencyA - latencyB;
-      });
+      // Prioritize active, RTSP protocol, and lowest latency
+      processedSources = sortSourcesForExport(processedSources);
 
       if (processedSources.length === 0) {
         // Fallback to channel sources just in case ISP filtering was too aggressive
-        processedSources = channel.sources.filter(s => !s.isolated);
-        processedSources.sort((a, b) => {
-          const statusWeightA = a.status === "active" ? 3 : (a.status === "inactive" ? 1 : 2);
-          const statusWeightB = b.status === "active" ? 3 : (b.status === "inactive" ? 1 : 2);
-          if (statusWeightA !== statusWeightB) return statusWeightB - statusWeightA;
-          const latencyA = a.latency && a.latency > 0 ? a.latency : 9999;
-          const latencyB = b.latency && b.latency > 0 ? b.latency : 9999;
-          return latencyA - latencyB;
-        });
+        processedSources = sortSourcesForExport(channel.sources.filter(s => !s.isolated));
       }
       
       if (processedSources.length === 0) {
