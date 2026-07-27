@@ -1356,8 +1356,13 @@ function sortSourcesByGeo(sources: LiveSource[], clientProvince: string, clientI
       const srcProv = (s.province || "").trim();
       const srcIsp = (s.isp || "").trim();
 
-      const provinceMatch = clientProvince && srcProv && srcProv === clientProvince;
-      const ispMatch = clientIsp && srcIsp && srcIsp === clientIsp;
+      const normSrcProv = srcProv.replace(/省|市|自治区|特别行政区/g, "");
+      const normClientProv = clientProvince.replace(/省|市|自治区|特别行政区/g, "");
+      const provinceMatch = normClientProv && normSrcProv && (normSrcProv.includes(normClientProv) || normClientProv.includes(normSrcProv));
+      
+      const normSrcIsp = srcIsp.replace("中国", "");
+      const normClientIsp = clientIsp.replace("中国", "");
+      const ispMatch = normClientIsp && normSrcIsp && (normSrcIsp.includes(normClientIsp) || normClientIsp.includes(normSrcIsp));
 
       if (provinceMatch && ispMatch) {
         score += 100; // Exact province + ISP match
@@ -1393,7 +1398,9 @@ function getPlayableSources(sources: LiveSource[], targetIsp: string, targetProv
       if (isBGP) {
         return true;
       }
-      if (srcIsp === normTargetIsp) {
+      const sIsp = srcIsp.replace("中国", "");
+      const tIsp = normTargetIsp.replace("中国", "");
+      if (sIsp.includes(tIsp) || tIsp.includes(sIsp)) {
         return true;
       }
       return false;
