@@ -177,6 +177,17 @@ function initSqlite() {
       status TEXT NOT NULL,
       message TEXT
     );
+    CREATE TABLE IF NOT EXISTS test_reports (
+      id TEXT PRIMARY KEY,
+      createdAt TEXT NOT NULL,
+      totalTested INTEGER NOT NULL,
+      activeCount INTEGER NOT NULL,
+      inactiveCount INTEGER NOT NULL,
+      clientIsp TEXT,
+      clientProvince TEXT,
+      details TEXT
+    );
+    
     CREATE TABLE IF NOT EXISTS settings (
       key TEXT PRIMARY KEY,
       value TEXT
@@ -188,6 +199,7 @@ function initSqlite() {
   db.exec(`
     CREATE INDEX IF NOT EXISTS idx_sources_channelId ON sources(channelId);
     CREATE INDEX IF NOT EXISTS idx_sources_status ON sources(status);
+    CREATE INDEX IF NOT EXISTS idx_test_reports_createdAt ON test_reports(createdAt DESC);
   `);
 
   // Add new columns if they don't exist
@@ -2845,6 +2857,33 @@ async function startServer() {
     res.json({ success: true, message: "直播源删除成功" });
   });
 
+  // Batch isolate live sources of a channel
+  app.post("/api/channels/:channelId/sources/batch-isolate", (req, res) => {
+    const { channelId } = req.params;
+    const { sourceIds, isolated } = req.body;
+    if (!Array.isArray(sourceIds) || sourceIds.length === 0) {
+      return res.status(400).json({ error: "请提供要操作的直播线路 ID 列表" });
+    }
+
+    const channel = channels.find((c) => c.id === channelId);
+    if (!channel) {
+      return res.status(404).json({ error: "未找到频道" });
+    }
+
+    let updatedCount = 0;
+    channel.sources.forEach((s) => {
+      if (sourceIds.includes(s.id)) {
+        s.isolated = !!isolated;
+        updatedCount++;
+      }
+    });
+
+    if (updatedCount > 0) {
+      saveData();
+    }
+    res.json({ success: true, count: updatedCount });
+  });
+
   // Batch delete live sources of a channel
   app.post("/api/channels/:channelId/sources/batch-delete", (req, res) => {
     const { channelId } = req.params;
@@ -3578,10 +3617,68 @@ async function startServer() {
       });
     });
 
+    // Save test report history
+    try {
+      const reportId = Date.now().toString() + Math.random().toString(36).substring(2, 7);
+      const activeCount = results.filter(r => r.status === 'active').length;
+      const inactiveCount = results.filter(r => r.status === 'inactive').length;
+      
+      const stmt = db.prepare(`
+        INSERT INTO test_reports (id, createdAt, totalTested, activeCount, inactiveCount, clientIsp, clientProvince, details)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+      stmt.run(
+        reportId,
+        new Date().toISOString(),
+        results.length,
+        activeCount,
+        inactiveCount,
+        clientIsp || "",
+        clientProvince || "",
+        JSON.stringify(results)
+      );
+    } catch (e) {
+      console.error("Error saving test report:", e);
+    }
+
     if (updatedCount > 0) {
       saveData();
     }
     res.json({ success: true, count: updatedCount });
+  });
+
+  // REST API for test reports
+  app.get("/api/test-reports", (req, res) => {
+    try {
+      const reports = db.prepare("SELECT id, createdAt, totalTested, activeCount, inactiveCount, clientIsp, clientProvince FROM test_reports ORDER BY createdAt DESC LIMIT 50").all();
+      res.json(reports);
+    } catch (e) {
+      console.error(e);
+      res.json([]);
+    }
+  });
+
+  app.get("/api/test-reports/:id", (req, res) => {
+    try {
+      const report = db.prepare("SELECT * FROM test_reports WHERE id = ?").get(req.params.id);
+      if (report) {
+        report.details = JSON.parse(report.details);
+        res.json(report);
+      } else {
+        res.status(404).json({ error: "Not found" });
+      }
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.delete("/api/test-reports/:id", (req, res) => {
+    try {
+      db.prepare("DELETE FROM test_reports WHERE id = ?").run(req.params.id);
+      res.json({ success: true });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
   });
 
   app.get("/api/sources/test-status", (req, res) => {

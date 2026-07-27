@@ -1156,6 +1156,39 @@ export default function App() {
     );
   };
 
+  const handleBatchSourceIsolate = (isolate: boolean) => {
+    if (!selectedChannel) return;
+    if (selectedSourceIds.length === 0) {
+      showFeedback("info", "请先选择要操作的直播线路");
+      return;
+    }
+    const actionName = isolate ? "批量隔离" : "批量恢复";
+    triggerConfirm(
+      `${actionName}直播线路`,
+      `确定${actionName}选中的 ${selectedSourceIds.length} 条直播线路吗？`,
+      async () => {
+        try {
+          const res = await fetch(`/api/channels/${selectedChannel.id}/sources/batch-isolate`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ sourceIds: selectedSourceIds, isolated: isolate })
+          });
+          if (res.ok) {
+            const data = await res.json();
+            showFeedback("success", `成功${actionName} ${data.count} 条播放线路`);
+            setSelectedSourceIds([]);
+            await fetchData();
+          } else {
+            const err = await res.json();
+            showFeedback("error", err.error || `${actionName}失败`);
+          }
+        } catch (e) {
+          showFeedback("error", "网络超时");
+        }
+      }
+    );
+  };
+
   const handleBatchSourceDelete = () => {
     if (!selectedChannel) return;
     if (selectedSourceIds.length === 0) {
