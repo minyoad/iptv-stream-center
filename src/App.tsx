@@ -36,8 +36,11 @@ import {
   Menu
 } from "lucide-react";
 import { Channel, LiveSource, SyncConfig, TestStatus, EpgGuide, Group, EpgSource } from "./types";
+import { arrayMove } from "@dnd-kit/sortable";
 import DashboardView from "./components/DashboardView";
 import StatsView from "./components/StatsView";
+import { DraggableChannelList } from "./components/DraggableChannelList";
+import { DraggableGroupList } from "./components/DraggableGroupList";
 
 export default function App() {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
@@ -1031,6 +1034,87 @@ export default function App() {
     setIsBatchGroupModalOpen(true);
   };
 
+
+  const handleReorderGroups = async (activeId: string, overId: string) => {
+    if (activeId === overId) return;
+
+    const oldIndex = groups.findIndex((g) => g.id === activeId);
+    const newIndex = groups.findIndex((g) => g.id === overId);
+    if (oldIndex === -1 || newIndex === -1) return;
+
+    const newGroups = arrayMove(groups, oldIndex, newIndex);
+    setGroups(newGroups);
+
+    try {
+      const res = await fetch("/api/groups/reorder", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ groupIds: newGroups.map((g) => g.id) }),
+      });
+      if (!res.ok) {
+        showFeedback("error", "分组排序保存失败");
+        await fetchData();
+      } else {
+        showFeedback("success", "分组拖拽顺序已更新");
+      }
+    } catch (e) {
+      showFeedback("error", "网络连接异常");
+      await fetchData();
+    }
+  };
+
+  const handleReorderChannels = async (activeId: string, overId: string) => {
+    if (activeId === overId) return;
+
+    let newChannels: Channel[] = [];
+
+    if (selectedCategory === "all") {
+      const oldIndex = channels.findIndex((c) => c.id === activeId);
+      const newIndex = channels.findIndex((c) => c.id === overId);
+      if (oldIndex === -1 || newIndex === -1) return;
+      newChannels = arrayMove(channels, oldIndex, newIndex);
+    } else {
+      const targetGroup = groups.find((g) => g.name === selectedCategory);
+      if (!targetGroup) return;
+
+      const groupChannels = channels.filter((c) => c.groupIds.includes(targetGroup.id));
+      const oldGroupIdx = groupChannels.findIndex((c) => c.id === activeId);
+      const newGroupIdx = groupChannels.findIndex((c) => c.id === overId);
+
+      if (oldGroupIdx === -1 || newGroupIdx === -1) return;
+
+      const reorderedGroupChannels = arrayMove(groupChannels, oldGroupIdx, newGroupIdx);
+
+      let groupPtr = 0;
+      newChannels = channels.map((c) => {
+        if (c.groupIds.includes(targetGroup.id)) {
+          const replacement = reorderedGroupChannels[groupPtr];
+          groupPtr++;
+          return replacement;
+        }
+        return c;
+      });
+    }
+
+    setChannels(newChannels);
+
+    try {
+      const res = await fetch("/api/channels/reorder", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ channelIds: newChannels.map((c) => c.id) }),
+      });
+      if (!res.ok) {
+        showFeedback("error", "重新排序保存失败");
+        await fetchData();
+      } else {
+        showFeedback("success", "频道拖拽顺序已保存");
+      }
+    } catch (e) {
+      showFeedback("error", "网络连接异常");
+      await fetchData();
+    }
+  };
 
   const handleMoveGroup = async (index: number, direction: 'up' | 'down') => {
     if (direction === 'up' && index === 0) return;
@@ -2507,92 +2591,60 @@ export default function App() {
                   </div>
 
                   <div className="border-t border-slate-100 pt-6 space-y-4">
-                    <h4 className="font-bold text-slate-800 text-xs">已存在的实体直播分组目录 ({groups.length} 个)</h4>
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4" id="groups_cards_grid">
-                      {groups.map((g) => {
-                        const countChannels = channels.filter(c => c.groupIds.includes(g.id)).length;
-                        return (
-                          <div key={g.id} className="p-4 border border-slate-200 rounded-2xl bg-slate-50/50 flex items-center justify-between hover:border-slate-350 transition" id={`group_item_${g.id}`}>
-                            <div className="space-y-1 pr-4 flex-1">
-                              <input 
-                                type="text"
-                                defaultValue={g.name}
-                                onBlur={async (e) => {
-                                  const val = e.target.value.trim();
-                                  if (!val || val === g.name) return;
-                                  try {
-                                    const res = await fetch(`/api/groups/${g.id}`, {
-                                      method: "PUT",
-                                      headers: { "Content-Type": "application/json" },
-                                      body: JSON.stringify({ name: val })
-                                    });
-                                    if (res.ok) {
-                                      showFeedback("success", "分组改名成功！");
-                                      await fetchData();
-                                    } else {
-                                      e.target.value = g.name; // reset
-                                      showFeedback("error", "改名失败");
-                                    }
-                                  } catch (err) {
-                                    e.target.value = g.name;
-                                    showFeedback("error", "网络故障");
-                                  }
-                                }}
-                                className="font-bold text-slate-800 text-xs bg-transparent border-b border-transparent focus:border-indigo-500 focus:outline-none hover:bg-slate-200/45 p-0.5 rounded transition w-full font-semibold"
-                              />
-                              <p className="text-[10px] text-slate-400 font-medium">关联频道: <span className="font-mono text-slate-600 font-bold">{countChannels}</span> 个</p>
-                            </div>
-
-                            <div className="flex flex-col items-center gap-1 mr-2">
-                              <button
-                                onClick={() => handleMoveGroup(groups.findIndex(x => x.id === g.id), 'up')}
-                                className="p-1 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded transition"
-                                title="上移"
-                              >
-                                <ChevronUp className="w-3 h-3" />
-                              </button>
-                              <button
-                                onClick={() => handleMoveGroup(groups.findIndex(x => x.id === g.id), 'down')}
-                                className="p-1 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded transition"
-                                title="下移"
-                              >
-                                <ChevronDown className="w-3 h-3" />
-                              </button>
-                            </div>
-
-                            <button
-                              onClick={async () => {
-                                if (g.id === "g_other" || g.name === "其它频道") {
-                                  showFeedback("error", "系统保护的内置备用分组，无法被手动删除");
-                                  return;
-                                }
-                                triggerConfirm(
-                                  "删除分组",
-                                  `确定要删除 [${g.name}] 分组吗？所属频道不会被删除，它们会自动脱离关联分组。`,
-                                  async () => {
-                                    try {
-                                      const res = await fetch(`/api/groups/${g.id}`, { method: "DELETE" });
-                                      if (res.ok) {
-                                        showFeedback("success", "分组删除成功");
-                                        await fetchData();
-                                      } else {
-                                        showFeedback("error", "删除失败");
-                                      }
-                                    } catch (e) {
-                                      showFeedback("error", "网络故障");
-                                    }
-                                  }
-                                );
-                              }}
-                              className="p-2 bg-white hover:bg-rose-50 border border-slate-250 text-slate-400 hover:text-rose-600 rounded-xl transition shadow-xs cursor-pointer"
-                              title="删除此分组"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
-                          </div>
-                        );
-                      })}
+                    <div className="flex items-center justify-between">
+                      <h4 className="font-bold text-slate-800 text-xs">已存在的实体直播分组目录 ({groups.length} 个)</h4>
+                      <p className="text-[11px] text-slate-400 font-medium hidden sm:block">
+                        💡 提示：按住分组左侧 <span className="font-mono text-slate-600 font-bold">⠿</span> 拖拽图标，可自由调整分组排序
+                      </p>
                     </div>
+
+                    <DraggableGroupList
+                      groups={groups}
+                      channels={channels}
+                      onRenameGroup={async (id, val) => {
+                        try {
+                          const res = await fetch(`/api/groups/${id}`, {
+                            method: "PUT",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({ name: val })
+                          });
+                          if (res.ok) {
+                            showFeedback("success", "分组改名成功！");
+                            await fetchData();
+                          } else {
+                            showFeedback("error", "改名失败");
+                          }
+                        } catch (err) {
+                          showFeedback("error", "网络故障");
+                        }
+                      }}
+                      onDeleteGroup={(g) => {
+                        if (g.id === "g_other" || g.name === "其它频道") {
+                          showFeedback("error", "系统保护的内置备用分组，无法被手动删除");
+                          return;
+                        }
+                        triggerConfirm(
+                          "删除分组",
+                          `确定要删除 [${g.name}] 分组吗？所属频道不会被删除，它们会自动脱离关联分组。`,
+                          async () => {
+                            try {
+                              const res = await fetch(`/api/groups/${g.id}`, { method: "DELETE" });
+                              if (res.ok) {
+                                showFeedback("success", "分组删除成功");
+                                await fetchData();
+                              } else {
+                                showFeedback("error", "删除失败");
+                              }
+                            } catch (e) {
+                              showFeedback("error", "网络故障");
+                            }
+                          }
+                        );
+                      }}
+                      onMoveGroupUp={(idx) => handleMoveGroup(idx, "up")}
+                      onMoveGroupDown={(idx) => handleMoveGroup(idx, "down")}
+                      onReorderGroups={handleReorderGroups}
+                    />
                   </div>
                 </div>
               )}
@@ -2731,124 +2783,39 @@ export default function App() {
                     )}
                   </div>
                   
-                  <div className="flex-1 overflow-y-auto divide-y divide-slate-100">
+                  <div className="flex-1 overflow-y-auto">
                     {filteredChannels.length === 0 ? (
                       <div className="flex flex-col items-center justify-center p-12 text-slate-300">
                         <Tv className="w-16 h-16 stroke-[1]" />
                         <p className="text-xs font-medium mt-3">未检索到适配该条件的电视频道</p>
                       </div>
                     ) : (
-                      slicedChannels.map((ch) => {
-                        const isSelected = selectedChannel?.id === ch.id;
-                        const isChecked = selectedChannelIds.includes(ch.id);
-                        const activeCount = ch.sources.filter(s => s.status === "active").length;
-                        return (
-                          <div 
-                            key={ch.id}
-                            onClick={async () => {
-                              setSelectedChannel(ch);
-                              setEpgGuide(null); // Clear EPG view since state modified
-                              setSelectedSourceIds([]); // Clear source selection
-                            }}
-                            onDoubleClick={() => {
-                              openChannelEdit(ch);
-                            }}
-                            className={`p-3.5 transition flex items-center justify-between cursor-pointer ${
-                              isSelected ? "bg-blue-50/60 border-l-4 border-blue-600" : "hover:bg-slate-55/40"
-                            }`}
-                          >
-                            <div className="flex items-center gap-2.5 min-w-0">
-                              <input
-                                type="checkbox"
-                                className="w-3.5 h-3.5 text-blue-600 border-slate-300 rounded focus:ring-blue-500 cursor-pointer flex-shrink-0"
-                                checked={isChecked}
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                }}
-                                onChange={(e) => {
-                                  if (e.target.checked) {
-                                    setSelectedChannelIds(prev => [...prev, ch.id]);
-                                  } else {
-                                    setSelectedChannelIds(prev => prev.filter(id => id !== ch.id));
-                                  }
-                                }}
-                              />
-                              {ch.logo ? (
-                                <img
-                                  src={ch.logo}
-                                  alt="logo"
-                                  className="w-8 h-8 rounded-lg object-contain bg-slate-100 p-0.5 shadow-xs flex-shrink-0"
-                                  onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
-                                />
-                              ) : (
-                                <div className="w-8 h-8 rounded-lg bg-slate-50 border border-slate-100 flex items-center justify-center flex-shrink-0 text-slate-400 shadow-xs">
-                                  <Tv className="w-4 h-4" />
-                                </div>
-                              )}
-                              <div className="min-w-0">
-                                <p className="text-xs font-bold text-slate-800 flex items-center gap-1.5 truncate">
-                                  {ch.name}
-                                </p>
-                                <p className="text-[10px] text-slate-400 mt-0.5 truncate">
-                                  EPG ID: <span className="font-mono text-[9px] text-slate-500 font-bold bg-slate-100 px-1 py-0.5 rounded">{ch.epgId}</span>
-                                </p>
-                              </div>
-                            </div>
-                            
-                            <div className="flex items-center gap-2 flex-shrink-0 ml-2">
-                              {/* Count pill badge */}
-                              <span className="text-[10px] font-bold bg-slate-100 text-slate-600 px-2 py-0.5 rounded-full">
-                                {activeCount} / {ch.sources.length} 条有效
-                              </span>
-                              <span className="text-[10px] font-semibold bg-blue-50 text-blue-700 px-1.5 py-0.5 rounded max-w-28 truncate" title={ch.groupIds.map(gId => groups.find(g => g.id === gId)?.name).filter(Boolean).join(", ")}>
-                                {ch.groupIds.map(gId => groups.find(g => g.id === gId)?.name).filter(Boolean).join(", ") || "其它"}
-                              </span>
-
-                              {/* Small Quick Action Panel */}
-                              <div className="flex gap-1.5">
-                                <button 
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    handleMoveChannel(ch.id, 'up');
-                                  }}
-                                  className="p-1 hover:bg-slate-100 text-slate-400 hover:text-indigo-600 rounded transition"
-                                  title="上移"
-                                >
-                                  <ChevronUp className="w-3 h-3" />
-                                </button>
-                                <button 
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    handleMoveChannel(ch.id, 'down');
-                                  }}
-                                  className="p-1 hover:bg-slate-100 text-slate-400 hover:text-indigo-600 rounded transition"
-                                  title="下移"
-                                >
-                                  <ChevronDown className="w-3 h-3" />
-                                </button>
-                                <button 
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    openChannelEdit(ch);
-                                  }}
-                                  className="p-1 hover:bg-slate-100 text-slate-500 hover:text-slate-800 rounded transition"
-                                >
-                                  <Edit2 className="w-3.5 h-3.5" />
-                                </button>
-                                <button
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    handleDeleteChannel(ch.id);
-                                  }}
-                                  className="p-1 hover:bg-slate-100 text-red-500 hover:text-red-700 rounded transition"
-                                >
-                                  <Trash2 className="w-3.5 h-3.5" />
-                                </button>
-                              </div>
-                            </div>
-                          </div>
-                        );
-                      })
+                      <DraggableChannelList
+                        channels={slicedChannels}
+                        selectedChannel={selectedChannel}
+                        selectedChannelIds={selectedChannelIds}
+                        groups={groups}
+                        onSelectChannel={(ch) => {
+                          setSelectedChannel(ch);
+                          setEpgGuide(null);
+                          setSelectedSourceIds([]);
+                        }}
+                        onDoubleClickChannel={(ch) => openChannelEdit(ch)}
+                        onToggleCheckChannel={(chId, checked) => {
+                          if (checked) {
+                            setSelectedChannelIds((prev) => [...prev, chId]);
+                          } else {
+                            setSelectedChannelIds((prev) =>
+                              prev.filter((id) => id !== chId)
+                            );
+                          }
+                        }}
+                        onMoveChannelUp={(chId) => handleMoveChannel(chId, "up")}
+                        onMoveChannelDown={(chId) => handleMoveChannel(chId, "down")}
+                        onEditChannel={(ch) => openChannelEdit(ch)}
+                        onDeleteChannel={(chId) => handleDeleteChannel(chId)}
+                        onReorderChannels={handleReorderChannels}
+                      />
                     )}
                     {filteredChannels.length > slicedChannels.length && (
                       <div className="p-4 text-center bg-slate-50/50 border-t border-slate-100">
