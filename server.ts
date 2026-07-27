@@ -920,16 +920,29 @@ function checkAndPerformDailyBackup() {
 function cleanOldBackups() {
   try {
     const files = fs.readdirSync(DATA_DIR);
-    const backupFiles = files
-      .filter((f) => (f.startsWith("iptv_data_backup_") || f.startsWith("iptv_data_sqlite_backup_")) && (f.endsWith(".json") || f.endsWith(".db")))
-      .sort(); // Sorting list ascends alphabetically
-      
-    if (backupFiles.length > 30) {
-      const extraBackups = backupFiles.slice(0, backupFiles.length - 30);
-      for (const fileToDelete of extraBackups) {
-        fs.unlinkSync(path.join(DATA_DIR, fileToDelete));
-        console.log(`[Backup] Deleted old backup: ${fileToDelete}`);
-      }
+    
+    const autoJsonBackups = files.filter(f => f.startsWith("iptv_data_backup_2") && f.endsWith(".json")).sort();
+    const autoSqliteBackups = files.filter(f => f.startsWith("iptv_data_sqlite_backup_") && f.endsWith(".db")).sort();
+    
+    // 我们保留最近的 30 个手动备份和还原前备份
+    const manualBackups = files.filter(f => (f.startsWith("iptv_data_backup_manual_") || f.startsWith("iptv_data_backup_before_restore_")) && f.endsWith(".json"))
+        .map(f => ({ name: f, time: fs.statSync(path.join(DATA_DIR, f)).mtime.getTime() }))
+        .sort((a, b) => a.time - b.time)
+        .map(obj => obj.name);
+
+    if (autoJsonBackups.length > 30) {
+      const extra = autoJsonBackups.slice(0, autoJsonBackups.length - 30);
+      for (const f of extra) { fs.unlinkSync(path.join(DATA_DIR, f)); console.log(`[Backup] Deleted old auto JSON backup: ${f}`); }
+    }
+    
+    if (autoSqliteBackups.length > 30) {
+      const extra = autoSqliteBackups.slice(0, autoSqliteBackups.length - 30);
+      for (const f of extra) { fs.unlinkSync(path.join(DATA_DIR, f)); console.log(`[Backup] Deleted old auto SQLite backup: ${f}`); }
+    }
+    
+    if (manualBackups.length > 30) {
+      const extra = manualBackups.slice(0, manualBackups.length - 30);
+      for (const f of extra) { fs.unlinkSync(path.join(DATA_DIR, f)); console.log(`[Backup] Deleted old manual backup: ${f}`); }
     }
   } catch (err) {
     console.error("[Backup] Error cleaning up old backups:", err);
@@ -4472,9 +4485,7 @@ ${JSON.stringify(scoredList.map(c => ({ epgId: c.epgId, names: c.displayNames, s
       }
       const files = fs.readdirSync(DATA_DIR);
       const backupFiles = files
-        .filter((f) => f.startsWith("iptv_data_backup_") && f.endsWith(".json"))
-        .sort()
-        .reverse(); // Newest first
+        .filter((f) => f.startsWith("iptv_data_backup_") && f.endsWith(".json"));
       
       const backups = backupFiles.map((filename) => {
         const filePath = path.join(DATA_DIR, filename);
@@ -4513,6 +4524,9 @@ ${JSON.stringify(scoredList.map(c => ({ epgId: c.epgId, names: c.displayNames, s
           groupCount
         };
       });
+      
+      // Sort newest first based on actual file modification time
+      backups.sort((a, b) => (b.createdAt as Date).getTime() - (a.createdAt as Date).getTime());
       
       res.json({ success: true, backups });
     } catch (err: any) {

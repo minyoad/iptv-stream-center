@@ -5084,6 +5084,17 @@ export default function App() {
                       <h3 className="font-bold text-slate-800 text-sm">备份快照控制台</h3>
                       <p className="text-[10px] text-slate-400">保留最近 30 天自动与所有手动创建的节点</p>
                     </div>
+                  </div>
+                  
+                  {/* Warning for ephemeral storage */}
+                  <div className="bg-amber-50 border border-amber-200 p-3 rounded-xl flex items-start gap-2">
+                    <svg className="w-4 h-4 text-amber-500 mt-0.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                    </svg>
+                    <div className="text-xs text-amber-800 leading-relaxed font-medium">
+                      <strong className="block text-amber-900 mb-0.5">防丢提醒：系统容器重启可能导致文件销毁！</strong>
+                      如果您将系统部署在 Serverless 容器（如 Docker, Cloud Run, Heroku 等）环境中，系统更新或休眠重启时，本地磁盘会被重置，导致备份凭空消失。<strong>请务必在生成备份后，点击右侧的【下载】按钮将重要备份下载到您的本地电脑中妥善保存！</strong>
+                    </div>
                     <button 
                       onClick={fetchBackups}
                       className="text-xs text-blue-600 hover:text-blue-800 flex items-center gap-1 font-bold bg-blue-50 px-2.5 py-1.5 rounded-lg transition"
