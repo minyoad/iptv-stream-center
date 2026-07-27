@@ -2106,6 +2106,14 @@ export default function App() {
     return ["all", ...groups.map(g => g.name)];
   };
 
+  const categoryCounts = useMemo(() => {
+    const map: Record<string, number> = { all: channels.length };
+    groups.forEach((g) => {
+      map[g.name] = channels.filter((c) => c.groupIds.includes(g.id)).length;
+    });
+    return map;
+  }, [channels, groups]);
+
   const filteredChannels = channels.filter(c => {
     const groupNames = c.groupIds.map(gId => groups.find(g => g.id === gId)?.name || "").filter(Boolean);
     const cleanQuery = searchQuery.toLowerCase().replace(/[-_.\s]+/g, "");
@@ -2502,10 +2510,10 @@ export default function App() {
             <div className="space-y-6 animate-fade-in" id="tab_channels_view">
               
               {/* Inner sub-tab selection */}
-              <div className="flex gap-2.5">
+              <div className="flex items-center gap-2 sm:gap-2.5 overflow-x-auto pb-1 scrollbar-none">
                 <button
                   onClick={() => setChannelSubTab("channels")}
-                  className={`px-4 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
+                  className={`px-3.5 sm:px-4 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 shrink-0 cursor-pointer ${
                     channelSubTab === "channels"
                     ? "bg-slate-800 text-white shadow-md shadow-slate-900/10"
                     : "bg-white text-slate-500 hover:text-slate-800 hover:bg-slate-50 border border-slate-200"
@@ -2516,18 +2524,18 @@ export default function App() {
                 </button>
                 <button
                   onClick={() => setChannelSubTab("groups")}
-                  className={`px-4 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
+                  className={`px-3.5 sm:px-4 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 shrink-0 cursor-pointer ${
                     channelSubTab === "groups"
                     ? "bg-slate-800 text-white shadow-md shadow-slate-900/10"
                     : "bg-white text-slate-500 hover:text-slate-800 hover:bg-slate-50 border border-slate-200"
                   }`}
                 >
                   <Layers className="w-3.5 h-3.5" />
-                  分组/分类管理 (多对多)
+                  分组/分类管理
                 </button>
                 <button
                   onClick={() => setChannelSubTab("sources")}
-                  className={`px-4 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
+                  className={`px-3.5 sm:px-4 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 shrink-0 cursor-pointer ${
                     channelSubTab === "sources"
                     ? "bg-slate-800 text-white shadow-md shadow-slate-900/10"
                     : "bg-white text-slate-500 hover:text-slate-800 hover:bg-slate-50 border border-slate-200"
@@ -2652,62 +2660,113 @@ export default function App() {
               {channelSubTab === "channels" && (
                 <div className="space-y-6 animate-fade-in" id="groups_inner_channels_pane">
                   {/* Filter tools and Header bar */}
-                  <div className="flex flex-col md:flex-row gap-4 justify-between" id="channel_filter_panel">
-                <div className="flex flex-1 flex-wrap gap-2.5">
-                  <div className="relative">
-                    <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
-                    <input 
-                      type="text"
-                      value={searchQuery}
-                      onChange={(e) => setSearchQuery(e.target.value)}
-                      placeholder="搜索频道、标签、别名..."
-                      className="pl-9 pr-4 py-2 border border-slate-200 rounded-xl text-xs bg-white w-56 focus:outline-none focus:border-indigo-500"
-                    />
-                  </div>
+                  <div className="flex flex-col gap-3" id="channel_filter_panel">
+                    <div className="flex flex-col sm:flex-row gap-2.5 sm:items-center justify-between">
+                      {/* Search box & Mobile Select Dropdown */}
+                      <div className="flex flex-col sm:flex-row gap-2 flex-1 items-stretch sm:items-center">
+                        <div className="relative flex-1 sm:max-w-xs">
+                          <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                          <input 
+                            type="text"
+                            value={searchQuery}
+                            onChange={(e) => setSearchQuery(e.target.value)}
+                            placeholder="搜索频道、标签、别名..."
+                            className="w-full pl-9 pr-8 py-2 border border-slate-200 rounded-xl text-xs bg-white focus:outline-none focus:border-indigo-500 shadow-2xs"
+                          />
+                          {searchQuery && (
+                            <button
+                              onClick={() => setSearchQuery("")}
+                              className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-0.5 rounded-full cursor-pointer"
+                            >
+                              <XCircle className="w-3.5 h-3.5" />
+                            </button>
+                          )}
+                        </div>
 
-                  {/* Category tag Selector pill */}
-                  <div className="flex items-center gap-1.5 bg-white border border-slate-200 rounded-xl px-2.5 py-1" id="category_pills">
-                    <Filter className="w-3.5 h-3.5 text-slate-400 mr-1" />
-                    {getUniqueCategories().map((cat) => (
-                      <button
-                        key={cat}
-                        onClick={() => setSelectedCategory(cat)}
-                        className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition ${
-                          selectedCategory === cat 
-                          ? "bg-blue-600 text-white" 
-                          : "text-slate-500 hover:bg-slate-50 hover:text-slate-800"
-                        }`}
-                      >
-                        {cat === "all" ? "全部类型" : cat}
-                      </button>
-                    ))}
-                  </div>
-                </div>
+                        {/* Mobile Category Select Dropdown (visible on small screens) */}
+                        <div className="sm:hidden relative">
+                          <div className="absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none text-indigo-600">
+                            <Filter className="w-3.5 h-3.5" />
+                          </div>
+                          <select
+                            value={selectedCategory}
+                            onChange={(e) => setSelectedCategory(e.target.value)}
+                            className="w-full pl-9 pr-8 py-2 bg-indigo-50/50 border border-indigo-200 text-indigo-900 font-bold text-xs rounded-xl appearance-none focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+                          >
+                            <option value="all">全部分组 ({channels.length})</option>
+                            {groups.map((g) => {
+                              const count = categoryCounts[g.name] || 0;
+                              return (
+                                <option key={g.id} value={g.name}>
+                                  {g.name} ({count})
+                                </option>
+                              );
+                            })}
+                          </select>
+                          <ChevronDown className="w-4 h-4 text-indigo-500 absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                        </div>
+                      </div>
 
-                <div className="flex gap-2">
-                  <button 
-                    onClick={cleanupDuplicateSources}
-                    className="px-3.5 py-2 border border-orange-200 text-orange-600 hover:bg-orange-50 text-[11px] font-bold rounded-xl transition cursor-pointer flex items-center"
-                  >
-                    <Zap className="w-3.5 h-3.5 mr-1" />
-                    清理重复源
-                  </button>
-                  <button 
-                    onClick={cleanupInvalidSources}
-                    className="px-3.5 py-2 border border-rose-200 text-rose-600 hover:bg-rose-50 text-[11px] font-bold rounded-xl transition cursor-pointer flex items-center"
-                  >
-                    <Trash2 className="w-3.5 h-3.5 mr-1" />
-                    清理失效源
-                  </button>
-                  <button 
-                    onClick={openChannelCreate}
-                    className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-[11px] font-bold rounded-xl shadow-md transition cursor-pointer flex items-center"
-                  >
-                    <Plus className="w-3.5 h-3.5 mr-1" />
-                    添加新频道
-                  </button>
-                </div>
-              </div>
+                      {/* Action buttons bar */}
+                      <div className="flex items-center gap-1.5 overflow-x-auto pb-1 sm:pb-0 scrollbar-none shrink-0">
+                        <button 
+                          onClick={cleanupDuplicateSources}
+                          className="px-2.5 sm:px-3.5 py-1.5 sm:py-2 border border-orange-200 text-orange-600 hover:bg-orange-50 text-[11px] font-bold rounded-xl transition cursor-pointer flex items-center shrink-0"
+                          title="清理重复源"
+                        >
+                          <Zap className="w-3.5 h-3.5 sm:mr-1" />
+                          <span className="hidden sm:inline">清理重复源</span>
+                        </button>
+                        <button 
+                          onClick={cleanupInvalidSources}
+                          className="px-2.5 sm:px-3.5 py-1.5 sm:py-2 border border-rose-200 text-rose-600 hover:bg-rose-50 text-[11px] font-bold rounded-xl transition cursor-pointer flex items-center shrink-0"
+                          title="清理失效源"
+                        >
+                          <Trash2 className="w-3.5 h-3.5 sm:mr-1" />
+                          <span className="hidden sm:inline">清理失效源</span>
+                        </button>
+                        <button 
+                          onClick={openChannelCreate}
+                          className="px-3 sm:px-4 py-1.5 sm:py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-[11px] font-bold rounded-xl shadow-xs transition cursor-pointer flex items-center shrink-0"
+                        >
+                          <Plus className="w-3.5 h-3.5 mr-1" />
+                          <span>添加频道</span>
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Touch & Horizontal Scrollable Category Pills bar with Channel Counts */}
+                    <div className="flex items-center gap-1.5 bg-white border border-slate-200 rounded-xl px-2 py-1.5 overflow-x-auto scrollbar-none shadow-2xs" id="category_pills">
+                      <div className="flex items-center text-slate-400 pl-1 pr-1 shrink-0 text-xs font-semibold gap-1">
+                        <Filter className="w-3.5 h-3.5 text-indigo-500" />
+                        <span className="text-[10px] text-slate-400 hidden md:inline">分组:</span>
+                      </div>
+                      <div className="flex items-center gap-1.5 overflow-x-auto scrollbar-none py-0.5">
+                        {getUniqueCategories().map((cat) => {
+                          const count = categoryCounts[cat] ?? 0;
+                          const isSelected = selectedCategory === cat;
+                          return (
+                            <button
+                              key={cat}
+                              onClick={() => setSelectedCategory(cat)}
+                              className={`px-3 py-1 rounded-lg text-[11px] font-bold transition flex items-center gap-1.5 shrink-0 cursor-pointer ${
+                                isSelected 
+                                  ? "bg-blue-600 text-white shadow-xs" 
+                                  : "bg-slate-50 hover:bg-slate-100 text-slate-600 hover:text-slate-900 border border-slate-100"
+                              }`}
+                            >
+                              <span>{cat === "all" ? "全部类型" : cat}</span>
+                              <span className={`text-[9px] px-1.5 py-0.2 rounded-full font-mono ${
+                                isSelected ? "bg-white/20 text-white" : "bg-slate-200/70 text-slate-500"
+                              }`}>
+                                {count}
+                              </span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  </div>
 
               {/* Dynamic split row grids layout */}
               <div className="grid grid-cols-1 lg:grid-cols-12 gap-6" id="channels_editor_grid">
@@ -3200,62 +3259,62 @@ export default function App() {
               )}
 
               {channelSubTab === "sources" && (
-                <div className="space-y-6 animate-fade-in" id="global_sources_pane">
+                <div className="space-y-4 sm:space-y-6 animate-fade-in" id="global_sources_pane">
                   {/* Top Stats Cards */}
-                  <div className="grid grid-cols-1 sm:grid-cols-4 gap-4" id="global_sources_stats">
-                    <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs flex items-center justify-between">
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 sm:gap-4" id="global_sources_stats">
+                    <div className="bg-white p-3.5 sm:p-5 rounded-2xl border border-slate-200 shadow-xs flex items-center justify-between">
                       <div>
-                        <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">当前匹配总线路</span>
-                        <div className="text-xl font-black text-slate-800 mt-1 font-mono">{filteredGlobalSources.length} <span className="text-xs text-slate-500 font-sans">条</span></div>
+                        <span className="text-[9px] sm:text-[10px] uppercase font-bold text-slate-400 tracking-wider">匹配总线路</span>
+                        <div className="text-lg sm:text-xl font-black text-slate-800 mt-0.5 sm:mt-1 font-mono">{filteredGlobalSources.length} <span className="text-xs text-slate-500 font-sans">条</span></div>
                       </div>
-                      <div className="w-10 h-10 rounded-xl bg-slate-50 text-slate-600 flex items-center justify-center border border-slate-100">
-                        <Compass className="w-5 h-5" />
+                      <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-xl bg-slate-50 text-slate-600 flex items-center justify-center border border-slate-100 shrink-0">
+                        <Compass className="w-4 h-4 sm:w-5 sm:h-5" />
                       </div>
                     </div>
-                    <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs flex items-center justify-between">
+                    <div className="bg-white p-3.5 sm:p-5 rounded-2xl border border-slate-200 shadow-xs flex items-center justify-between">
                       <div>
-                        <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">有效/可用线路</span>
-                        <div className="text-xl font-black text-emerald-600 mt-1 font-mono">
+                        <span className="text-[9px] sm:text-[10px] uppercase font-bold text-slate-400 tracking-wider">有效可用</span>
+                        <div className="text-lg sm:text-xl font-black text-emerald-600 mt-0.5 sm:mt-1 font-mono">
                           {filteredGlobalSources.filter(s => s.status === "active").length} <span className="text-xs text-slate-500 font-sans">条</span>
                         </div>
                       </div>
-                      <div className="w-10 h-10 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center border border-emerald-100">
-                        <CheckCircle className="w-5 h-5" />
+                      <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center border border-emerald-100 shrink-0">
+                        <CheckCircle className="w-4 h-4 sm:w-5 sm:h-5" />
                       </div>
                     </div>
-                    <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs flex items-center justify-between">
+                    <div className="bg-white p-3.5 sm:p-5 rounded-2xl border border-slate-200 shadow-xs flex items-center justify-between">
                       <div>
-                        <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">失效/离线线路</span>
-                        <div className="text-xl font-black text-rose-600 mt-1 font-mono">
+                        <span className="text-[9px] sm:text-[10px] uppercase font-bold text-slate-400 tracking-wider">失效离线</span>
+                        <div className="text-lg sm:text-xl font-black text-rose-600 mt-0.5 sm:mt-1 font-mono">
                           {filteredGlobalSources.filter(s => s.status === "inactive").length} <span className="text-xs text-slate-500 font-sans">条</span>
                         </div>
                       </div>
-                      <div className="w-10 h-10 rounded-xl bg-rose-50 text-rose-600 flex items-center justify-center border border-rose-100">
-                        <XCircle className="w-5 h-5" />
+                      <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-xl bg-rose-50 text-rose-600 flex items-center justify-center border border-rose-100 shrink-0">
+                        <XCircle className="w-4 h-4 sm:w-5 sm:h-5" />
                       </div>
                     </div>
-                    <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs flex items-center justify-between">
+                    <div className="bg-white p-3.5 sm:p-5 rounded-2xl border border-slate-200 shadow-xs flex items-center justify-between">
                       <div>
-                        <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">测试中/未测试线路</span>
-                        <div className="text-xl font-black text-amber-600 mt-1 font-mono">
+                        <span className="text-[9px] sm:text-[10px] uppercase font-bold text-slate-400 tracking-wider">未测/测试中</span>
+                        <div className="text-lg sm:text-xl font-black text-amber-600 mt-0.5 sm:mt-1 font-mono">
                           {filteredGlobalSources.filter(s => s.status === "checking" || s.status === "unknown").length} <span className="text-xs text-slate-500 font-sans">条</span>
                         </div>
                       </div>
-                      <div className="w-10 h-10 rounded-xl bg-amber-50 text-amber-600 flex items-center justify-center border border-amber-100">
-                        <Activity className="w-5 h-5" />
+                      <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-xl bg-amber-50 text-amber-600 flex items-center justify-center border border-amber-100 shrink-0">
+                        <Activity className="w-4 h-4 sm:w-5 sm:h-5" />
                       </div>
                     </div>
                   </div>
 
                   {/* 双驱多维度 ISP 测速工作区 */}
-                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 bg-slate-50 p-6 rounded-2xl border border-slate-200" id="double_speed_test_center">
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6 bg-slate-50 p-3.5 sm:p-6 rounded-2xl border border-slate-200" id="double_speed_test_center">
                     
                     {/* 方案一 Column: 服务端极速多线程测速 */}
-                    <div className="bg-white p-5 rounded-xl border border-slate-150 shadow-xs flex flex-col justify-between space-y-4" id="server_side_test_scheme">
+                    <div className="bg-white p-3.5 sm:p-5 rounded-xl border border-slate-150 shadow-xs flex flex-col justify-between space-y-3.5" id="server_side_test_scheme">
                       <div className="space-y-2">
                         <div className="flex items-center gap-2">
-                          <span className="w-6 h-6 rounded-lg bg-indigo-50 text-indigo-600 flex items-center justify-center font-bold text-xs font-mono">①</span>
-                          <h4 className="font-extrabold text-slate-800 text-sm flex items-center gap-1.5 leading-snug">
+                          <span className="w-6 h-6 rounded-lg bg-indigo-50 text-indigo-600 flex items-center justify-center font-bold text-xs font-mono shrink-0">①</span>
+                          <h4 className="font-extrabold text-slate-800 text-xs sm:text-sm flex items-center gap-1.5 leading-snug">
                             <Layers className="w-4 h-4 text-indigo-550 shrink-0" />
                             方案一：服务端全网异步多线程测速（默认云端策略）
                           </h4>
@@ -3265,15 +3324,15 @@ export default function App() {
                         </p>
                       </div>
 
-                      <div className="bg-slate-50/60 p-4 rounded-xl space-y-3.5 border border-slate-100 text-xs text-slate-650">
+                      <div className="bg-slate-50/60 p-3 sm:p-4 rounded-xl space-y-3 border border-slate-100 text-xs text-slate-650">
                         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1.5">
                           <span className="font-bold text-[11px] text-slate-600">并发线程数 (Concurrency)：</span>
-                          <div className="flex gap-1 shrink-0">
+                          <div className="flex gap-1 shrink-0 overflow-x-auto scrollbar-none py-0.5">
                             {[4, 8, 16, 24, 32].map((num) => (
                               <button
                                 key={num}
                                 onClick={() => setClientThreadCount(num)}
-                                className={`px-2 py-0.5 rounded text-[10px] font-black transition cursor-pointer ${
+                                className={`px-2.5 py-1 rounded text-[10px] font-black transition cursor-pointer ${
                                   clientThreadCount === num ? "bg-indigo-600 text-white" : "bg-white text-slate-500 border border-slate-200 hover:bg-slate-50"
                                 }`}
                               >
@@ -3353,25 +3412,25 @@ export default function App() {
                     </div>
 
                     {/* 方案二 Column: 客户端浏览器探针代测 */}
-                    <div className="bg-white p-5 rounded-xl border border-slate-150 shadow-xs flex flex-col justify-between space-y-4" id="client_side_test_scheme">
+                    <div className="bg-white p-3.5 sm:p-5 rounded-xl border border-slate-150 shadow-xs flex flex-col justify-between space-y-3.5" id="client_side_test_scheme">
                       <div className="space-y-2">
-                        <div className="flex items-center justify-between">
+                        <div className="flex items-center justify-between gap-2">
                           <div className="flex items-center gap-2">
-                            <span className="w-6 h-6 rounded-lg bg-sky-50 text-sky-600 flex items-center justify-center font-bold text-xs font-mono">②</span>
-                            <h4 className="font-extrabold text-slate-800 text-sm flex items-center gap-1.5 leading-snug">
+                            <span className="w-6 h-6 rounded-lg bg-sky-50 text-sky-600 flex items-center justify-center font-bold text-xs font-mono shrink-0">②</span>
+                            <h4 className="font-extrabold text-slate-800 text-xs sm:text-sm flex items-center gap-1.5 leading-snug">
                               <Compass className="w-4 h-4 text-sky-500 shrink-0" />
                               方案二：本地浏览器探针代测（极星边缘探测网络）
                             </h4>
                           </div>
-                          <span className="text-[9px] bg-sky-100 text-sky-700 px-2 py-0.5 rounded-full font-bold">100% 契合播本地</span>
+                          <span className="text-[9px] bg-sky-100 text-sky-700 px-2 py-0.5 rounded-full font-bold shrink-0">100% 契合</span>
                         </div>
                         <p className="text-[11px] text-slate-500 leading-relaxed font-semibold">
-                          在您的本地电脑/播放器上直接发起底层探测，完美测量您的家庭宽带（或特定城市段）向对端 IPTV 源的真实握手延迟。支持一键上报云端同步使生效。
+                          在您的本地电脑/播放器上直接发起底层探测，完美测量您的家庭宽带向对端 IPTV 源的真实握手延迟。
                         </p>
                       </div>
 
-                      <div className="bg-slate-50/60 p-4 rounded-xl space-y-3.5 border border-slate-100 text-xs text-slate-650" id="client_engine_console">
-                        <div className="grid grid-cols-2 gap-3">
+                      <div className="bg-slate-50/60 p-3 sm:p-4 rounded-xl space-y-3 border border-slate-100 text-xs text-slate-650" id="client_engine_console">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
                           <div className="space-y-1">
                             <label className="text-[10px] font-black text-slate-400 block pb-0.5">本地宽带所属运营商</label>
                             <select
@@ -3400,15 +3459,15 @@ export default function App() {
                         </div>
 
                         {/* 测速筛选：仅测当前有效和未测试的线路 */}
-                        <div className="flex items-center justify-between text-[11px] bg-sky-50/20 px-3 py-2 rounded-lg border border-sky-100/50 hover:bg-sky-50/40 transition">
+                        <div className="flex items-start sm:items-center justify-between text-[11px] bg-sky-50/20 px-3 py-2 rounded-lg border border-sky-100/50 hover:bg-sky-50/40 transition gap-2">
                           <label className="flex items-center gap-2 cursor-pointer select-none w-full">
                             <input
                               type="checkbox"
                               checked={clientTestOnlyActive}
                               onChange={(e) => setClientTestOnlyActive(e.target.checked)}
-                              className="w-3.5 h-3.5 text-sky-600 border-slate-300 rounded focus:ring-sky-500 cursor-pointer"
+                              className="w-3.5 h-3.5 text-sky-600 border-slate-300 rounded focus:ring-sky-500 cursor-pointer shrink-0"
                             />
-                            <span className="font-bold text-slate-700">仅加载与检测状态为 [有效/可用] 与 [未测试] 的物理线路（过滤失效死链）</span>
+                            <span className="font-bold text-slate-700 text-[10.5px]">仅加载可用与未测试线路</span>
                           </label>
                           <span className="text-[10px] bg-sky-100 text-sky-800 px-1.5 py-0.5 rounded shrink-0 font-extrabold font-mono">
                             {filteredGlobalSources.filter(s => s.status === "active" || s.status === "unknown" || s.status === "checking").length} 条
@@ -3416,7 +3475,7 @@ export default function App() {
                         </div>
 
                         {/* 智能网络感知归属探测行 */}
-                        <div className="flex items-center justify-between text-[10.5px] text-slate-500 bg-slate-100/50 px-3 py-2 rounded-lg border border-slate-200/60 font-sans">
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1.5 text-[10.5px] text-slate-500 bg-slate-100/50 px-3 py-2 rounded-lg border border-slate-200/60 font-sans">
                           <span className="font-bold flex items-center gap-1 text-slate-600">
                             🌐 本地公网真实 IP: <span className="font-mono text-sky-650 font-black select-all">{detectedIp || "识别中..."}</span>
                           </span>
@@ -3424,9 +3483,9 @@ export default function App() {
                             type="button"
                             onClick={() => detectClientIpInfo(false)}
                             disabled={isDetectingIp}
-                            className={`px-2.5 py-1 bg-white hover:bg-sky-50 hover:text-sky-700 border border-slate-200 hover:border-sky-300 rounded-md text-sky-600 font-black cursor-pointer transition flex items-center gap-1 text-[10px] ${isDetectingIp ? "animate-pulse" : ""}`}
+                            className={`px-2.5 py-1 bg-white hover:bg-sky-50 hover:text-sky-700 border border-slate-200 hover:border-sky-300 rounded-md text-sky-600 font-black cursor-pointer transition flex items-center justify-center gap-1 text-[10px] ${isDetectingIp ? "animate-pulse" : ""}`}
                           >
-                            {isDetectingIp ? "🎯 探测中..." : "🔄 自动感应本地网络"}
+                            {isDetectingIp ? "🎯 探测中..." : "🔄 自动感应网络"}
                           </button>
                         </div>
 
@@ -3448,13 +3507,13 @@ export default function App() {
                           </div>
                         ) : (
                           <div className="flex flex-col gap-2 pt-1">
-                            <div className="flex gap-2">
+                            <div className="flex flex-col sm:flex-row gap-2">
                               <button
                                 onClick={runClientSideProbeTest}
                                 className="flex-1 py-2.5 bg-sky-600 hover:bg-sky-700 text-white font-extrabold text-[11px] rounded-xl transition cursor-pointer flex items-center justify-center gap-1.5 shrink-0"
                               >
                                 <Play className="w-3.5 h-3.5" />
-                                `启动 [${clientTestIsp} + BGP多线] 全量代测`
+                                启动 [{clientTestIsp}] 本地探测
                               </button>
                               
                               {clientTestResults.length > 0 && (
@@ -3463,7 +3522,7 @@ export default function App() {
                                   className="flex-1 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-[11px] rounded-xl transition cursor-pointer flex items-center justify-center gap-1.5 shadow-md shadow-emerald-100 shrink-0"
                                 >
                                   <UploadCloud className="w-3.5 h-3.5" />
-                                  同步评估报告 ({clientTestResults.length})
+                                  同步报告 ({clientTestResults.length})
                                 </button>
                               )}
                             </div>
@@ -3480,7 +3539,7 @@ export default function App() {
                                 className="text-[10px] text-indigo-600 hover:underline hover:text-indigo-800 font-bold flex items-center gap-1 cursor-pointer"
                               >
                                 <FileText className="w-3 h-3" />
-                                {showApiDoc ? "关闭 API 文档说明" : "阅读 API 接口定义文档"}
+                                {showApiDoc ? "关闭文档" : "API 文档"}
                               </button>
                             </div>
                           </div>
@@ -3492,17 +3551,17 @@ export default function App() {
 
                   {/* 针对方案二的可扩展报告开放接口说明书 Accordion */}
                   {showApiDoc && (
-                    <div className="bg-slate-900 text-slate-100 p-6 rounded-2xl border border-slate-800 space-y-4 shadow-2xl animate-fade-in font-mono text-xs" id="api_developer_docs_panel">
+                    <div className="bg-slate-900 text-slate-100 p-4 sm:p-6 rounded-2xl border border-slate-800 space-y-4 shadow-2xl animate-fade-in font-mono text-xs" id="api_developer_docs_panel">
                       <div className="flex justify-between items-center pb-2 border-b border-slate-800">
                         <div className="flex items-center gap-1.5 text-indigo-400 font-black text-xs">
-                          <Database className="w-4 h-4 text-indigo-400" />
-                          方案二：客户端/边缘硬件探针接口文档 (CLIENT PROBE SUBMISSION PROTOCOL)
+                          <Database className="w-4 h-4 text-indigo-400 shrink-0" />
+                          客户端/边缘硬件探针接口文档 (CLIENT PROBE PROTOCOL)
                         </div>
                         <button 
                           onClick={() => setShowApiDoc(false)} 
-                          className="bg-slate-800 hover:bg-slate-700 text-slate-450 hover:text-slate-100 px-3 py-1 bg-slate-850 rounded text-[10px] font-black cursor-pointer"
+                          className="bg-slate-800 hover:bg-slate-700 text-slate-450 hover:text-slate-100 px-2.5 py-1 rounded text-[10px] font-black cursor-pointer"
                         >
-                          ✕ 关闭文档
+                          ✕ 关闭
                         </button>
                       </div>
 
@@ -3554,19 +3613,19 @@ export default function App() {
                   )}
 
                   {/* Multi-Dimensional Filters Card */}
-                  <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-xs space-y-4" id="global_sources_filters_card">
-                    <div className="flex items-center justify-between">
+                  <div className="bg-white p-3.5 sm:p-6 rounded-2xl border border-slate-200 shadow-xs space-y-3 sm:space-y-4" id="global_sources_filters_card">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1.5">
                       <div className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
-                        <Filter className="w-4 h-4 text-indigo-505" />
-                        全域线路多维智能过滤器 & 全天候排查
+                        <Filter className="w-4 h-4 text-indigo-550 shrink-0" />
+                        全域线路多维智能过滤器
                       </div>
-                      <span className="text-[10px] bg-indigo-50 text-indigo-700 px-2.5 py-0.5 rounded-full font-bold">
+                      <span className="text-[10px] bg-indigo-50 text-indigo-700 px-2.5 py-0.5 rounded-full font-bold self-start sm:self-auto">
                         覆盖全站 {channels.reduce((acc, c) => acc + (c.sources ? c.sources.length : 0), 0)} 条活跃广播流
                       </span>
                     </div>
 
-                    <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-                      <div className="space-y-1.5">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5 sm:gap-4">
+                      <div className="space-y-1">
                         <label className="text-[10px] uppercase font-bold text-slate-400 block">搜索频道或流链接</label>
                         <div className="relative">
                           <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
@@ -3575,16 +3634,16 @@ export default function App() {
                             value={globalSourceSearch}
                             onChange={(e) => setGlobalSourceSearch(e.target.value)}
                             placeholder="如: cctv, m3u8, rst..."
-                            className="w-full text-xs pl-8 pr-3 p-2.5 border border-slate-200 rounded-xl bg-slate-50 focus:outline-none focus:border-indigo-500"
+                            className="w-full text-xs pl-8 pr-3 p-2 border border-slate-200 rounded-xl bg-slate-50 focus:outline-none focus:border-indigo-500 font-medium"
                           />
                         </div>
                       </div>
-                      <div className="space-y-1.5">
+                      <div className="space-y-1">
                         <label className="text-[10px] uppercase font-bold text-slate-400 block">按归属运营商 (ISP)</label>
                         <select
                           value={globalSourceIsp}
                           onChange={(e) => setGlobalSourceIsp(e.target.value)}
-                          className="w-full text-xs p-2.5 border border-slate-200 rounded-xl bg-slate-50 focus:outline-none focus:border-indigo-500 font-bold"
+                          className="w-full text-xs p-2 border border-slate-200 rounded-xl bg-slate-50 focus:outline-none focus:border-indigo-500 font-bold"
                         >
                           <option value="all">所有运营商类型 (不限)</option>
                           <option value="电信">🟢 中国电信 (Telecom)</option>
@@ -3597,12 +3656,12 @@ export default function App() {
                           ))}
                         </select>
                       </div>
-                      <div className="space-y-1.5">
+                      <div className="space-y-1">
                         <label className="text-[10px] uppercase font-bold text-slate-400 block">地区分区政企段 (Province)</label>
                         <select
                           value={globalSourceProvince}
                           onChange={(e) => setGlobalSourceProvince(e.target.value)}
-                          className="w-full text-xs p-2.5 border border-slate-200 rounded-xl bg-slate-50 focus:outline-none focus:border-indigo-500 font-bold"
+                          className="w-full text-xs p-2 border border-slate-200 rounded-xl bg-slate-50 focus:outline-none focus:border-indigo-500 font-bold"
                         >
                           <option value="all">所有省份地区 (不限)</option>
                           <option value="全国">⭐ 全国通用</option>
@@ -3611,12 +3670,12 @@ export default function App() {
                           ))}
                         </select>
                       </div>
-                      <div className="space-y-1.5">
+                      <div className="space-y-1">
                         <label className="text-[10px] uppercase font-bold text-slate-400 block">物理线路网络状态</label>
                         <select
                           value={globalSourceStatus}
                           onChange={(e) => setGlobalSourceStatus(e.target.value)}
-                          className="w-full text-xs p-2.5 border border-slate-200 rounded-xl bg-slate-50 focus:outline-none focus:border-indigo-500 font-bold"
+                          className="w-full text-xs p-2 border border-slate-200 rounded-xl bg-slate-50 focus:outline-none focus:border-indigo-500 font-bold"
                         >
                           <option value="all">全部状态 (默认, 不含隔离)</option>
                           <option value="all_with_isolated">全部状态 (含已隔离)</option>
@@ -3630,8 +3689,8 @@ export default function App() {
                     </div>
 
                     {(globalSourceSearch || globalSourceIsp !== "all" || globalSourceProvince !== "all" || globalSourceStatus !== "all") && (
-                      <div className="flex justify-between items-center pt-2 border-t border-slate-100">
-                        <span className="text-[10px] text-slate-400 font-semibold">🔍 当前筛选出 {filteredGlobalSources.length} 条符合物理描述的直播源</span>
+                      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center pt-2 border-t border-slate-100 gap-1.5">
+                        <span className="text-[10px] text-slate-400 font-semibold">🔍 筛选出 {filteredGlobalSources.length} 条符合物理描述的直播源</span>
                         <button 
                           onClick={async () => {
                             setGlobalSourceSearch("");
@@ -3650,57 +3709,57 @@ export default function App() {
 
                   {/* Batch Actions Bar for Global Sources */}
                   {selectedGlobalSourceIds.length > 0 && (
-                    <div className="bg-indigo-50/50 border border-indigo-100 p-5 rounded-2xl flex flex-col md:flex-row gap-4 items-center justify-between shadow-xs animate-slide-in" id="global_sources_batch_bar">
+                    <div className="bg-indigo-50/50 border border-indigo-100 p-3.5 sm:p-5 rounded-2xl flex flex-col md:flex-row gap-3 sm:gap-4 items-stretch md:items-center justify-between shadow-xs animate-slide-in" id="global_sources_batch_bar">
                       <div className="flex items-center gap-3">
-                        <div className="w-10 h-10 rounded-xl bg-indigo-600 text-white flex items-center justify-center font-bold font-mono shadow-md shadow-indigo-650/10">
+                        <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-indigo-600 text-white flex items-center justify-center font-bold font-mono shadow-md shadow-indigo-650/10 shrink-0">
                           {selectedGlobalSourceIds.length}
                         </div>
                         <div>
                           <div className="text-xs font-black text-indigo-950">跨频道批量操控生效中</div>
-                          <p className="text-[10px] text-indigo-700 font-semibold mt-0.5">您已选定了多个电视频道的直播拉流。您可以将其一键删除、跨地域归属修改或调度测速。</p>
+                          <p className="text-[10px] text-indigo-700 font-semibold mt-0.5">已选定 {selectedGlobalSourceIds.length} 条直播拉流，支持一键删除、设置或测速。</p>
                         </div>
                       </div>
 
-                      <div className="flex flex-wrap gap-2">
+                      <div className="grid grid-cols-2 sm:flex sm:flex-wrap gap-2">
                         <button
                           onClick={async () => {
                             setBatchGlobalSourceForm({ isp: "", province: "", status: "" });
                             setIsBatchGlobalSourceModalOpen(true);
                           }}
-                          className="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold px-4 py-2.5 rounded-xl transition shadow-md shadow-indigo-500/10 cursor-pointer flex items-center gap-1.5"
+                          className="bg-indigo-600 hover:bg-indigo-700 text-white text-[11px] sm:text-xs font-bold px-3 py-2 rounded-xl transition cursor-pointer flex items-center justify-center gap-1"
                         >
                           <Layers className="w-3.5 h-3.5" />
-                          批量套用属性
+                          套用属性
                         </button>
                         <button
                           onClick={handleGlobalBatchTest}
-                          className="bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold px-4 py-2.5 rounded-xl transition shadow-md shadow-blue-500/10 cursor-pointer flex items-center gap-1.5"
+                          className="bg-blue-600 hover:bg-blue-700 text-white text-[11px] sm:text-xs font-bold px-3 py-2 rounded-xl transition cursor-pointer flex items-center justify-center gap-1"
                         >
                           <Zap className="w-3.5 h-3.5" />
-                          对齐多线程测速
+                          多线程测速
                         </button>
                         <button
                           onClick={() => handleGlobalBatchIsolate(true)}
-                          className="bg-orange-600 hover:bg-orange-700 text-white text-xs font-bold px-4 py-2.5 rounded-xl transition shadow-md shadow-orange-500/10 cursor-pointer flex items-center gap-1.5"
+                          className="bg-orange-600 hover:bg-orange-700 text-white text-[11px] sm:text-xs font-bold px-3 py-2 rounded-xl transition cursor-pointer text-center"
                         >
-                          批量软隔离
+                          批量隔离
                         </button>
                         <button
                           onClick={() => handleGlobalBatchIsolate(false)}
-                          className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold px-4 py-2.5 rounded-xl transition shadow-md shadow-emerald-500/10 cursor-pointer flex items-center gap-1.5"
+                          className="bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] sm:text-xs font-bold px-3 py-2 rounded-xl transition cursor-pointer text-center"
                         >
-                          批量取消隔离
+                          取消隔离
                         </button>
                         <button
                           onClick={handleGlobalBatchDelete}
-                          className="bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold px-4 py-2.5 rounded-xl transition shadow-md shadow-rose-500/10 cursor-pointer flex items-center gap-1.5"
+                          className="bg-rose-600 hover:bg-rose-700 text-white text-[11px] sm:text-xs font-bold px-3 py-2 rounded-xl transition cursor-pointer flex items-center justify-center gap-1 col-span-2 sm:col-span-1"
                         >
                           <Trash2 className="w-3.5 h-3.5" />
-                          一键批量强制清空
+                          批量删除
                         </button>
                         <button
                           onClick={() => setSelectedGlobalSourceIds([])}
-                          className="bg-white border border-slate-200 hover:bg-slate-50 text-slate-500 text-xs font-bold px-4 py-2.5 rounded-xl transition-all cursor-pointer shadow-xs"
+                          className="bg-white border border-slate-200 hover:bg-slate-50 text-slate-500 text-[11px] sm:text-xs font-bold px-3 py-2 rounded-xl transition cursor-pointer text-center col-span-2 sm:col-span-1"
                         >
                           取消选择
                         </button>
@@ -3711,14 +3770,15 @@ export default function App() {
                   {/* List / Table of Global Sources */}
                   <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden" id="global_sources_list_card">
                     {filteredGlobalSources.length === 0 ? (
-                      <div className="text-center py-20 bg-slate-50/20 m-4 rounded-xl border-2 border-dashed border-slate-100 flex flex-col items-center justify-center">
-                        <Compass className="w-12 h-12 text-slate-300 stroke-[1.2] mb-3" />
+                      <div className="text-center py-16 sm:py-20 bg-slate-50/20 m-3 sm:m-4 rounded-xl border-2 border-dashed border-slate-100 flex flex-col items-center justify-center">
+                        <Compass className="w-10 h-10 sm:w-12 sm:h-12 text-slate-300 stroke-[1.2] mb-3" />
                         <h4 className="font-bold text-slate-800 text-sm">未能找到匹配任何流媒体线路</h4>
-                        <p className="text-[11px] text-slate-400 mt-1 max-w-sm leading-relaxed font-semibold">无满足当前运营商、省份、连通性及搜素输入限制的物理线路，请清理当前过滤器重试。</p>
+                        <p className="text-[11px] text-slate-400 mt-1 max-w-sm leading-relaxed font-semibold">无满足当前运营商、省份、连通性及搜索输入的物理线路。</p>
                       </div>
                     ) : (
                       <>
-                        <div className="overflow-x-auto max-h-[600px] overflow-y-auto">
+                        {/* Desktop Table View */}
+                        <div className="hidden md:block overflow-x-auto max-h-[600px] overflow-y-auto">
                           <table className="w-full text-left border-collapse" id="global_sources_table">
                             <thead className="sticky top-0 bg-slate-50 border-b border-slate-200 shadow-xs z-10">
                               <tr className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">
@@ -3739,7 +3799,7 @@ export default function App() {
                                   />
                                 </th>
                                 <th className="py-4 px-3 w-48">所属电视频道</th>
-                                <th className="py-4 px-3">全量播放播放源链接</th>
+                                <th className="py-4 px-3">全量播放源链接</th>
                                 <th className="py-4 px-3 w-32">运营商 (ISP)</th>
                                 <th className="py-4 px-3 w-32">地区省份</th>
                                 <th className="py-4 px-3 w-32">网络连通状态</th>
@@ -3931,22 +3991,250 @@ export default function App() {
                                 </tr>
                               );
                             })}
-                          </tbody>
-                        </table>
-                      </div>
-                      {filteredGlobalSources.length > slicedGlobalSources.length && (
-                        <div className="p-4 border-t border-slate-100 bg-slate-50/50 flex justify-center items-center">
-                          <button
-                            onClick={() => setGlobalSourcePage(prev => prev + 1)}
-                            className="text-xs font-black text-indigo-650 hover:text-indigo-800 bg-indigo-50/80 hover:bg-indigo-100 px-5 py-2.5 rounded-xl transition cursor-pointer flex items-center gap-1.5 shadow-xs"
-                          >
-                            显示更多物理线路 (已显示 {slicedGlobalSources.length} / 共 {filteredGlobalSources.length} 条)
-                          </button>
+                            </tbody>
+                          </table>
                         </div>
-                      )}
-                    </>
-                  )}
-                </div>
+
+                        {/* Mobile Stream Cards View */}
+                        <div className="block md:hidden divide-y divide-slate-100 p-2.5 space-y-3">
+                          <div className="flex items-center justify-between px-1 pb-1 text-[11px] font-bold text-slate-500">
+                            <label className="flex items-center gap-2 cursor-pointer">
+                              <input 
+                                type="checkbox"
+                                className="w-4 h-4 text-indigo-600 border-slate-300 rounded focus:ring-indigo-500 cursor-pointer"
+                                checked={filteredGlobalSources.length > 0 && filteredGlobalSources.every(s => selectedGlobalSourceIds.includes(s.id))}
+                                onChange={(e) => {
+                                  if (e.target.checked) {
+                                    const allIds = filteredGlobalSources.map(s => s.id);
+                                    setSelectedGlobalSourceIds(prev => Array.from(new Set([...prev, ...allIds])));
+                                  } else {
+                                    const allIds = filteredGlobalSources.map(s => s.id);
+                                    setSelectedGlobalSourceIds(prev => prev.filter(id => !allIds.includes(id)));
+                                  }
+                                }}
+                              />
+                              <span>全选当前过滤线路</span>
+                            </label>
+                            <span>已显示 {slicedGlobalSources.length} 条</span>
+                          </div>
+
+                          {slicedGlobalSources.map((item) => {
+                            const isChecked = selectedGlobalSourceIds.includes(item.id);
+                            return (
+                              <div 
+                                key={item.id} 
+                                className={`p-3.5 rounded-xl border transition-all ${
+                                  isChecked 
+                                    ? "bg-indigo-50/40 border-indigo-200 shadow-xs" 
+                                    : item.isolated 
+                                    ? "bg-orange-50/20 border-orange-200/80 opacity-80" 
+                                    : "bg-white border-slate-200 shadow-2xs"
+                                }`}
+                              >
+                                {/* Top Header Row */}
+                                <div className="flex items-center justify-between gap-2 mb-2">
+                                  <div className="flex items-center gap-2 min-w-0">
+                                    <input 
+                                      type="checkbox"
+                                      className="w-4 h-4 text-indigo-600 border-slate-300 rounded focus:ring-indigo-500 cursor-pointer shrink-0"
+                                      checked={isChecked}
+                                      onChange={(e) => {
+                                        if (e.target.checked) {
+                                          setSelectedGlobalSourceIds(prev => [...prev, item.id]);
+                                        } else {
+                                          setSelectedGlobalSourceIds(prev => prev.filter(id => id !== item.id));
+                                        }
+                                      }}
+                                    />
+                                    {item.channelLogo ? (
+                                      <img src={item.channelLogo} alt={item.channelName} className="w-5 h-5 object-contain bg-slate-50 rounded border border-slate-100 p-0.5 shrink-0" referrerPolicy="no-referrer" />
+                                    ) : (
+                                      <div className="w-5 h-5 rounded bg-slate-100 text-[9px] font-black flex items-center justify-center text-slate-400 font-mono shrink-0">TV</div>
+                                    )}
+                                    <span className="font-extrabold text-slate-800 text-xs truncate" title={item.channelName}>
+                                      {item.channelName}
+                                    </span>
+                                  </div>
+
+                                  <div className="flex items-center gap-1.5 shrink-0">
+                                    <span className={`w-2 h-2 rounded-full ${
+                                      item.isolated ? "bg-orange-500 shadow-xs shadow-orange-500" :
+                                      item.status === "active" ? "bg-emerald-500 shadow-xs shadow-emerald-500" :
+                                      item.status === "inactive" ? "bg-rose-500 shadow-xs shadow-rose-500" :
+                                      item.status === "checking" ? "bg-amber-500 animate-pulse shadow-xs shadow-amber-500" : "bg-slate-350"
+                                    }`} />
+                                    <span className="font-bold text-[11px] text-slate-700">
+                                      {item.isolated ? "已隔离" :
+                                       item.status === "active" ? "有效" :
+                                       item.status === "inactive" ? "失效" :
+                                       item.status === "checking" ? "测试中" : "未测"}
+                                    </span>
+                                    {item.latency !== undefined && (
+                                      <span className="text-[10px] text-slate-500 font-bold font-mono">({item.latency}ms)</span>
+                                    )}
+                                  </div>
+                                </div>
+
+                                {/* Stream URL Box */}
+                                <div className="bg-slate-50 p-2 rounded-lg border border-slate-150 flex items-center justify-between gap-2 my-2">
+                                  <span className="text-[11px] font-mono text-slate-600 truncate select-all flex-1" title={item.url}>
+                                    {item.url}
+                                  </span>
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      navigator.clipboard.writeText(item.url);
+                                      showFeedback("success", "直播源拉流链接已拷贝！");
+                                    }}
+                                    className="p-1 text-slate-400 hover:text-indigo-600 bg-white hover:bg-indigo-50 border border-slate-200 rounded transition shrink-0 cursor-pointer"
+                                    title="拷贝流地址"
+                                  >
+                                    <Copy className="w-3.5 h-3.5" />
+                                  </button>
+                                </div>
+
+                                {/* Badges Row */}
+                                <div className="flex flex-wrap items-center gap-1.5 my-2">
+                                  <span className={`px-2 py-0.5 rounded text-[10px] font-bold border ${
+                                    item.isp === "电信" ? "bg-sky-50 text-sky-700 border-sky-100" :
+                                    item.isp === "联通" ? "bg-orange-50 text-orange-700 border-orange-100" :
+                                    item.isp === "移动" ? "bg-emerald-50 text-emerald-700 border-emerald-100" :
+                                    item.isp === "广电" ? "bg-purple-50 text-purple-700 border-purple-100" : "bg-slate-50 text-slate-600 border-slate-150"
+                                  }`}>
+                                    {item.isp || "BGP"}
+                                  </span>
+                                  <span className="px-2 py-0.5 rounded text-[10px] font-extrabold bg-slate-100 text-slate-700 border border-slate-200">
+                                    {item.province || "全国"}
+                                  </span>
+                                  {item.testCount !== undefined && item.testCount > 0 && item.successCount !== undefined && (
+                                    <span className="text-[10px] text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded font-bold">
+                                      可靠度 {Math.round((item.successCount / item.testCount) * 100)}%
+                                    </span>
+                                  )}
+                                </div>
+
+                                {/* Mobile Action Buttons Bar */}
+                                <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
+                                  <button
+                                    onClick={async (e) => {
+                                      e.stopPropagation();
+                                      try {
+                                        const res = await fetch(`/api/channels/${item.channelId}/sources/${item.id}/isolate`, {
+                                          method: "POST",
+                                          headers: { "Content-Type": "application/json" },
+                                          body: JSON.stringify({ isolated: !item.isolated })
+                                        });
+                                        if (res.ok) {
+                                          showFeedback("success", !item.isolated ? "直播线路已隔离" : "已恢复隔离");
+                                          await fetchData();
+                                        } else {
+                                          showFeedback("error", "操作失败");
+                                        }
+                                      } catch(e) {
+                                        showFeedback("error", "网络超时");
+                                      }
+                                    }}
+                                    className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border ${
+                                      item.isolated 
+                                        ? "bg-emerald-50 text-emerald-700 border-emerald-200" 
+                                        : "bg-orange-50 text-orange-700 border-orange-200"
+                                    } cursor-pointer`}
+                                  >
+                                    {item.isolated ? "恢复" : "隔离"}
+                                  </button>
+
+                                  <button
+                                    onClick={async (e) => {
+                                      e.stopPropagation();
+                                      try {
+                                        const res = await fetch("/api/sources/test", {
+                                          method: "POST",
+                                          headers: { "Content-Type": "application/json" },
+                                          body: JSON.stringify({ sourceIds: [item.id] })
+                                        });
+                                        if (res.ok) {
+                                          showFeedback("success", "已提交测速...");
+                                          await fetchData();
+                                        } else {
+                                          showFeedback("error", "测速指令异常");
+                                        }
+                                      } catch (_) {
+                                        showFeedback("error", "通信故障");
+                                      }
+                                    }}
+                                    className="px-2.5 py-1 rounded-lg text-[11px] font-bold bg-indigo-50 text-indigo-700 border border-indigo-200 cursor-pointer"
+                                  >
+                                    测速
+                                  </button>
+
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      const c = channels.find(ch => ch.id === item.channelId);
+                                      if (c) {
+                                        setSelectedChannel(c);
+                                        setEditingSource(item);
+                                        setSourceForm({
+                                          url: item.url,
+                                          province: item.province || "全国",
+                                          isp: item.isp || "BGP"
+                                        });
+                                        setIsSourceModalOpen(true);
+                                      }
+                                    }}
+                                    className="px-2.5 py-1 rounded-lg text-[11px] font-bold bg-blue-50 text-blue-700 border border-blue-200 cursor-pointer"
+                                  >
+                                    编辑
+                                  </button>
+
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      const c = channels.find(ch => ch.id === item.channelId);
+                                      if (!c) return;
+                                      triggerConfirm(
+                                        "删除直播流线路",
+                                        `确定从 [${c.name}] 中删除此线路？`,
+                                        async () => {
+                                          try {
+                                            const res = await fetch(`/api/channels/${c.id}/sources/${item.id}`, {
+                                              method: "DELETE"
+                                            });
+                                            if (res.ok) {
+                                              showFeedback("success", "已移除线路");
+                                              await fetchData();
+                                            } else {
+                                              showFeedback("error", "移除失败");
+                                            }
+                                          } catch (_) {
+                                            showFeedback("error", "通信失效");
+                                          }
+                                        }
+                                      );
+                                    }}
+                                    className="px-2.5 py-1 rounded-lg text-[11px] font-bold bg-rose-50 text-rose-700 border border-rose-200 cursor-pointer"
+                                  >
+                                    删除
+                                  </button>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+
+                        {filteredGlobalSources.length > slicedGlobalSources.length && (
+                          <div className="p-3.5 sm:p-4 border-t border-slate-100 bg-slate-50/50 flex justify-center items-center">
+                            <button
+                              onClick={() => setGlobalSourcePage(prev => prev + 1)}
+                              className="text-xs font-black text-indigo-650 hover:text-indigo-800 bg-indigo-50/80 hover:bg-indigo-100 px-5 py-2.5 rounded-xl transition cursor-pointer flex items-center gap-1.5 shadow-xs"
+                            >
+                              显示更多物理线路 (已显示 {slicedGlobalSources.length} / 共 {filteredGlobalSources.length} 条)
+                            </button>
+                          </div>
+                        )}
+                      </>
+                    )}
+                  </div>
                 </div>
               )}
             </div>
