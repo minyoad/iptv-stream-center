@@ -16,7 +16,10 @@ export default function StatsView({ channels }: StatsViewProps) {
 
   const fetchReports = async () => {
     try {
-      const res = await fetch("/api/test-reports");
+      const password = localStorage.getItem("iptv_admin_password") || "";
+      const res = await fetch("/api/test-reports", {
+        headers: { "x-admin-password": password }
+      });
       if (res.ok) {
         setReports(await res.json());
       }
@@ -33,7 +36,10 @@ export default function StatsView({ channels }: StatsViewProps) {
 
   const viewReportDetails = async (id: string) => {
     try {
-      const res = await fetch(`/api/test-reports/${id}`);
+      const password = localStorage.getItem("iptv_admin_password") || "";
+      const res = await fetch(`/api/test-reports/${id}`, {
+        headers: { "x-admin-password": password }
+      });
       if (res.ok) {
         setSelectedReport(await res.json());
       }
@@ -46,7 +52,11 @@ export default function StatsView({ channels }: StatsViewProps) {
     e.stopPropagation();
     if (confirm("确定要删除这条测速记录吗？")) {
       try {
-        const res = await fetch(`/api/test-reports/${id}`, { method: "DELETE" });
+        const password = localStorage.getItem("iptv_admin_password") || "";
+        const res = await fetch(`/api/test-reports/${id}`, { 
+          method: "DELETE",
+          headers: { "x-admin-password": password }
+        });
         if (res.ok) {
           fetchReports();
           if (selectedReport?.id === id) {
