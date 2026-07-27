@@ -104,12 +104,12 @@ export default function StatsView({ channels }: StatsViewProps) {
 
   return (
     <div className="space-y-6 animate-fade-in" id="tab_stats_view">
-      <div className="flex bg-slate-100 p-1 rounded-xl w-max">
+      <div className="flex bg-slate-100 p-1 rounded-xl w-full sm:w-max overflow-x-auto">
         <button
           onClick={() => setActiveTab("current")}
-          className={`px-5 py-2 rounded-lg text-xs font-bold transition-all ${
+          className={`flex-1 sm:flex-none px-4 sm:px-5 py-2 rounded-lg text-xs font-bold transition-all whitespace-nowrap ${
             activeTab === "current"
-              ? "bg-white text-indigo-700 shadow-sm"
+              ? "bg-white text-indigo-700 shadow-xs"
               : "text-slate-500 hover:text-slate-700"
           }`}
         >
@@ -117,9 +117,9 @@ export default function StatsView({ channels }: StatsViewProps) {
         </button>
         <button
           onClick={() => setActiveTab("history")}
-          className={`px-5 py-2 rounded-lg text-xs font-bold transition-all ${
+          className={`flex-1 sm:flex-none px-4 sm:px-5 py-2 rounded-lg text-xs font-bold transition-all whitespace-nowrap ${
             activeTab === "history"
-              ? "bg-white text-indigo-700 shadow-sm"
+              ? "bg-white text-indigo-700 shadow-xs"
               : "text-slate-500 hover:text-slate-700"
           }`}
         >
@@ -129,34 +129,34 @@ export default function StatsView({ channels }: StatsViewProps) {
 
       {activeTab === "current" && (
         <div className="space-y-6 animate-fade-in">
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex items-center gap-4">
-          <div className="w-12 h-12 rounded-full bg-blue-50 flex items-center justify-center shrink-0">
-            <Activity className="w-6 h-6 text-blue-500" />
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-4">
+        <div className="bg-white p-4 sm:p-5 rounded-2xl border border-slate-200 shadow-xs flex items-center gap-4">
+          <div className="w-10 h-10 sm:w-12 sm:h-12 rounded-full bg-blue-50 flex items-center justify-center shrink-0">
+            <Activity className="w-5 h-5 sm:w-6 sm:h-6 text-blue-500" />
           </div>
           <div>
-            <p className="text-xs font-bold text-slate-400 uppercase">总计频道数</p>
-            <p className="text-2xl font-black text-slate-800">{totalChannels}</p>
+            <p className="text-[11px] sm:text-xs font-bold text-slate-400 uppercase">总计频道数</p>
+            <p className="text-xl sm:text-2xl font-black text-slate-800">{totalChannels}</p>
           </div>
         </div>
         
-        <div className="bg-rose-50 p-5 rounded-2xl border border-rose-100 shadow-sm flex items-center gap-4">
-          <div className="w-12 h-12 rounded-full bg-rose-100 flex items-center justify-center shrink-0">
-            <AlertCircle className="w-6 h-6 text-rose-500" />
+        <div className="bg-rose-50 p-4 sm:p-5 rounded-2xl border border-rose-100 shadow-xs flex items-center gap-4">
+          <div className="w-10 h-10 sm:w-12 sm:h-12 rounded-full bg-rose-100 flex items-center justify-center shrink-0">
+            <AlertCircle className="w-5 h-5 sm:w-6 sm:h-6 text-rose-500" />
           </div>
           <div>
-            <p className="text-xs font-bold text-rose-400 uppercase">不稳定频道 (&lt; 2 有效线路)</p>
-            <p className="text-2xl font-black text-rose-700">{unstableChannelsCount}</p>
+            <p className="text-[11px] sm:text-xs font-bold text-rose-400 uppercase">不稳定频道 (&lt; 2 有效线路)</p>
+            <p className="text-xl sm:text-2xl font-black text-rose-700">{unstableChannelsCount}</p>
           </div>
         </div>
 
-        <div className="bg-emerald-50 p-5 rounded-2xl border border-emerald-100 shadow-sm flex items-center gap-4">
-          <div className="w-12 h-12 rounded-full bg-emerald-100 flex items-center justify-center shrink-0">
-            <CheckCircle className="w-6 h-6 text-emerald-500" />
+        <div className="bg-emerald-50 p-4 sm:p-5 rounded-2xl border border-emerald-100 shadow-xs flex items-center gap-4">
+          <div className="w-10 h-10 sm:w-12 sm:h-12 rounded-full bg-emerald-100 flex items-center justify-center shrink-0">
+            <CheckCircle className="w-5 h-5 sm:w-6 sm:h-6 text-emerald-500" />
           </div>
           <div>
-            <p className="text-xs font-bold text-emerald-600 uppercase">稳定频道</p>
-            <p className="text-2xl font-black text-emerald-700">{totalChannels - unstableChannelsCount}</p>
+            <p className="text-[11px] sm:text-xs font-bold text-emerald-600 uppercase">稳定频道</p>
+            <p className="text-xl sm:text-2xl font-black text-emerald-700">{totalChannels - unstableChannelsCount}</p>
           </div>
         </div>
       </div>

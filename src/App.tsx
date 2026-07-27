@@ -32,13 +32,15 @@ import {
   GitMerge,
   ChevronUp,
   ChevronDown,
-  X
+  X,
+  Menu
 } from "lucide-react";
 import { Channel, LiveSource, SyncConfig, TestStatus, EpgGuide, Group, EpgSource } from "./types";
 import DashboardView from "./components/DashboardView";
 import StatsView from "./components/StatsView";
 
 export default function App() {
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [channels, setChannels] = useState<Channel[]>([]);
   const [syncConfigs, setSyncConfigs] = useState<SyncConfig[]>([]);
   const [groups, setGroups] = useState<Group[]>([]);
@@ -2140,10 +2142,23 @@ export default function App() {
         </div>
       )}
 
+      {/* Backdrop overlay for mobile drawer */}
+      {isMobileMenuOpen && (
+        <div 
+          onClick={() => setIsMobileMenuOpen(false)} 
+          className="fixed inset-0 bg-slate-900/50 backdrop-blur-xs z-30 md:hidden"
+        />
+      )}
+
       {/* Primary Sidebar - Styled around Clean Minimalism pattern */}
-      <aside className="w-64 bg-white border-r border-slate-200 flex flex-col flex-shrink-0" id="premium_sidebar">
+      <aside 
+        className={`fixed inset-y-0 left-0 z-40 w-64 bg-white border-r border-slate-200 flex flex-col flex-shrink-0 transition-transform duration-300 transform md:static md:translate-x-0 ${
+          isMobileMenuOpen ? "translate-x-0 shadow-2xl" : "-translate-x-full md:translate-x-0"
+        }`} 
+        id="premium_sidebar"
+      >
         {/* Brand Header */}
-        <div className="p-6 border-b border-slate-100">
+        <div className="p-6 border-b border-slate-100 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <div className="w-9 h-9 bg-blue-600 rounded-xl flex items-center justify-center text-white shadow-sm shadow-blue-500/20">
               <Tv className="w-5 h-5" />
@@ -2153,12 +2168,21 @@ export default function App() {
               <span className="text-[10px] text-slate-400 font-medium">直播与源管理终端</span>
             </div>
           </div>
+          <button 
+            onClick={() => setIsMobileMenuOpen(false)}
+            className="md:hidden text-slate-400 hover:text-slate-600 p-1"
+          >
+            <X className="w-5 h-5" />
+          </button>
         </div>
 
         {/* Unified Nav Menu */}
         <div className="flex-1 p-4 space-y-1.5 overflow-y-auto">
           <button 
-            onClick={() => setActiveTab("dashboard")}
+            onClick={() => {
+              setActiveTab("dashboard");
+              setIsMobileMenuOpen(false);
+            }}
             className={`w-full flex items-center gap-3.5 px-4 py-3 rounded-xl transition text-xs font-semibold ${
               activeTab === "dashboard" 
               ? "bg-blue-50/75 text-blue-700 font-bold" 
@@ -2173,6 +2197,7 @@ export default function App() {
           <button 
             onClick={async () => {
               setActiveTab("channels");
+              setIsMobileMenuOpen(false);
               await fetchData();
             }}
             className={`w-full flex items-center gap-3.5 px-4 py-3 rounded-xl transition text-xs font-semibold ${
@@ -2187,7 +2212,10 @@ export default function App() {
           </button>
           
           <button 
-            onClick={() => setActiveTab("stats")}
+            onClick={() => {
+              setActiveTab("stats");
+              setIsMobileMenuOpen(false);
+            }}
             className={`w-full flex items-center gap-3.5 px-4 py-3 rounded-xl transition text-xs font-semibold ${
               activeTab === "stats" 
               ? "bg-blue-50/75 text-blue-700 font-bold" 
@@ -2200,7 +2228,10 @@ export default function App() {
           </button>
 
           <button 
-            onClick={() => setActiveTab("sync")}
+            onClick={() => {
+              setActiveTab("sync");
+              setIsMobileMenuOpen(false);
+            }}
             className={`w-full flex items-center gap-3.5 px-4 py-3 rounded-xl transition text-xs font-semibold ${
               activeTab === "sync" 
               ? "bg-blue-50/75 text-blue-700 font-bold" 
@@ -2213,7 +2244,10 @@ export default function App() {
           </button>
 
           <button 
-            onClick={() => setActiveTab("export")}
+            onClick={() => {
+              setActiveTab("export");
+              setIsMobileMenuOpen(false);
+            }}
             className={`w-full flex items-center gap-3.5 px-4 py-3 rounded-xl transition text-xs font-semibold ${
               activeTab === "export" 
               ? "bg-blue-50/75 text-blue-700 font-bold" 
@@ -2228,6 +2262,7 @@ export default function App() {
           <button 
             onClick={async () => {
               setActiveTab("epg");
+              setIsMobileMenuOpen(false);
               fetchEpgSources();
             }}
             className={`w-full flex items-center gap-3.5 px-4 py-3 rounded-xl transition text-xs font-semibold ${
@@ -2241,8 +2276,11 @@ export default function App() {
             EPG 节目单同步整合
           </button>
 
-                    <button 
-            onClick={() => setActiveTab("cron")}
+          <button 
+            onClick={() => {
+              setActiveTab("cron");
+              setIsMobileMenuOpen(false);
+            }}
             className={`w-full flex items-center gap-3.5 px-4 py-3 rounded-xl transition text-xs font-semibold ${
               activeTab === "cron" 
               ? "bg-blue-50/75 text-blue-700 font-bold" 
@@ -2255,7 +2293,10 @@ export default function App() {
           </button>
 
           <button 
-            onClick={() => setActiveTab("backup")}
+            onClick={() => {
+              setActiveTab("backup");
+              setIsMobileMenuOpen(false);
+            }}
             className={`w-full flex items-center gap-3.5 px-4 py-3 rounded-xl transition text-xs font-semibold ${
               activeTab === "backup" 
               ? "bg-blue-50/75 text-blue-700 font-bold" 
@@ -2271,6 +2312,7 @@ export default function App() {
             onClick={async () => {
               setPasswordForm({ oldPassword: "", newPassword: "", confirmPassword: "" });
               setIsSettingPasswordModalOpen(true);
+              setIsMobileMenuOpen(false);
             }}
             className={`w-full flex items-center justify-between px-4 py-3 rounded-xl transition text-xs text-left font-semibold ${
               isAuthRequired 
@@ -2296,37 +2338,44 @@ export default function App() {
       {/* Main Content Pane */}
       <main className="flex-1 flex flex-col h-screen overflow-hidden">
         {/* Top Header - Structured according to Clean Minimalism Design mockup */}
-        <header className="h-16 bg-white border-b border-slate-200 px-8 flex items-center justify-between flex-shrink-0" id="top_header">
-          <div className="flex items-center gap-3">
-            <h1 className="text-base font-bold text-slate-800">
+        <header className="h-auto min-h-16 bg-white border-b border-slate-200 px-3 sm:px-6 md:px-8 py-3 flex flex-wrap items-center justify-between gap-3 flex-shrink-0" id="top_header">
+          <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+            <button 
+              onClick={() => setIsMobileMenuOpen(prev => !prev)} 
+              className="p-2 -ml-1 text-slate-600 hover:text-slate-900 md:hidden rounded-xl hover:bg-slate-100 transition cursor-pointer"
+              title="切换菜单"
+            >
+              <Menu className="w-5 h-5" />
+            </button>
+            <h1 className="text-xs sm:text-sm md:text-base font-bold text-slate-800 truncate">
               {activeTab === "dashboard" && "直播管理中心一览 (Dashboard)"}
               {activeTab === "channels" && "频道列表与线路维护中心"}
               {activeTab === "stats" && "线路质量与统计分析 (Stream Statistics)"}
               {activeTab === "sync" && "M3U / TXT 网络同步订阅与自定义文件导入"}
               {activeTab === "export" && "播放接口配置生成工具"}
-              {activeTab === "epg" && "EPG XML 国际电视频道节目单同步与多源整合合并中心"}
+              {activeTab === "epg" && "EPG XML 节目单同步整合中心"}
               {activeTab === "backup" && "数据备份与系统完整恢复"}
               {activeTab === "cron" && "自动化定时任务管理 (EPG & 订阅源)"}
             </h1>
           </div>
           
-          <div className="flex items-center gap-4">
+          <div className="flex items-center gap-2 sm:gap-4 flex-wrap">
             {/* Realtime test action banner */}
             {testingStatus.status === "running" ? (
-              <div className="flex items-center gap-3 text-xs text-amber-600 bg-amber-50/85 px-3.5 py-1.5 border border-amber-100 rounded-full font-bold">
-                <span className="w-2 h-2 bg-amber-500 rounded-full animate-ping"></span>
-                <span>正在高并发多线程检测: {testingStatus.checked} / {testingStatus.total} 线路</span>
+              <div className="flex items-center gap-2 text-xs text-amber-600 bg-amber-50/85 px-3 py-1.5 border border-amber-100 rounded-full font-bold">
+                <span className="w-2 h-2 bg-amber-500 rounded-full animate-ping shrink-0"></span>
+                <span className="truncate max-w-[200px] sm:max-w-none">检测中: {testingStatus.checked} / {testingStatus.total}</span>
                 <button 
                   onClick={cancelTest}
-                  className="bg-rose-100 hover:bg-rose-200 text-rose-700 text-[10px] font-bold px-2 py-0.5 rounded-full transition"
+                  className="bg-rose-100 hover:bg-rose-200 text-rose-700 text-[10px] font-bold px-2 py-0.5 rounded-full transition shrink-0"
                 >
-                  放弃测速
+                  放弃
                 </button>
               </div>
             ) : (
-              <div className="flex items-center gap-2 text-xs text-slate-500 bg-slate-100/75 px-3 py-1.5 rounded-full font-semibold">
+              <div className="hidden sm:flex items-center gap-2 text-xs text-slate-500 bg-slate-100/75 px-3 py-1.5 rounded-full font-semibold">
                 <span className="w-2 h-2 bg-emerald-500 rounded-full"></span>
-                自动心跳同步: 已启用 (每分)
+                自动心跳同步: 已启用
               </div>
             )}
 
@@ -2334,20 +2383,20 @@ export default function App() {
               id="top_pulse_speed_btn"
               disabled={testingStatus.status === "running"}
               onClick={triggerConcurrentBulkTest}
-              className={`text-slate-50 px-4 py-2 rounded-xl text-xs font-bold border border-transparent shadow shadow-blue-500/10 transition leading-none flex items-center ${
+              className={`text-slate-50 px-3 sm:px-4 py-2 rounded-xl text-xs font-bold border border-transparent shadow shadow-blue-500/10 transition leading-none flex items-center shrink-0 ${
                 testingStatus.status === "running"
                 ? "bg-slate-200 text-slate-400 cursor-not-allowed"
                 : "bg-blue-600 hover:bg-blue-700 cursor-pointer"
               }`}
             >
-              <Activity className="w-3.5 h-3.5 mr-1.5" />
+              <Activity className="w-3.5 h-3.5 mr-1 sm:mr-1.5" />
               一键并发测速
             </button>
           </div>
         </header>
 
         {/* Dynamic Content Outlet with custom vertical scrolling limits */}
-        <div className="flex-1 overflow-y-auto p-8" id="content_canvas_outer">
+        <div className="flex-1 overflow-y-auto p-3 sm:p-5 md:p-8" id="content_canvas_outer">
           
           {/* VIEW: DASHBOARD */}
           {activeTab === "dashboard" && (

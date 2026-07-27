@@ -11,7 +11,7 @@ import aiohttp
 
 # ==================== [用户自定义参数配置区] ====================
 # [1] 直播源系统的远端中枢服务器 URL (不要以 "/" 结尾)
-SERVER_BASE_URL = "https://ais-dev-h22cqilbhbuzga4hfgpz7g-276461038601.asia-southeast1.run.app" 
+SERVER_BASE_URL = "https://ais-pre-h22cqilbhbuzga4hfgpz7g-276461038601.asia-southeast1.run.app" 
 
 # [2] 本设备的真实物理宽带网络环境属性
 CLIENT_ISP = "AUTO"         
@@ -215,21 +215,31 @@ async def main():
     global CLIENT_ISP, CLIENT_PROVINCE
     
     async with aiohttp.ClientSession(connector=connector) as session:
+        req_headers = {
+            "Accept": "application/json",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) IPTVProbe/2.0"
+        }
+
         # 自动检测当前设备网络环境
         if CLIENT_ISP == "AUTO" or CLIENT_PROVINCE == "AUTO":
             logger.info("正在自动检测本机 IP 与网络环境归属...")
             try:
                 detect_url = f"{SERVER_BASE_URL}/api/sources/detect-ip"
-                async with session.get(detect_url, timeout=5) as ip_resp:
+                async with session.get(detect_url, timeout=5, headers=req_headers) as ip_resp:
                     if ip_resp.status == 200:
-                        ip_data = await ip_resp.json()
-                        CLIENT_PROVINCE = ip_data.get("province", "未知")
-                        CLIENT_ISP = ip_data.get("isp", "未知")
-                        logger.info(f"✅ 网络环境自动识别成功: {CLIENT_PROVINCE} - {CLIENT_ISP} (IP: {ip_data.get('ip', '未知')})")
+                        try:
+                            ip_data = await ip_resp.json()
+                            CLIENT_PROVINCE = ip_data.get("province", "未知")
+                            CLIENT_ISP = ip_data.get("isp", "未知")
+                            logger.info(f"✅ 网络环境自动识别成功: {CLIENT_PROVINCE} - {CLIENT_ISP} (IP: {ip_data.get('ip', '未知')})")
+                        except Exception as json_err:
+                            logger.warning(f"⚠️ 服务器响应解析 JSON 失败: {json_err}，使用未知兜底。")
+                            CLIENT_ISP = "未知"
+                            CLIENT_PROVINCE = "未知"
                     else:
                         CLIENT_ISP = "未知"
                         CLIENT_PROVINCE = "未知"
-                        logger.warning("⚠️ 自动检测网络环境失败，使用未知兜底。")
+                        logger.warning(f"⚠️ 自动检测网络环境失败 (HTTP status: {ip_resp.status})，使用未知兜底。")
             except Exception as e:
                 logger.error(f"⚠️ 无法连接到服务器检测 IP: {e}")
                 CLIENT_ISP = "未知"
@@ -249,11 +259,15 @@ async def main():
             logger.info(f"正在从云端拉取测速列表 (第 {page} 页): {url}")
             
             try:
-                async with session.get(url, timeout=10) as resp:
+                async with session.get(url, timeout=10, headers=req_headers) as resp:
                     if resp.status != 200:
                         logger.error(f"拉取失败 HTTP: {resp.status}")
                         break
-                    data = await resp.json()
+                    try:
+                        data = await resp.json()
+                    except Exception as json_err:
+                        logger.error(f"解析测速列表 JSON 失败: {json_err}")
+                        break
             except Exception as e:
                 logger.error(f"无法拉取配置: {e}")
                 break
