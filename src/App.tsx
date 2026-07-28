@@ -1348,6 +1348,48 @@ export default function App() {
     }
   };
 
+  const handleSmartIsolateInactive = () => {
+    const inactiveSourceIds: string[] = [];
+    channels.forEach(channel => {
+      if (channel.sources) {
+        channel.sources.forEach(source => {
+          if (source.status === "inactive" && !source.isolated) {
+            inactiveSourceIds.push(source.id);
+          }
+        });
+      }
+    });
+
+    if (inactiveSourceIds.length === 0) {
+      showFeedback("info", "当前全域没有未隔离的失效线路");
+      return;
+    }
+
+    triggerConfirm(
+      "一键智能隔离",
+      `检测到全域共有 ${inactiveSourceIds.length} 条状态为 [失效/离线] 的线路。是否一键将其全部隔离？`,
+      async () => {
+        try {
+          const res = await fetch("/api/sources/global-batch-isolate", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ sourceIds: inactiveSourceIds, isolated: true })
+          });
+          if (res.ok) {
+            const data = await res.json();
+            showFeedback("success", `成功智能隔离了 ${data.count} 条失效线路`);
+            await fetchData();
+          } else {
+            const err = await res.json();
+            showFeedback("error", err.error || "智能隔离失败");
+          }
+        } catch (e) {
+          showFeedback("error", "网络超时或连接异常");
+        }
+      }
+    );
+  };
+
   const handleGlobalBatchIsolate = (isolate: boolean) => {
     if (selectedGlobalSourceIds.length === 0) {
       showFeedback("info", "请先选择需要操作的线路");
@@ -2736,12 +2778,12 @@ export default function App() {
                     </div>
 
                     {/* Touch & Horizontal Scrollable Category Pills bar with Channel Counts */}
-                    <div className="flex items-center gap-1.5 bg-white border border-slate-200 rounded-xl px-2 py-1.5 overflow-x-auto scrollbar-none shadow-2xs" id="category_pills">
-                      <div className="flex items-center text-slate-400 pl-1 pr-1 shrink-0 text-xs font-semibold gap-1">
+                    <div className="flex md:flex-wrap md:items-start items-center gap-1.5 bg-white border border-slate-200 rounded-xl px-2 py-1.5 overflow-x-auto scrollbar-none shadow-2xs" id="category_pills">
+                      <div className="flex items-center md:pt-1.5 text-slate-400 pl-1 pr-1 shrink-0 text-xs font-semibold gap-1">
                         <Filter className="w-3.5 h-3.5 text-indigo-500" />
                         <span className="text-[10px] text-slate-400 hidden md:inline">分组:</span>
                       </div>
-                      <div className="flex items-center gap-1.5 overflow-x-auto scrollbar-none py-0.5">
+                      <div className="flex md:flex-wrap items-center gap-1.5 overflow-x-auto md:overflow-visible scrollbar-none py-0.5 flex-1">
                         {getUniqueCategories().map((cat) => {
                           const count = categoryCounts[cat] ?? 0;
                           const isSelected = selectedCategory === cat;
@@ -3260,6 +3302,23 @@ export default function App() {
 
               {channelSubTab === "sources" && (
                 <div className="space-y-4 sm:space-y-6 animate-fade-in" id="global_sources_pane">
+                  {/* Actions Header */}
+                  <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+                    <div>
+                      <h2 className="text-lg font-black text-slate-800">全域物理线路池</h2>
+                      <p className="text-[11px] sm:text-xs text-slate-500 font-semibold mt-0.5">多维筛选与智能测速，维护系统内所有的物理直播源线路</p>
+                    </div>
+                    <div className="flex gap-2 w-full sm:w-auto">
+                      <button 
+                        onClick={handleSmartIsolateInactive}
+                        className="flex-1 sm:flex-none px-4 py-2 sm:py-2.5 bg-orange-50/80 hover:bg-orange-100 border border-orange-200 text-orange-700 text-[11px] sm:text-xs font-bold rounded-xl transition cursor-pointer flex items-center justify-center gap-1.5 shadow-xs"
+                      >
+                        <Archive className="w-4 h-4" />
+                        一键智能隔离失效线路
+                      </button>
+                    </div>
+                  </div>
+
                   {/* Top Stats Cards */}
                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 sm:gap-4" id="global_sources_stats">
                     <div className="bg-white p-3.5 sm:p-5 rounded-2xl border border-slate-200 shadow-xs flex items-center justify-between">
