@@ -2361,7 +2361,17 @@ async function startServer() {
     res.json({ success: true, message: "分组删除成功" });
   });
 
-  app.get("/api/channels", async (req, res) => {
+    app.get("/api/all-data", (req, res) => {
+    res.json({
+      channels,
+      syncConfigs,
+      groups,
+      epgSources,
+      settings: { githubProxy, autoCreateChannel }
+    });
+  });
+
+app.get("/api/channels", async (req, res) => {
     const { status, only_active, full, all, isp, province, ip, clientIp } = req.query;
 
     if (full === "true" || all === "true") {

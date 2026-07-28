@@ -535,36 +535,25 @@ export default function App() {
   // Load Channels, Groups & Configurations
   const fetchData = async () => {
     try {
-      const [resChannels, resSync, resGroups, resSettings] = await Promise.all([
-        fetch(`/api/channels?full=true&_t=${Date.now()}`),
-        fetch(`/api/sync-configs?_t=${Date.now()}`),
-        fetch(`/api/groups?_t=${Date.now()}`),
-        fetch(`/api/settings?_t=${Date.now()}`)
-      ]);
-      if (resChannels.ok) {
-        const data = await resChannels.json();
-        setChannels(data);
-        if (data.length > 0 && !selectedChannel) {
-          setSelectedChannel(data[0]);
+      const res = await fetch(`/api/all-data?_t=${Date.now()}`);
+      if (res.ok) {
+        const data = await res.json();
+        setChannels(data.channels || []);
+        if (data.channels && data.channels.length > 0 && !selectedChannel) {
+          setSelectedChannel(data.channels[0]);
         } else if (selectedChannel) {
-          // Keep selection updated
-          const fresh = data.find((c: Channel) => c.id === selectedChannel.id);
+          const fresh = (data.channels || []).find((c: Channel) => c.id === selectedChannel.id);
           if (fresh) setSelectedChannel(fresh);
         }
+        setSyncConfigs(data.syncConfigs || []);
+        setGroups(data.groups || []);
+        setEpgSources(data.epgSources || []);
+        if (data.settings) {
+          setGithubProxy(data.settings.githubProxy || "");
+          setGithubProxyInput(data.settings.githubProxy || "");
+          setAutoCreateChannel(data.settings.autoCreateChannel !== false);
+        }
       }
-      if (resSync.ok) {
-        setSyncConfigs(await resSync.json());
-      }
-      if (resGroups.ok) {
-        setGroups(await resGroups.json());
-      }
-      if (resSettings && resSettings.ok) {
-        const settingsData = await resSettings.json();
-        setGithubProxy(settingsData.githubProxy || "");
-        setGithubProxyInput(settingsData.githubProxy || "");
-        setAutoCreateChannel(settingsData.autoCreateChannel !== false);
-      }
-      await fetchEpgSourcesInternal();
     } catch (err) {
       showFeedback("error", "连接服务器读取数据失败");
     } finally {
