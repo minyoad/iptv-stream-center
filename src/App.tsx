@@ -249,6 +249,9 @@ export default function App() {
   const [clientTestProgress, setClientTestProgress] = useState(0);
   const [clientTestTotal, setClientTestTotal] = useState(0);
   const [clientTestResults, setClientTestResults] = useState<{ sourceId: string; channelId: string; url: string; status: "active" | "inactive"; latency: number }[]>([]);
+  const [clientTestList, setClientTestList] = useState<any[]>([]);
+  const [isClientTestReady, setIsClientTestReady] = useState(false);
+
   const [clientTestIsp, setClientTestIsp] = useState("电信");
   const [clientTestProvince, setClientTestProvince] = useState("上海");
   const [showApiDoc, setShowApiDoc] = useState(false);
@@ -286,6 +289,24 @@ export default function App() {
   
   // States for password setting modal/form
   const [isSettingPasswordModalOpen, setIsSettingPasswordModalOpen] = useState(false);
+
+  const [singleTestModalState, setSingleTestModalState] = useState<{
+    isOpen: boolean;
+    sourceId: string | null;
+    sourceName: string;
+    url: string;
+    status: "testing" | "active" | "inactive" | null;
+    latency: number | null;
+    error: string | null;
+  }>({
+    isOpen: false,
+    sourceId: null,
+    sourceName: "",
+    url: "",
+    status: null,
+    latency: null,
+    error: null
+  });
   const [passwordForm, setPasswordForm] = useState({
     oldPassword: "",
     newPassword: "",
@@ -1422,6 +1443,18 @@ export default function App() {
     );
   };
 
+
+  const handleOpenSingleTestModal = (sourceId: string, sourceName: string, sourceUrl: string, status: any, latency: any) => {
+    setSingleTestModalState({
+      isOpen: true,
+      sourceId,
+      sourceName,
+      url: sourceUrl,
+      status,
+      latency: latency ?? null,
+      error: null
+    });
+  };
   const handleGlobalBatchDelete = () => {
     if (selectedGlobalSourceIds.length === 0) {
       showFeedback("info", "请先选择需要批量删除的线路");
@@ -1511,9 +1544,7 @@ export default function App() {
     }
   };
 
-  const runClientSideProbeTest = async () => {
-    // Client speed test runs independently of UI search filters/selection
-    // Dynamically fetch the matching target ISP + BGP/多线/未知 sources directly from backend
+  const fetchClientSideProbeList = async () => {
     let listToTest: any[] = [];
     try {
       const queryUrl = `/api/sources/client-test-list?isp=${encodeURIComponent(clientTestIsp)}&province=${encodeURIComponent(clientTestProvince)}&onlyActive=${clientTestOnlyActive}`;
@@ -1528,15 +1559,25 @@ export default function App() {
 
     if (listToTest.length === 0) {
       showFeedback("info", `当前 [${clientTestIsp}] 归属及 BGP/多线 可测线路为空，请确认数据库中已包含直播源`);
+      setClientTestList([]);
+      setIsClientTestReady(false);
       return;
     }
+    
+    setClientTestList(listToTest);
+    setIsClientTestReady(true);
+  };
 
+  const runClientSideProbeTest = async () => {
+    if (clientTestList.length === 0) return;
+    
     setIsClientTesting(true);
+    setIsClientTestReady(false);
     setClientTestProgress(0);
-    setClientTestTotal(listToTest.length);
+    setClientTestTotal(clientTestList.length);
     setClientTestResults([]);
 
-    const queue = [...listToTest];
+    const queue = [...clientTestList];
     const resultsTemp: { sourceId: string; channelId: string; url: string; status: "active" | "inactive"; latency: number }[] = [];
     let processedCount = 0;
 
@@ -3244,7 +3285,20 @@ export default function App() {
                                         )}
                                       </div>
                                       
-                                      <p className="font-mono text-[10px] text-slate-500 truncate select-all">{src.url}</p>
+                                      <div className="flex items-center justify-between gap-2 bg-slate-50 border border-slate-150 p-2 rounded-lg mt-1">
+                                        <p className="font-mono text-[10px] text-slate-600 truncate select-all flex-1" title={src.url}>{src.url}</p>
+                                        <button
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            navigator.clipboard.writeText(src.url);
+                                            showFeedback("success", "直播源拉流链接已拷贝！");
+                                          }}
+                                          className="p-1 text-slate-400 hover:text-indigo-600 bg-white hover:bg-indigo-50 border border-slate-200 rounded transition shrink-0 cursor-pointer"
+                                          title="拷贝流地址"
+                                        >
+                                          <Copy className="w-3.5 h-3.5" />
+                                        </button>
+                                      </div>
                                     </div>
                                   </div>
 
@@ -3567,15 +3621,33 @@ export default function App() {
                         ) : (
                           <div className="flex flex-col gap-2 pt-1">
                             <div className="flex flex-col sm:flex-row gap-2">
-                              <button
-                                onClick={runClientSideProbeTest}
-                                className="flex-1 py-2.5 bg-sky-600 hover:bg-sky-700 text-white font-extrabold text-[11px] rounded-xl transition cursor-pointer flex items-center justify-center gap-1.5 shrink-0"
-                              >
-                                <Play className="w-3.5 h-3.5" />
-                                启动 [{clientTestIsp}] 本地探测
-                              </button>
+                              {!isClientTestReady ? (
+                                <button
+                                  onClick={fetchClientSideProbeList}
+                                  className="flex-1 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold text-[11px] rounded-xl transition cursor-pointer flex items-center justify-center gap-1.5 shrink-0"
+                                >
+                                  <Activity className="w-3.5 h-3.5" />
+                                  分析需测速线路
+                                </button>
+                              ) : (
+                                <>
+                                  <button
+                                    onClick={runClientSideProbeTest}
+                                    className="flex-1 py-2.5 bg-sky-600 hover:bg-sky-700 text-white font-extrabold text-[11px] rounded-xl transition cursor-pointer flex items-center justify-center gap-1.5 shrink-0"
+                                  >
+                                    <Play className="w-3.5 h-3.5" />
+                                    确认启动 [{clientTestIsp}] 探测 ({clientTestList.length}条)
+                                  </button>
+                                  <button
+                                    onClick={() => { setIsClientTestReady(false); setClientTestList([]); }}
+                                    className="py-2.5 px-3 bg-slate-200 hover:bg-slate-300 text-slate-700 font-extrabold text-[11px] rounded-xl transition cursor-pointer flex items-center justify-center gap-1.5 shrink-0"
+                                  >
+                                    取消
+                                  </button>
+                                </>
+                              )}
                               
-                              {clientTestResults.length > 0 && (
+                              {clientTestResults.length > 0 && !isClientTestReady && (
                                 <button
                                   onClick={submitClientSideProbeTest}
                                   className="flex-1 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-[11px] rounded-xl transition cursor-pointer flex items-center justify-center gap-1.5 shadow-md shadow-emerald-100 shrink-0"
@@ -3976,27 +4048,13 @@ export default function App() {
                                       {item.isolated ? "恢复" : "隔离"}
                                     </button>
                                     <button 
-                                      onClick={async (e) => {
+                                      onClick={(e) => {
                                         e.stopPropagation();
-                                        try {
-                                          const res = await fetch("/api/sources/test", {
-                                            method: "POST",
-                                            headers: { "Content-Type": "application/json" },
-                                            body: JSON.stringify({ sourceIds: [item.id] })
-                                          });
-                                          if (res.ok) {
-                                            showFeedback("success", "已向后台提交独立测速...");
-                                            await fetchData();
-                                          } else {
-                                            showFeedback("error", "测速指令异常");
-                                          }
-                                        } catch (_) {
-                                          showFeedback("error", "连接通信故障");
-                                        }
+                                        handleOpenSingleTestModal(item.id, item.name || "未命名线路", item.url, item.status, item.latency);
                                       }}
                                       className="text-[11px] font-bold text-indigo-600 hover:text-indigo-800 hover:underline cursor-pointer transition-all"
                                     >
-                                      测速
+                                      详细
                                     </button>
                                     <button 
                                       onClick={(e) => {
@@ -4203,27 +4261,13 @@ export default function App() {
                                   </button>
 
                                   <button
-                                    onClick={async (e) => {
-                                      e.stopPropagation();
-                                      try {
-                                        const res = await fetch("/api/sources/test", {
-                                          method: "POST",
-                                          headers: { "Content-Type": "application/json" },
-                                          body: JSON.stringify({ sourceIds: [item.id] })
-                                        });
-                                        if (res.ok) {
-                                          showFeedback("success", "已提交测速...");
-                                          await fetchData();
-                                        } else {
-                                          showFeedback("error", "测速指令异常");
-                                        }
-                                      } catch (_) {
-                                        showFeedback("error", "通信故障");
-                                      }
-                                    }}
+                                    onClick={(e) => {
+                                        e.stopPropagation();
+                                        handleOpenSingleTestModal(item.id, item.name || "未命名线路", item.url, item.status, item.latency);
+                                      }}
                                     className="px-2.5 py-1 rounded-lg text-[11px] font-bold bg-indigo-50 text-indigo-700 border border-indigo-200 cursor-pointer"
                                   >
-                                    测速
+                                    详细
                                   </button>
 
                                   <button
@@ -6491,6 +6535,85 @@ export default function App() {
         </div>
       )}
 
+
+      {/* Single Test Result Modal */}
+      {singleTestModalState.isOpen && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl border border-slate-100 flex flex-col space-y-5 animate-fade-in">
+            <div className="flex justify-between items-center">
+              <div className="flex items-center gap-2">
+                <Activity className="w-5 h-5 text-indigo-600" />
+                <h2 className="text-lg font-black text-slate-800">单次测速详细报告</h2>
+              </div>
+              <button 
+                onClick={() => setSingleTestModalState(prev => ({ ...prev, isOpen: false }))}
+                className="text-slate-400 hover:text-slate-600 bg-slate-50 hover:bg-slate-100 p-1.5 rounded-full transition"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="space-y-4">
+              <div className="bg-slate-50 p-4 rounded-xl border border-slate-100 space-y-3">
+                <div className="text-sm font-bold text-slate-700">{singleTestModalState.sourceName}</div>
+                <div className="flex items-start justify-between gap-3 bg-white p-3 rounded-lg border border-slate-200">
+                  <div className="text-xs font-mono text-slate-600 break-all leading-relaxed flex-1">
+                    {singleTestModalState.url}
+                  </div>
+                </div>
+                
+                <button
+                  onClick={() => {
+                    navigator.clipboard.writeText(singleTestModalState.url);
+                    showFeedback("success", "已成功复制实际 URL，请在第三方播放器中复测");
+                  }}
+                  className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl transition cursor-pointer flex items-center justify-center gap-2 shadow-md shadow-indigo-100"
+                >
+                  <Copy className="w-4 h-4" />
+                  复制实际 URL 
+                </button>
+              </div>
+
+              <div className="flex items-center justify-between p-4 bg-slate-50 rounded-xl border border-slate-100">
+                <span className="text-sm font-semibold text-slate-600">最新测试结果</span>
+                {singleTestModalState.status === "testing" || singleTestModalState.status === "checking" ? (
+                  <div className="flex items-center gap-2 text-indigo-600 font-bold text-sm">
+                    <RefreshCw className="w-4 h-4 animate-spin" />
+                    测试中...
+                  </div>
+                ) : singleTestModalState.status === "active" ? (
+                  <div className="flex items-center gap-3">
+                    <span className="px-2.5 py-1 bg-emerald-100 text-emerald-700 text-xs font-bold rounded-lg flex items-center gap-1">
+                      <CheckCircle className="w-3.5 h-3.5" /> 健康可用
+                    </span>
+                    {singleTestModalState.latency !== null && (
+                      <span className="text-emerald-700 font-black font-mono text-sm">{singleTestModalState.latency} ms</span>
+                    )}
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-3">
+                    <span className="px-2.5 py-1 bg-rose-100 text-rose-700 text-xs font-bold rounded-lg flex items-center gap-1">
+                      <XCircle className="w-3.5 h-3.5" /> 失效离线
+                    </span>
+                    {singleTestModalState.latency !== null && (
+                      <span className="text-rose-700 font-black font-mono text-sm">超时 / {singleTestModalState.latency} ms</span>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="flex justify-end pt-2">
+              <button
+                onClick={() => setSingleTestModalState(prev => ({ ...prev, isOpen: false }))}
+                className="px-6 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl transition cursor-pointer text-sm w-full"
+              >
+                关闭
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       {isSettingPasswordModalOpen && (
         <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4" id="security_password_modal">
           <div className="bg-white rounded-2xl max-w-sm w-full p-6 shadow-2xl border border-slate-100 flex flex-col space-y-5 animate-fade-in">

@@ -245,6 +245,39 @@ async def main():
                 CLIENT_ISP = "未知"
                 CLIENT_PROVINCE = "未知"
         
+
+        # --- 新增: 获取总数并等待确认 ---
+        encoded_isp = urllib.parse.quote(CLIENT_ISP)
+        encoded_prov = urllib.parse.quote(CLIENT_PROVINCE)
+        url_initial = f"{SERVER_BASE_URL}/api/sources/client-test-list?page=1&limit=1&isp={encoded_isp}&province={encoded_prov}"
+        
+        total_sources = 0
+        try:
+            async with session.get(url_initial, timeout=10, headers=req_headers) as resp:
+                if resp.status == 200:
+                    data_initial = await resp.json()
+                    total_sources = data_initial.get("total", 0)
+        except Exception as e:
+            logger.error(f"无法拉取配置以获取总数: {e}")
+            return
+            
+        if total_sources == 0:
+            logger.warning(f"当前 [{CLIENT_ISP}] 环境下没有需要测试的线路。")
+            return
+            
+        print(f"\n=======================================================")
+        print(f" ✅ 探针网络环境鉴定: {CLIENT_PROVINCE} / {CLIENT_ISP}")
+        print(f" 📡 匹配待测线路总数: {total_sources} 条")
+        print(f"=======================================================\n")
+        
+        import asyncio
+        loop = asyncio.get_running_loop()
+        confirm = await loop.run_in_executor(None, input, "按 [Enter] 键开始启动测速，或输入 'q' 退出: ")
+        if confirm.strip().lower() in ['q', 'quit', 'exit']:
+            logger.info("用户已取消。")
+            return
+        # --------------------------------
+        
         page = 1
         limit = 50
         

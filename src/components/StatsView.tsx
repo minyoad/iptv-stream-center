@@ -1,7 +1,7 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { History, Eye, Trash2, MapPin } from 'lucide-react';
 import { Channel } from '../types';
-import { Activity, AlertCircle, CheckCircle, XCircle } from 'lucide-react';
+import { Activity, Copy, AlertCircle, CheckCircle, XCircle } from 'lucide-react';
 
 interface StatsViewProps {
   channels: Channel[];
@@ -357,11 +357,27 @@ export default function StatsView({ channels }: StatsViewProps) {
                   return (
                     <div key={i} className={`p-3 border rounded-xl bg-white text-xs ${isOk ? "border-emerald-100" : "border-rose-100"}`}>
                       <div className="flex justify-between items-start mb-2">
-                        <span className="font-mono text-[10px] text-slate-400 truncate w-3/4" title={item.sourceId}>{item.sourceId}</span>
+                                                <span className="font-mono text-[10px] text-slate-400 truncate w-3/4" title={item.sourceId}>{item.sourceId}</span>
                         <span className={`font-bold px-1.5 py-0.5 rounded text-[10px] ${isOk ? "bg-emerald-50 text-emerald-600" : "bg-rose-50 text-rose-600"}`}>
                           {isOk ? "PASS" : "FAIL"}
                         </span>
                       </div>
+                      {item.url && (
+                        <div className="flex items-center justify-between gap-2 bg-slate-50 border border-slate-150 p-1.5 rounded-lg mb-2">
+                          <span className="font-mono text-[10px] text-slate-600 truncate select-all flex-1" title={item.url}>{item.url}</span>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              navigator.clipboard.writeText(item.url);
+                              alert("已复制 URL");
+                            }}
+                            className="p-1 text-slate-400 hover:text-indigo-600 bg-white hover:bg-indigo-50 border border-slate-200 rounded transition shrink-0 cursor-pointer"
+                            title="拷贝流地址"
+                          >
+                            <Copy className="w-3 h-3" />
+                          </button>
+                        </div>
+                      )}
                       {isOk && item.latency !== undefined && (
                         <div className="text-[10px] text-slate-500 font-bold mb-1">
                           首帧延迟: <span className={`${item.latency < 500 ? "text-emerald-500" : item.latency < 1500 ? "text-amber-500" : "text-rose-500"}`}>{item.latency}ms</span>
