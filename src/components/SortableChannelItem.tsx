@@ -64,7 +64,7 @@ export const SortableChannelItem: React.FC<SortableChannelItemProps> = ({
       style={style}
       onClick={() => onSelectChannel(channel)}
       onDoubleClick={() => onDoubleClickChannel(channel)}
-      className={`p-3 transition-all flex items-center justify-between cursor-pointer border-b border-slate-100/80 group/row ${
+      className={`p-2 py-2.5 transition-all flex items-center justify-between cursor-pointer border-b border-slate-100/80 group/row ${
         isSelected
           ? "bg-blue-50/70 border-l-4 border-l-blue-600 shadow-2xs"
           : isDragging
@@ -79,7 +79,7 @@ export const SortableChannelItem: React.FC<SortableChannelItemProps> = ({
           {...attributes}
           {...listeners}
           onClick={(e) => e.stopPropagation()}
-          className="p-1 cursor-grab active:cursor-grabbing text-slate-300 hover:text-indigo-600 hover:bg-indigo-50/80 rounded transition shrink-0 touch-none"
+          className="p-0.5 cursor-grab active:cursor-grabbing text-slate-300 hover:text-indigo-600 hover:bg-indigo-50/80 rounded transition shrink-0 touch-none"
           title="按住拖拽以重新排序"
         >
           <GripVertical className="w-4 h-4" />
@@ -99,20 +99,20 @@ export const SortableChannelItem: React.FC<SortableChannelItemProps> = ({
           <img
             src={channel.logo}
             alt="logo"
-            className="w-8 h-8 rounded-lg object-contain bg-slate-100 p-0.5 shadow-2xs shrink-0"
+            className="w-7 h-7 rounded-lg object-contain bg-slate-100 p-0.5 shadow-2xs shrink-0"
             onError={(e) => {
               (e.target as HTMLImageElement).style.display = "none";
             }}
           />
         ) : (
-          <div className="w-8 h-8 rounded-lg bg-slate-50 border border-slate-100 flex items-center justify-center shrink-0 text-slate-400 shadow-2xs">
+          <div className="w-7 h-7 rounded-lg bg-slate-50 border border-slate-100 flex items-center justify-center shrink-0 text-slate-400 shadow-2xs">
             <Tv className="w-4 h-4" />
           </div>
         )}
 
         {/* Channel Information */}
-        <div className="min-w-0 flex-1">
-          <p className="text-xs font-bold text-slate-800 flex items-center gap-1.5 truncate">
+        <div className="min-w-[40px] flex-1 shrink">
+          <p className="text-xs font-bold text-slate-800 break-words line-clamp-2 leading-tight">
             {channel.name}
           </p>
           <p className="text-[10px] text-slate-400 mt-0.5 truncate">
@@ -125,22 +125,22 @@ export const SortableChannelItem: React.FC<SortableChannelItemProps> = ({
       </div>
 
       {/* Right Actions & Badges */}
-      <div className="flex items-center gap-1.5 shrink-0 ml-2">
+      <div className="flex items-center gap-1 shrink ml-1 min-w-0 justify-end">
         {/* Count pill badge */}
-        <span className="text-[10px] font-bold bg-slate-100 text-slate-600 px-2 py-0.5 rounded-full hidden sm:inline-block">
-          {activeCount} / {channel.sources.length} 有效
+        <span className="text-[9px] font-bold bg-slate-100 text-slate-500 px-1 py-0.5 rounded hidden lg:inline-block shrink-0">
+          {activeCount}/{channel.sources.length}
         </span>
 
         {/* Group Name badge */}
         <span
-          className="text-[10px] font-semibold bg-blue-50 text-blue-700 px-1.5 py-0.5 rounded max-w-24 truncate"
+          className="text-[9px] font-semibold bg-blue-50 text-blue-600 px-1 py-0.5 rounded max-w-12 sm:max-w-16 truncate shrink"
           title={groupNames || "其它"}
         >
           {groupNames || "其它"}
         </span>
 
         {/* Button Actions */}
-        <div className="flex items-center gap-0.5 ml-1">
+        <div className="flex items-center gap-0 shrink-0">
           {onMoveUp && (
             <button
               onClick={(e) => {
@@ -155,7 +155,7 @@ export const SortableChannelItem: React.FC<SortableChannelItemProps> = ({
               }`}
               title="上移"
             >
-              <ChevronUp className="w-3 h-3" />
+              <ChevronUp className="w-3.5 h-3.5" />
             </button>
           )}
 
@@ -173,7 +173,7 @@ export const SortableChannelItem: React.FC<SortableChannelItemProps> = ({
               }`}
               title="下移"
             >
-              <ChevronDown className="w-3 h-3" />
+              <ChevronDown className="w-3.5 h-3.5" />
             </button>
           )}
 
@@ -183,9 +183,9 @@ export const SortableChannelItem: React.FC<SortableChannelItemProps> = ({
               onEditChannel(channel);
             }}
             className="p-1 text-slate-400 hover:text-slate-800 hover:bg-slate-100 rounded transition"
-            title="编辑频道"
+            title="编辑"
           >
-            <Edit2 className="w-3.5 h-3.5" />
+            <Edit2 className="w-3 h-3" />
           </button>
 
           <button
@@ -194,9 +194,9 @@ export const SortableChannelItem: React.FC<SortableChannelItemProps> = ({
               onDeleteChannel(channel.id);
             }}
             className="p-1 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded transition"
-            title="删除频道"
+            title="删除"
           >
-            <Trash2 className="w-3.5 h-3.5" />
+            <Trash2 className="w-3 h-3" />
           </button>
         </div>
       </div>
