@@ -1664,9 +1664,18 @@ async function performSync(config: SyncConfig, force = false) {
     }
 
     console.log(`[SUBSCRIPTION SYNC] Fetching ${config.name} from: ${targetUrl}`);
-    const { buffer } = await fetchBufferWithFallback(targetUrl, "IPTV-Manager-Sync-Service");
+    const { buffer, isGzipped } = await fetchBufferWithFallback(targetUrl, "IPTV-Manager-Sync-Service");
 
-    const content = buffer.toString("utf-8");
+    let content = "";
+    if (isGzipped) {
+      try {
+        content = zlib.gunzipSync(buffer).toString("utf-8");
+      } catch (e) {
+        content = buffer.toString("utf-8");
+      }
+    } else {
+      content = buffer.toString("utf-8");
+    }
 
     // Track update status by computing md5 checksum
     const freshHash = crypto.createHash("md5").update(content).digest("hex");
@@ -1703,10 +1712,19 @@ async function performSync(config: SyncConfig, force = false) {
           const groupMatch = line.match(/group-title="([^"]+)"/);
           const epgMatch = line.match(/tvg-id="([^"]+)"/) || line.match(/epg-id="([^"]+)"/);
           
-          const commaIndex = line.indexOf(",");
           let name = "未知频道";
-          if (commaIndex !== -1) {
-            name = line.substring(commaIndex + 1).trim();
+          const lastQuoteIndex = line.lastIndexOf('"');
+          if (lastQuoteIndex !== -1) {
+            const commaAfterQuotes = line.indexOf(",", lastQuoteIndex);
+            if (commaAfterQuotes !== -1) {
+              name = line.substring(commaAfterQuotes + 1).trim();
+            } else {
+              const commaIndex = line.lastIndexOf(",");
+              if (commaIndex !== -1) name = line.substring(commaIndex + 1).trim();
+            }
+          } else {
+            const commaIndex = line.indexOf(",");
+            if (commaIndex !== -1) name = line.substring(commaIndex + 1).trim();
           }
           name = stripBitrateAndResolution(name);
 
