@@ -29,6 +29,8 @@ import {
   FileText,
   Database,
   Shield,
+  ShieldAlert,
+  ShieldCheck,
   GitMerge,
   ChevronUp,
   ChevronDown,
@@ -149,6 +151,7 @@ export default function App() {
   const [feedbackMsg, setFeedbackMsg] = useState<{ type: "success" | "error" | "info"; text: string } | null>(null);
 
   // Form states for modals/editors
+  const [channelFilterStatus, setChannelFilterStatus] = useState<"active" | "all_with_isolated" | "isolated">("active");
   const [isChannelModalOpen, setIsChannelModalOpen] = useState(false);
   const [editingChannel, setEditingChannel] = useState<Channel | null>(null);
   const [channelForm, setChannelForm] = useState({
@@ -157,7 +160,8 @@ export default function App() {
     newGroupsString: "",
     logo: "",
     alias: "",
-    epgId: ""
+    epgId: "",
+    isolated: false
   });
 
   const [isSourceModalOpen, setIsSourceModalOpen] = useState(false);
@@ -927,7 +931,8 @@ export default function App() {
         groupIds: finalGroupIds,
         logo: channelForm.logo,
         alias: channelForm.alias.split(",").map(s => s.trim()).filter(Boolean),
-        epgId: channelForm.epgId
+        epgId: channelForm.epgId,
+        isolated: channelForm.isolated
       };
 
       const res = await fetch(endpoint, {
@@ -948,6 +953,56 @@ export default function App() {
     } catch (e) {
       showFeedback("error", "添加/更新频道发生故障");
     }
+  };
+
+  const handleToggleIsolateChannel = async (id: string, isolate: boolean) => {
+    try {
+      const res = await fetch(`/api/channels/${id}/isolated`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ isolated: isolate })
+      });
+      if (res.ok) {
+        showFeedback("success", isolate ? "频道已成功隔离 (不在导出及播放列表中呈现)" : "频道已恢复（解除隔离）");
+        await fetchData();
+      } else {
+        const err = await res.json();
+        showFeedback("error", err.error || "操作失败");
+      }
+    } catch (e) {
+      showFeedback("error", "网络超时");
+    }
+  };
+
+  const handleBatchIsolateChannels = async (isolate: boolean) => {
+    if (selectedChannelIds.length === 0) {
+      showFeedback("info", "请先选择要操作的频道");
+      return;
+    }
+    const actionName = isolate ? "批量隔离" : "解除隔离";
+    triggerConfirm(
+      `${actionName}频道`,
+      `确定要将选中的 ${selectedChannelIds.length} 个频道${actionName}吗？${isolate ? "被隔离的频道将不会在 M3U / EPG 等导出文件和播放器中出现。" : ""}`,
+      async () => {
+        try {
+          const res = await fetch("/api/channels/batch-isolate", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ channelIds: selectedChannelIds, isolated: isolate })
+          });
+          if (res.ok) {
+            showFeedback("success", `已成功${actionName} ${selectedChannelIds.length} 个频道`);
+            setSelectedChannelIds([]);
+            await fetchData();
+          } else {
+            const err = await res.json();
+            showFeedback("error", err.error || `${actionName}失败`);
+          }
+        } catch (e) {
+          showFeedback("error", "网络超时");
+        }
+      }
+    );
   };
 
   const handleDeleteChannel = (id: string) => {
@@ -1715,7 +1770,8 @@ export default function App() {
       newGroupsString: "",
       logo: "",
       alias: "",
-      epgId: ""
+      epgId: "",
+      isolated: false
     });
     setIsChannelModalOpen(true);
   };
@@ -1730,7 +1786,8 @@ export default function App() {
       newGroupsString: "",
       logo: ch.logo || "",
       alias: ch.alias ? ch.alias.join(", ") : "",
-      epgId: ch.epgId || ""
+      epgId: ch.epgId || "",
+      isolated: !!ch.isolated
     });
     setIsChannelModalOpen(true);
   };
@@ -2202,7 +2259,13 @@ export default function App() {
       const g = groups.find(gl => gl.id === gId);
       return g && g.name === selectedCategory;
     });
-    return matchesSearch && matchesCategory;
+
+    const matchesIsolation =
+      channelFilterStatus === "all_with_isolated" ? true :
+      channelFilterStatus === "isolated" ? !!c.isolated :
+      !c.isolated;
+
+    return matchesSearch && matchesCategory && matchesIsolation;
   });
 
   const slicedChannels = useMemo(() => {
@@ -2745,6 +2808,20 @@ export default function App() {
                           )}
                         </div>
 
+                        {/* Channel Isolation Filter Dropdown */}
+                        <div className="relative">
+                          <select
+                            value={channelFilterStatus}
+                            onChange={(e) => setChannelFilterStatus(e.target.value as any)}
+                            className="pl-3 pr-8 py-2 bg-amber-50/60 border border-amber-200/80 text-amber-900 font-bold text-xs rounded-xl appearance-none focus:outline-none focus:ring-2 focus:ring-amber-500/20 cursor-pointer shadow-2xs"
+                          >
+                            <option value="active">正常频道 ({channels.filter(c => !c.isolated).length})</option>
+                            <option value="all_with_isolated">包含已隔离 ({channels.length})</option>
+                            <option value="isolated">仅已隔离 ({channels.filter(c => c.isolated).length})</option>
+                          </select>
+                          <ChevronDown className="w-3.5 h-3.5 text-amber-600 absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                        </div>
+
                         {/* Mobile Category Select Dropdown (visible on small screens) */}
                         <div className="sm:hidden relative">
                           <div className="absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none text-indigo-600">
@@ -2878,6 +2955,20 @@ export default function App() {
                             </button>
                           )}
                           <button
+                            onClick={() => handleBatchIsolateChannels(true)}
+                            className="bg-amber-600 hover:bg-amber-700 text-white text-[10px] font-bold px-2.5 py-1 rounded-lg transition shadow-xs cursor-pointer flex items-center gap-1"
+                          >
+                            <ShieldAlert className="w-3 h-3" />
+                            批量隔离
+                          </button>
+                          <button
+                            onClick={() => handleBatchIsolateChannels(false)}
+                            className="bg-emerald-600 hover:bg-emerald-700 text-white text-[10px] font-bold px-2.5 py-1 rounded-lg transition shadow-xs cursor-pointer flex items-center gap-1"
+                          >
+                            <ShieldCheck className="w-3 h-3" />
+                            解除隔离
+                          </button>
+                          <button
                             onClick={() => handleBatchDelete()}
                             className="bg-rose-600 hover:bg-rose-700 text-white text-[10px] font-bold px-2.5 py-1 rounded-lg transition shadow-xs cursor-pointer flex items-center gap-1"
                           >
@@ -2935,6 +3026,7 @@ export default function App() {
                         onMoveChannelDown={(chId) => handleMoveChannel(chId, "down")}
                         onEditChannel={(ch) => openChannelEdit(ch)}
                         onDeleteChannel={(chId) => handleDeleteChannel(chId)}
+                        onToggleIsolateChannel={(chId, isolate) => handleToggleIsolateChannel(chId, isolate)}
                         onReorderChannels={handleReorderChannels}
                       />
                     )}
@@ -5890,6 +5982,21 @@ export default function App() {
                   className="w-full text-xs p-2.5 border border-slate-200 rounded-xl focus:border-indigo-500 bg-slate-50 focus:outline-none placeholder-slate-400 text-slate-800"
                 />
                 <p className="text-[10px] text-slate-400 font-medium font-sans">导入不同直播源时，只要名字撞到了这些别名，就会自动归为此频道的源。</p>
+              </div>
+
+              <div className="pt-1 font-sans">
+                <label className="flex items-center gap-2 cursor-pointer bg-amber-50/50 p-2.5 rounded-xl border border-amber-100/80">
+                  <input
+                    type="checkbox"
+                    checked={channelForm.isolated}
+                    onChange={(e) => setChannelForm({ ...channelForm, isolated: e.target.checked })}
+                    className="w-4 h-4 text-amber-600 border-slate-300 rounded focus:ring-amber-500 cursor-pointer"
+                  />
+                  <div className="flex flex-col">
+                    <span className="text-xs font-bold text-slate-800">隔离此频道 (软隐藏)</span>
+                    <span className="text-[10px] text-slate-500">勾选后，该频道不会出现在 M3U / TXT / EPG.xml 导出列表中，且播放接口拒绝该频道流</span>
+                  </div>
+                </label>
               </div>
 
               <div className="flex gap-3 pt-3">

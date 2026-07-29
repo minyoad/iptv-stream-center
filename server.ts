@@ -212,6 +212,9 @@ function initSqlite() {
   try {
     db.exec("ALTER TABLE sources ADD COLUMN isolated INTEGER DEFAULT 0");
   } catch (e) {}
+  try {
+    db.exec("ALTER TABLE channels ADD COLUMN isolated INTEGER DEFAULT 0");
+  } catch (e) {}
 
   // Seed default cron jobs if empty
   const hasCronJobs = db.prepare("SELECT COUNT(*) as count FROM cron_jobs").get() as { count: number };
@@ -800,6 +803,7 @@ function loadData() {
           groupIds,
           alias,
           epgId: ch.epgId || "",
+          isolated: ch.isolated === 1 ? true : false,
           sources: sourceMap.get(ch.id) || []
         };
       });
@@ -951,7 +955,7 @@ function saveDataSync() {
       db.exec("DELETE FROM channels");
       db.exec("DELETE FROM sources");
 
-      const insertChannel = db.prepare("INSERT INTO channels (id, name, logo, groupIds, alias, epgId) VALUES (?, ?, ?, ?, ?, ?)");
+      const insertChannel = db.prepare("INSERT INTO channels (id, name, logo, groupIds, alias, epgId, isolated) VALUES (?, ?, ?, ?, ?, ?, ?)");
       const insertSource = db.prepare(`
         INSERT INTO sources (id, channelId, url, province, isp, status, latency, lastChecked, clientIspReported, clientProvinceReported, testCount, successCount, isolated)
               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -964,7 +968,8 @@ function saveDataSync() {
           ch.logo || "",
           JSON.stringify(ch.groupIds || []),
           JSON.stringify(ch.alias || []),
-          ch.epgId || ""
+          ch.epgId || "",
+          ch.isolated ? 1 : 0
         );
 
         if (ch.sources && ch.sources.length > 0) {
@@ -1471,7 +1476,9 @@ function getOrGenerateIntegratedEpgXml(): { xml: string; gz: Buffer; etag: strin
     .map(s => getEpgCache(s.id))
     .filter(Boolean) as EpgCacheIndexed[];
 
-  const channelTags = channels.map((c) => {
+  const activeExportChannels = channels.filter((c) => !c.isolated);
+
+  const channelTags = activeExportChannels.map((c) => {
     const epgIdEscaped = escapeXml(c.epgId || generateDefaultEpgId(c.name));
     return `  <channel id="${epgIdEscaped}">\n    <display-name lang="zh">${escapeXml(c.name)}</display-name>\n    <icon src="${escapeXml(c.logo)}" />\n  </channel>`;
   }).join("\n");
@@ -1489,7 +1496,7 @@ function getOrGenerateIntegratedEpgXml(): { xml: string; gz: Buffer; etag: strin
   ];
   const todayStr = new Date().toISOString().split("T")[0].replace(/-/g, "");
 
-  const programTags = channels.map((c) => {
+  const programTags = activeExportChannels.map((c) => {
     const epgIdEscaped = escapeXml(c.epgId || generateDefaultEpgId(c.name));
     
     let matchedPrograms: any[] = [];
@@ -2786,6 +2793,7 @@ app.get("/api/channels", async (req, res) => {
       logo: logo || "https://images.unsplash.com/photo-1598257006458-087169a1f08d?auto=format&fit=crop&w=48&h=48&q=80",
       alias: alias ? (Array.isArray(alias) ? alias : alias.split(",").map((s: string) => s.trim())) : [name],
       epgId: epgId || generateDefaultEpgId(name),
+      isolated: !!req.body.isolated,
       sources: []
     };
 
@@ -2796,7 +2804,7 @@ app.get("/api/channels", async (req, res) => {
 
   app.put("/api/channels/:id", (req, res) => {
     const { id } = req.params;
-    const { name, groupIds, category, logo, alias, epgId } = req.body;
+    const { name, groupIds, category, logo, alias, epgId, isolated } = req.body;
 
     const channel = channels.find((c) => c.id === id);
     if (!channel) {
@@ -2821,9 +2829,40 @@ app.get("/api/channels", async (req, res) => {
       channel.alias = Array.isArray(alias) ? alias : alias.split(",").map((s: string) => s.trim());
     }
     if (epgId !== undefined) channel.epgId = epgId;
+    if (isolated !== undefined) channel.isolated = !!isolated;
 
     saveData();
     res.json(channel);
+  });
+
+  // Toggle single channel isolation
+  app.post("/api/channels/:id/isolated", (req, res) => {
+    const { id } = req.params;
+    const { isolated } = req.body;
+    const channel = channels.find((c) => c.id === id);
+    if (!channel) {
+      return res.status(404).json({ error: "未找到该频道" });
+    }
+    channel.isolated = !!isolated;
+    saveData();
+    res.json({ success: true, isolated: channel.isolated });
+  });
+
+  // Batch toggle channel isolation
+  app.post("/api/channels/batch-isolate", (req, res) => {
+    const { channelIds, isolated } = req.body;
+    if (!Array.isArray(channelIds) || channelIds.length === 0) {
+      return res.status(400).json({ error: "请提供频道 ID 列表" });
+    }
+    let updatedCount = 0;
+    channels.forEach((c) => {
+      if (channelIds.includes(c.id)) {
+        c.isolated = !!isolated;
+        updatedCount++;
+      }
+    });
+    saveData();
+    res.json({ success: true, count: updatedCount, isolated: !!isolated });
   });
 
   
@@ -4542,6 +4581,7 @@ ${JSON.stringify(scoredList.map(c => ({ epgId: c.epgId, names: c.displayNames, s
       const orderedGroups = [...groups, { id: "g_other", name: "其它频道" }];
       orderedGroups.forEach((group) => {
         channels.forEach((channel) => {
+          if (channel.isolated) return;
           const isInGroup = channel.groupIds.includes(group.id);
           const isFallback = group.id === "g_other" && (channel.groupIds.length === 0 || !channel.groupIds.some(id => groups.find(g => g.id === id)));
           if (!isInGroup && !isFallback) return;
@@ -4646,6 +4686,7 @@ ${JSON.stringify(scoredList.map(c => ({ epgId: c.epgId, names: c.displayNames, s
       const orderedGroups = [...groups, { id: "g_other", name: "其它频道" }];
       orderedGroups.forEach((group) => {
         channels.forEach((channel) => {
+          if (channel.isolated) return;
           const isInGroup = channel.groupIds.includes(group.id);
           const isFallback = group.id === "g_other" && (channel.groupIds.length === 0 || !channel.groupIds.some(id => groups.find(g => g.id === id)));
           if (!isInGroup && !isFallback) return;
@@ -4741,8 +4782,8 @@ ${JSON.stringify(scoredList.map(c => ({ epgId: c.epgId, names: c.displayNames, s
         c.alias.some(a => normalizeChannelName(a) === normalizedQuery)
       );
 
-      if (!channel || !channel.sources || channel.sources.length === 0) {
-        return res.status(404).send("Channel not found or no sources available");
+      if (!channel || channel.isolated || !channel.sources || channel.sources.length === 0) {
+        return res.status(404).send("Channel not found or isolated");
       }
       
       // Filter out isolated sources & filter by ISP via existing helper

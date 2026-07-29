@@ -1,7 +1,7 @@
 import React from "react";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { GripVertical, Tv, ChevronUp, ChevronDown, Edit2, Trash2 } from "lucide-react";
+import { GripVertical, Tv, ChevronUp, ChevronDown, Edit2, Trash2, ShieldAlert, ShieldCheck } from "lucide-react";
 import { Channel, Group } from "../types";
 
 interface SortableChannelItemProps {
@@ -16,6 +16,7 @@ interface SortableChannelItemProps {
   onMoveDown?: () => void;
   onEditChannel: (ch: Channel) => void;
   onDeleteChannel: (chId: string) => void;
+  onToggleIsolateChannel?: (chId: string, isolated: boolean) => void;
   isFirst?: boolean;
   isLast?: boolean;
 }
@@ -32,6 +33,7 @@ export const SortableChannelItem: React.FC<SortableChannelItemProps> = ({
   onMoveDown,
   onEditChannel,
   onDeleteChannel,
+  onToggleIsolateChannel,
   isFirst,
   isLast,
 }) => {
@@ -69,6 +71,8 @@ export const SortableChannelItem: React.FC<SortableChannelItemProps> = ({
           ? "bg-blue-50/70 border-l-4 border-l-blue-600 shadow-2xs"
           : isDragging
           ? "bg-indigo-50/40 border-2 border-dashed border-indigo-300"
+          : channel.isolated
+          ? "bg-orange-50/20 hover:bg-orange-50/40 border-l-2 border-l-orange-400 opacity-80"
           : "hover:bg-slate-50/80"
       }`}
       id={`channel_sortable_item_${channel.id}`}
@@ -112,9 +116,16 @@ export const SortableChannelItem: React.FC<SortableChannelItemProps> = ({
 
         {/* Channel Information */}
         <div className="min-w-[40px] flex-1 shrink">
-          <p className="text-xs font-bold text-slate-800 break-words line-clamp-2 leading-tight">
-            {channel.name}
-          </p>
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <p className="text-xs font-bold text-slate-800 break-words line-clamp-2 leading-tight">
+              {channel.name}
+            </p>
+            {channel.isolated && (
+              <span className="text-[9px] font-bold bg-orange-100 text-orange-700 border border-orange-200 px-1 py-0.2 rounded shrink-0">
+                已隔离
+              </span>
+            )}
+          </div>
           <p className="text-[10px] text-slate-400 mt-0.5 truncate">
             EPG ID:{" "}
             <span className="font-mono text-[9px] text-slate-500 font-bold bg-slate-100 px-1 py-0.5 rounded">
@@ -174,6 +185,27 @@ export const SortableChannelItem: React.FC<SortableChannelItemProps> = ({
               title="下移"
             >
               <ChevronDown className="w-3.5 h-3.5" />
+            </button>
+          )}
+
+          {onToggleIsolateChannel && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                onToggleIsolateChannel(channel.id, !channel.isolated);
+              }}
+              className={`p-1 rounded transition ${
+                channel.isolated
+                  ? "text-emerald-600 hover:text-emerald-800 hover:bg-emerald-50"
+                  : "text-slate-400 hover:text-orange-600 hover:bg-orange-50"
+              }`}
+              title={channel.isolated ? "解除隔离频道" : "隔离此频道 (防导出)"}
+            >
+              {channel.isolated ? (
+                <ShieldCheck className="w-3.5 h-3.5" />
+              ) : (
+                <ShieldAlert className="w-3.5 h-3.5" />
+              )}
             </button>
           )}
 

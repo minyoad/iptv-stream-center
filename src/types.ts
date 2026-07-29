@@ -25,6 +25,7 @@ export interface Channel {
   groupIds: string[];
   alias: string[];
   epgId: string;
+  isolated?: boolean;
   sources: LiveSource[];
 }
 
