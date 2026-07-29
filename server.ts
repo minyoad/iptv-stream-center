@@ -209,6 +209,9 @@ function initSqlite() {
   try {
     db.exec("ALTER TABLE sources ADD COLUMN successCount INTEGER DEFAULT 0");
   } catch (e) {}
+  try {
+    db.exec("ALTER TABLE sources ADD COLUMN isolated INTEGER DEFAULT 0");
+  } catch (e) {}
 
   // Seed default cron jobs if empty
   const hasCronJobs = db.prepare("SELECT COUNT(*) as count FROM cron_jobs").get() as { count: number };
@@ -802,8 +805,8 @@ function saveDataSync() {
 
       const insertChannel = db.prepare("INSERT INTO channels (id, name, logo, groupIds, alias, epgId) VALUES (?, ?, ?, ?, ?, ?)");
       const insertSource = db.prepare(`
-        INSERT INTO sources (id, channelId, url, province, isp, status, latency, lastChecked, clientIspReported, clientProvinceReported, testCount, successCount)
-              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO sources (id, channelId, url, province, isp, status, latency, lastChecked, clientIspReported, clientProvinceReported, testCount, successCount, isolated)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
 
       for (const ch of channels) {
@@ -830,7 +833,8 @@ function saveDataSync() {
               s.clientIspReported || "",
               s.clientProvinceReported || "",
               s.testCount || 0,
-              s.successCount || 0
+              s.successCount || 0,
+              s.isolated ? 1 : 0
             );
           }
         }
