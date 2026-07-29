@@ -2542,20 +2542,6 @@ export default function App() {
                 自动心跳同步: 已启用
               </div>
             )}
-
-            <button 
-              id="top_pulse_speed_btn"
-              disabled={testingStatus.status === "running"}
-              onClick={triggerConcurrentBulkTest}
-              className={`text-slate-50 px-3 sm:px-4 py-2 rounded-xl text-xs font-bold border border-transparent shadow shadow-blue-500/10 transition leading-none flex items-center shrink-0 ${
-                testingStatus.status === "running"
-                ? "bg-slate-200 text-slate-400 cursor-not-allowed"
-                : "bg-blue-600 hover:bg-blue-700 cursor-pointer"
-              }`}
-            >
-              <Activity className="w-3.5 h-3.5 mr-1 sm:mr-1.5" />
-              一键并发测速
-            </button>
           </div>
         </header>
 

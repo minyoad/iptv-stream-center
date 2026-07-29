@@ -80,16 +80,19 @@ async def phase_1_network_check(session: aiohttp.ClientSession, url: str) -> tup
         except Exception:
             return False, 9999
             
+    
     # 针对普通 HTTP / HTTPS 或 HLS / M3U8 直播源，使用轻量请求
     else:
         try:
-            async with session.get(url, timeout=PHASE_I_TIMEOUT, allow_redirects=True) as response:
-                # 凡是能正常握手响应建立 Socket 通道的均代表第一段通过
-                if response.status:
+            ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36"
+            async with session.get(url, timeout=PHASE_I_TIMEOUT, allow_redirects=True, headers={"User-Agent": ua}) as response:
+                # 只认可 200 级别的响应为可用，403/404 等代表无法连通
+                if response.status >= 200 and response.status < 400:
                     latency = int((time.time() - start_time) * 1050)
                     return True, latency
         except Exception:
             pass
+
         return False, 9999
 
 async def phase_2_decode_check(ff_engine: dict, url: str) -> tuple:
@@ -100,19 +103,19 @@ async def phase_2_decode_check(ff_engine: dict, url: str) -> tuple:
     
     if ff_engine["type"] == "ffplay":
         # -nodisp (不弹出 GUI 窗口画面) -autoexit (播放结束后自动结束) -t 限制视频拉流秒数
-        cmd = [
-            ff_engine["cmd"], "-nodisp", "-autoexit", "-loglevel", "error", 
+                cmd = [
+            ff_engine["cmd"], "-user_agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36", "-nodisp", "-autoexit", "-loglevel", "error", 
             "-t", str(PHASE_II_DECODE_SEC), url
         ]
     elif ff_engine["type"] == "ffmpeg":
         # ffmpeg 校验最严密，-f null - 代表空画面输出，专门用于吞吐评估流健康度
-        cmd = [
-            ff_engine["cmd"], "-y", "-loglevel", "error", "-t", str(PHASE_II_DECODE_SEC),
+                cmd = [
+            ff_engine["cmd"], "-user_agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36", "-y", "-loglevel", "error", "-t", str(PHASE_II_DECODE_SEC),
             "-i", url, "-f", "null", "-"
         ]
     elif ff_engine["type"] == "ffprobe":
-        cmd = [
-            ff_engine["cmd"], "-v", "error", "-show_entries", "format=duration",
+                cmd = [
+            ff_engine["cmd"], "-user_agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36", "-v", "error", "-show_entries", "format=duration",
             "-of", "default=noprint_wrappers=1", url
         ]
 
