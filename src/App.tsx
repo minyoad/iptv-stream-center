@@ -4565,7 +4565,7 @@ export default function App() {
                     )}
                   </div>
 
-                  <div className="space-y-4 flex-1 overflow-y-auto max-h-[460px]">
+                  <div className="space-y-4 flex-1 overflow-y-auto overflow-x-hidden max-h-[460px]">
                     {syncConfigs.length === 0 ? (
                       <div className="flex flex-col items-center justify-center py-20 text-slate-350">
                         <Compass className="w-14 h-14 stroke-[1]" />

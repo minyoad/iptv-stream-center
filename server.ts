@@ -552,6 +552,14 @@ function loadData() {
         autoCreateChannel = !!parsed.autoCreateChannel;
       }
 
+      if (parsed.cronJobs && Array.isArray(parsed.cronJobs) && parsed.cronJobs.length > 0) {
+         db.exec("DELETE FROM cron_jobs");
+         const insertCron = db.prepare("INSERT INTO cron_jobs (id, name, startTime, intervalMinutes, active, nextRun, lastRun) VALUES (?, ?, ?, ?, ?, ?, ?)");
+         for (const job of parsed.cronJobs) {
+           insertCron.run(job.id, job.name, job.startTime || "00:00", job.intervalMinutes || 120, job.active === 1 || job.active === true ? 1 : 0, job.nextRun || null, job.lastRun || null);
+         }
+      }
+
       // Populate SQLite with this state
       saveData();
 
@@ -4687,10 +4695,16 @@ ${JSON.stringify(scoredList.map(c => ({ epgId: c.epgId, names: c.displayNames, s
       const filename = `iptv_data_backup_manual_${timestamp}.json`;
       const filePath = path.join(DATA_DIR, filename);
       
+      const cronJobsData = db.prepare("SELECT * FROM cron_jobs").all();
       const backupContent = {
         groups,
         channels,
         syncConfigs,
+        epgSources,
+        cronJobs: cronJobsData,
+        adminPassword,
+        githubProxy,
+        autoCreateChannel,
         backupMeta: {
           tag: safeTag,
           createdAt: now.toISOString(),
