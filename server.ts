@@ -230,8 +230,39 @@ if (!fs.existsSync(EPG_CACHE_DIR)) {
   fs.mkdirSync(EPG_CACHE_DIR, { recursive: true });
 }
 
+interface EpgEntry {
+  displayNames: string[];
+  programs: { start: string; stop: string; title: string; desc: string }[];
+}
+
+interface EpgCacheIndexed {
+  raw: Record<string, EpgEntry>;
+  exactLowerMap: Map<string, EpgEntry>;
+  normMap: Map<string, EpgEntry>;
+}
+
+// Disk cache paths for exported EPG feeds
+const EPG_EXPORT_XML_PATH = path.join(DATA_DIR, "epg_export.xml");
+const EPG_EXPORT_GZ_PATH = path.join(DATA_DIR, "epg_export.xml.gz");
+
 // In-Memory cache for loaded EPG configurations to avoid reading from disk on every route hit
-const loadedEpgCaches: Record<string, Record<string, { displayNames: string[], programs: { start: string, stop: string, title: string, desc: string }[] }>> = {};
+const loadedEpgCaches: Record<string, EpgCacheIndexed> = {};
+
+let integratedEpgXmlCache: string | null = null;
+let integratedEpgXmlGzCache: Buffer | null = null;
+let integratedEpgCacheTime = 0;
+let integratedEpgEtag = "";
+
+function invalidateIntegratedEpgCache() {
+  integratedEpgXmlCache = null;
+  integratedEpgXmlGzCache = null;
+  integratedEpgCacheTime = 0;
+  integratedEpgEtag = "";
+  try {
+    if (fs.existsSync(EPG_EXPORT_XML_PATH)) fs.unlinkSync(EPG_EXPORT_XML_PATH);
+    if (fs.existsSync(EPG_EXPORT_GZ_PATH)) fs.unlinkSync(EPG_EXPORT_GZ_PATH);
+  } catch (_) {}
+}
 const testStatus: TestStatus = {
   status: "idle",
   total: 0,
@@ -792,6 +823,7 @@ function saveData() {
 }
 
 function saveDataSync() {
+  invalidateIntegratedEpgCache();
   try {
     const syncDb = db.transaction(() => {
       // 1. Sync settings
@@ -1208,7 +1240,37 @@ function parseXmltvTime(timeStr: string): { dateStr: string, timeStr: string } {
   return { dateStr: "", timeStr: "" };
 }
 
-function getEpgCache(sourceId: string) {
+function buildEpgIndex(channelMap: Record<string, EpgEntry>): EpgCacheIndexed {
+  const exactLowerMap = new Map<string, EpgEntry>();
+  const normMap = new Map<string, EpgEntry>();
+
+  for (const [originalId, entry] of Object.entries(channelMap)) {
+    if (!originalId) continue;
+    exactLowerMap.set(originalId.toLowerCase(), entry);
+
+    const normId = normalizeChannelName(originalId);
+    if (normId && !normMap.has(normId)) {
+      normMap.set(normId, entry);
+    }
+
+    if (entry.displayNames && Array.isArray(entry.displayNames)) {
+      for (const disp of entry.displayNames) {
+        const normDisp = normalizeChannelName(disp);
+        if (normDisp && !normMap.has(normDisp)) {
+          normMap.set(normDisp, entry);
+        }
+      }
+    }
+  }
+
+  return {
+    raw: channelMap,
+    exactLowerMap,
+    normMap,
+  };
+}
+
+function getEpgCache(sourceId: string): EpgCacheIndexed | null {
   const cachePath = path.join(EPG_CACHE_DIR, `${sourceId}.json`);
   if (!fs.existsSync(cachePath)) return null;
   if (loadedEpgCaches[sourceId]) {
@@ -1216,39 +1278,154 @@ function getEpgCache(sourceId: string) {
   }
   try {
     const data = fs.readFileSync(cachePath, "utf-8");
-    loadedEpgCaches[sourceId] = JSON.parse(data);
-    return loadedEpgCaches[sourceId];
+    const rawMap: Record<string, EpgEntry> = JSON.parse(data);
+    const indexed = buildEpgIndex(rawMap);
+    loadedEpgCaches[sourceId] = indexed;
+    return indexed;
   } catch (err) {
     console.error(`[EPG CACHE LOAD ERROR] for ${sourceId}:`, err);
     return null;
   }
 }
 
-function findMatchingEpgEntry(ch: Channel, channelMap: Record<string, { displayNames: string[], programs: any[] }>) {
-  if (ch.epgId) {
-    if (channelMap[ch.epgId]) return channelMap[ch.epgId];
-    const foundKey = Object.keys(channelMap).find(k => k.toLowerCase() === ch.epgId.toLowerCase());
-    if (foundKey) return channelMap[foundKey];
+function findMatchingEpgEntry(ch: Channel, cache: EpgCacheIndexed): EpgEntry | null {
+  if (!cache) return null;
+
+  // 1. Direct check on epgId
+  if (ch.epgId && ch.epgId.trim()) {
+    const rawEpgId = ch.epgId.trim();
+    if (cache.raw[rawEpgId]) return cache.raw[rawEpgId];
+
+    const lowerEpgId = rawEpgId.toLowerCase();
+    if (cache.exactLowerMap.has(lowerEpgId)) return cache.exactLowerMap.get(lowerEpgId)!;
+
+    const normEpgId = normalizeChannelName(rawEpgId);
+    if (normEpgId && cache.normMap.has(normEpgId)) return cache.normMap.get(normEpgId)!;
   }
+
+  // 2. Check channel name normalized
   const chNameNorm = normalizeChannelName(ch.name);
-  const aliasNorms = (ch.alias || []).map(a => normalizeChannelName(a)).filter(Boolean);
-  for (const originalId of Object.keys(channelMap)) {
-    const entry = channelMap[originalId];
-    const originalIdNorm = normalizeChannelName(originalId);
-    if (ch.epgId && originalIdNorm === normalizeChannelName(ch.epgId)) {
-      return entry;
-    }
-    if (originalIdNorm === chNameNorm || aliasNorms.includes(originalIdNorm)) {
-      return entry;
-    }
-    for (const disp of entry.displayNames) {
-      const dispNorm = normalizeChannelName(disp);
-      if (dispNorm === chNameNorm || aliasNorms.includes(dispNorm)) {
-        return entry;
+  if (chNameNorm && cache.normMap.has(chNameNorm)) {
+    return cache.normMap.get(chNameNorm)!;
+  }
+
+  // 3. Check channel alias normalized
+  if (ch.alias && Array.isArray(ch.alias)) {
+    for (const a of ch.alias) {
+      const aNorm = normalizeChannelName(a);
+      if (aNorm && cache.normMap.has(aNorm)) {
+        return cache.normMap.get(aNorm)!;
       }
     }
   }
+
   return null;
+}
+
+function getOrGenerateIntegratedEpgXml(): { xml: string; gz: Buffer; etag: string } {
+  const now = Date.now();
+
+  // 1. Check in-memory cache (15 mins TTL)
+  if (
+    integratedEpgXmlCache &&
+    integratedEpgXmlGzCache &&
+    integratedEpgEtag &&
+    now - integratedEpgCacheTime < 15 * 60 * 1000
+  ) {
+    return { xml: integratedEpgXmlCache, gz: integratedEpgXmlGzCache, etag: integratedEpgEtag };
+  }
+
+  // 2. Check disk file cache (30 mins TTL)
+  try {
+    if (fs.existsSync(EPG_EXPORT_XML_PATH) && fs.existsSync(EPG_EXPORT_GZ_PATH)) {
+      const stats = fs.statSync(EPG_EXPORT_GZ_PATH);
+      if (now - stats.mtimeMs < 30 * 60 * 1000) {
+        const xml = fs.readFileSync(EPG_EXPORT_XML_PATH, "utf-8");
+        const gz = fs.readFileSync(EPG_EXPORT_GZ_PATH);
+        const etag = `W/"epg-${Math.floor(stats.mtimeMs)}-${stats.size}"`;
+
+        integratedEpgXmlCache = xml;
+        integratedEpgXmlGzCache = gz;
+        integratedEpgCacheTime = stats.mtimeMs;
+        integratedEpgEtag = etag;
+
+        return { xml, gz, etag };
+      }
+    }
+  } catch (e) {
+    console.warn("[EPG DISK CACHE LOAD WARN]", e);
+  }
+
+  const xmlHeader = `<?xml version="1.0" encoding="utf-8"?><!DOCTYPE tv SYSTEM "xmltv.dtd"><tv generator-info-name="IPTV Channel Manager" generator-info-url="http://localhost:3000/">`;
+  
+  const activeEpgSources = epgSources.filter(s => s.active);
+  const activeCaches = activeEpgSources
+    .map(s => getEpgCache(s.id))
+    .filter(Boolean) as EpgCacheIndexed[];
+
+  const channelTags = channels.map((c) => {
+    const epgIdEscaped = escapeXml(c.epgId || generateDefaultEpgId(c.name));
+    return `  <channel id="${epgIdEscaped}">\n    <display-name lang="zh">${escapeXml(c.name)}</display-name>\n    <icon src="${escapeXml(c.logo)}" />\n  </channel>`;
+  }).join("\n");
+
+  const programTemplates = [
+    { start: "000000", stop: "060000", title: "深夜温情院线" },
+    { start: "060000", stop: "090000", title: "早晨第一线新闻" },
+    { start: "090000", stop: "120000", title: "经典文娱纪实节目" },
+    { start: "120000", stop: "130000", title: "午间时势观察" },
+    { start: "130000", stop: "180000", title: "午后黄金人气戏剧" },
+    { start: "180000", stop: "190000", title: "傍晚热门民生探索" },
+    { start: "190000", stop: "200000", title: "晚间新闻报道集锦" },
+    { start: "200000", stop: "223000", title: "金牌晚间档品质剧场" },
+    { start: "223000", stop: "235959", title: "深夜体育与军事视界" },
+  ];
+  const todayStr = new Date().toISOString().split("T")[0].replace(/-/g, "");
+
+  const programTags = channels.map((c) => {
+    const epgIdEscaped = escapeXml(c.epgId || generateDefaultEpgId(c.name));
+    
+    let matchedPrograms: any[] = [];
+    let found = false;
+    for (const cache of activeCaches) {
+      const entry = findMatchingEpgEntry(c, cache);
+      if (entry && entry.programs && entry.programs.length > 0) {
+        matchedPrograms = entry.programs;
+        found = true;
+        break;
+      }
+    }
+
+    if (found && matchedPrograms.length > 0) {
+      return matchedPrograms.map((prog: any) => {
+        return `  <programme start="${escapeXml(prog.start)}" stop="${escapeXml(prog.stop)}" channel="${epgIdEscaped}">\n    <title lang="zh">${escapeXml(prog.title)}</title>\n    ${prog.desc ? `<desc lang="zh">${escapeXml(prog.desc)}</desc>` : ""}\n  </programme>`;
+      }).join("\n");
+    } else {
+      return programTemplates.map((p) => {
+        return `  <programme start="${todayStr}${p.start} +0800" stop="${todayStr}${p.stop} +0800" channel="${epgIdEscaped}">\n    <title lang="zh">${escapeXml(p.title)}</title>\n    <desc lang="zh">由 IPTV 电视服务自动同步 matching epg channel id [${epgIdEscaped}]。</desc>\n  </programme>`;
+      }).join("\n");
+    }
+  }).join("\n");
+
+  const xmlFooter = `</tv>`;
+  const fullXml = `${xmlHeader}\n${channelTags}\n${programTags}\n${xmlFooter}`;
+  const gzBuffer = zlib.gzipSync(Buffer.from(fullXml, "utf-8"));
+
+  const etag = `W/"epg-${now}-${gzBuffer.length}"`;
+
+  integratedEpgXmlCache = fullXml;
+  integratedEpgXmlGzCache = gzBuffer;
+  integratedEpgCacheTime = now;
+  integratedEpgEtag = etag;
+
+  // Persist to disk file cache
+  try {
+    fs.writeFileSync(EPG_EXPORT_XML_PATH, fullXml, "utf-8");
+    fs.writeFileSync(EPG_EXPORT_GZ_PATH, gzBuffer);
+  } catch (err) {
+    console.error("[EPG DISK CACHE WRITE ERROR]", err);
+  }
+
+  return { xml: fullXml, gz: gzBuffer, etag };
 }
 
 function escapeXml(unsafe: string): string {
@@ -1639,6 +1816,7 @@ async function performEpgSync(source: EpgSource): Promise<boolean> {
       "utf-8"
     );
     delete loadedEpgCaches[source.id]; // invalidate memory cache
+    invalidateIntegratedEpgCache();
     source.status = "success";
     source.lastSynced = new Date().toISOString();
     source.message = `同步成功，共导入 ${Object.keys(channelMap).length} 个频道节目源`;
@@ -4079,7 +4257,7 @@ app.get("/api/channels", async (req, res) => {
       for (const src of activeEpgSrcs) {
         const cache = getEpgCache(src.id);
         if (cache) {
-          for (const [epgId, entry] of Object.entries(cache)) {
+          for (const [epgId, entry] of Object.entries(cache.raw)) {
             const key = `${src.id}::${epgId}`;
             if (!seenIds.has(key)) {
               seenIds.add(key);
@@ -4446,151 +4624,40 @@ ${JSON.stringify(scoredList.map(c => ({ epgId: c.epgId, names: c.displayNames, s
   // Dynamic EPG XML TV interface
   // Returns generic valid XMLTV layout for connected players matching epgIds
   app.get("/api/export/epg.xml", (req, res) => {
-    const xmlHeader = `<?xml version="1.0" encoding="utf-8"?>
-<!DOCTYPE tv SYSTEM "xmltv.dtd">
-<tv generator-info-name="IPTV Channel Manager" generator-info-url="http://localhost:3000/">`;
-
-    const channelTags = channels.map((c) => {
-      const epgIdEscaped = escapeXml(c.epgId || generateDefaultEpgId(c.name));
-      return `  <channel id="${epgIdEscaped}">
-    <display-name lang="zh">${escapeXml(c.name)}</display-name>
-    <icon src="${escapeXml(c.logo)}" />
-  </channel>`;
-    }).join("\n");
-
-    const programTemplates = [
-      { start: "000000", stop: "060000", title: "深夜温情院线" },
-      { start: "060000", stop: "090000", title: "早晨第一线新闻" },
-      { start: "090000", stop: "120000", title: "经典文娱纪实节目" },
-      { start: "120000", stop: "130000", title: "午间时势观察" },
-      { start: "130000", stop: "180000", title: "午后黄金人气戏剧" },
-      { start: "180000", stop: "190000", title: "傍晚热门民生探索" },
-      { start: "190000", stop: "200000", title: "晚间新闻报道集锦" },
-      { start: "200000", stop: "223000", title: "金牌晚间档品质剧场" },
-      { start: "223000", stop: "235959", title: "深夜体育与军事视界" },
-    ];
-
-    const todayStr = new Date().toISOString().split("T")[0].replace(/-/g, "");
-    const activeEpgSources = epgSources.filter(s => s.active);
-
-    const programTags = channels.map((c) => {
-      const epgIdEscaped = escapeXml(c.epgId || generateDefaultEpgId(c.name));
-      
-      let matchedPrograms: any[] = [];
-      let found = false;
-
-      for (const source of activeEpgSources) {
-        const cache = getEpgCache(source.id);
-        if (cache) {
-          const entry = findMatchingEpgEntry(c, cache);
-          if (entry && entry.programs && entry.programs.length > 0) {
-            matchedPrograms = entry.programs;
-            found = true;
-            break;
-          }
-        }
+    try {
+      const { xml, etag } = getOrGenerateIntegratedEpgXml();
+      if (req.headers["if-none-match"] === etag) {
+        return res.status(304).end();
       }
-
-      if (found && matchedPrograms.length > 0) {
-        return matchedPrograms.map((prog: any) => {
-          return `  <programme start="${escapeXml(prog.start)}" stop="${escapeXml(prog.stop)}" channel="${epgIdEscaped}">
-    <title lang="zh">${escapeXml(prog.title)}</title>
-    ${prog.desc ? `<desc lang="zh">${escapeXml(prog.desc)}</desc>` : ""}
-  </programme>`;
-        }).join("\n");
-      } else {
-        return programTemplates.map((p) => {
-          return `  <programme start="${todayStr}${p.start} +0800" stop="${todayStr}${p.stop} +0800" channel="${epgIdEscaped}">
-    <title lang="zh">${escapeXml(p.title)}</title>
-    <desc lang="zh">由 IPTV 电视服务自动同步 matching epg channel id [${epgIdEscaped}]。</desc>
-  </programme>`;
-        }).join("\n");
-      }
-    }).join("\n");
-
-    const xmlFooter = `</tv>`;
-    
-    res.setHeader("Content-Type", "application/xml");
-    res.send(`${xmlHeader}\n${channelTags}\n${programTags}\n${xmlFooter}`);
+      res.setHeader("Content-Type", "application/xml; charset=utf-8");
+      res.setHeader("Cache-Control", "public, max-age=1800");
+      res.setHeader("ETag", etag);
+      res.send(xml);
+    } catch (err: any) {
+      console.error("[EPG EXPORT ERROR]", err);
+      res.status(500).send("Error generating EPG XML");
+    }
   });
 
-  // Compressed XML.GZ EPG feed
+  // Compressed XML.GZ EPG feed with file cache and 304 Not Modified support
   app.get("/api/export/epg.xml.gz", (req, res) => {
-    const xmlHeader = `<?xml version="1.0" encoding="utf-8"?>
-<!DOCTYPE tv SYSTEM "xmltv.dtd">
-<tv generator-info-name="IPTV Channel Manager" generator-info-url="http://localhost:3000/">`;
-
-    const channelTags = channels.map((c) => {
-      const epgIdEscaped = escapeXml(c.epgId || generateDefaultEpgId(c.name));
-      return `  <channel id="${epgIdEscaped}">
-    <display-name lang="zh">${escapeXml(c.name)}</display-name>
-    <icon src="${escapeXml(c.logo)}" />
-  </channel>`;
-    }).join("\n");
-
-    const programTemplates = [
-      { start: "000000", stop: "060000", title: "深夜温情院线" },
-      { start: "060000", stop: "090000", title: "早晨第一线新闻" },
-      { start: "090000", stop: "120000", title: "经典文娱纪实节目" },
-      { start: "120000", stop: "130000", title: "午间时势观察" },
-      { start: "130000", stop: "180000", title: "午后黄金人气戏剧" },
-      { start: "180000", stop: "190000", title: "傍晚热门民生探索" },
-      { start: "190000", stop: "200000", title: "晚间新闻报道集锦" },
-      { start: "200000", stop: "223000", title: "金牌晚间档品质剧场" },
-      { start: "223000", stop: "235959", title: "深夜体育与军事视界" },
-    ];
-
-    const todayStr = new Date().toISOString().split("T")[0].replace(/-/g, "");
-    const activeEpgSources = epgSources.filter(s => s.active);
-
-    const programTags = channels.map((c) => {
-      const epgIdEscaped = escapeXml(c.epgId || generateDefaultEpgId(c.name));
-      
-      let matchedPrograms: any[] = [];
-      let found = false;
-
-      for (const source of activeEpgSources) {
-        const cache = getEpgCache(source.id);
-        if (cache) {
-          const entry = findMatchingEpgEntry(c, cache);
-          if (entry && entry.programs && entry.programs.length > 0) {
-            matchedPrograms = entry.programs;
-            found = true;
-            break;
-          }
-        }
-      }
-
-      if (found && matchedPrograms.length > 0) {
-        return matchedPrograms.map((prog: any) => {
-          return `  <programme start="${escapeXml(prog.start)}" stop="${escapeXml(prog.stop)}" channel="${epgIdEscaped}">
-    <title lang="zh">${escapeXml(prog.title)}</title>
-    ${prog.desc ? `<desc lang="zh">${escapeXml(prog.desc)}</desc>` : ""}
-  </programme>`;
-        }).join("\n");
-      } else {
-        return programTemplates.map((p) => {
-          return `  <programme start="${todayStr}${p.start} +0800" stop="${todayStr}${p.stop} +0800" channel="${epgIdEscaped}">
-    <title lang="zh">${escapeXml(p.title)}</title>
-    <desc lang="zh">由 IPTV 电视服务自动同步 matching epg channel id [${epgIdEscaped}]。</desc>
-  </programme>`;
-        }).join("\n");
-      }
-    }).join("\n");
-
-    const xmlFooter = `</tv>`;
-    const fullXml = `${xmlHeader}\n${channelTags}\n${programTags}\n${xmlFooter}`;
-
     try {
-      const compressed = zlib.gzipSync(Buffer.from(fullXml, "utf-8"));
+      const { gz, etag } = getOrGenerateIntegratedEpgXml();
+      if (req.headers["if-none-match"] === etag) {
+        return res.status(304).end();
+      }
       res.setHeader("Content-Type", "application/gzip");
-      res.setHeader("Content-Disposition", "attachment; filename=\"epg.xml.gz\"");
-      res.end(compressed);
+      res.setHeader("Content-Disposition", 'attachment; filename="epg.xml.gz"');
+      res.setHeader("Cache-Control", "public, max-age=1800");
+      res.setHeader("ETag", etag);
+      res.end(gz);
     } catch (err: any) {
-      console.error("[EPG GZIP COMPRESSION ERROR]", err);
+      console.error("[EPG GZIP EXPORT ERROR]", err);
       res.status(500).send("Internal Server Error during compression");
     }
   });
+
+  
 
   // Clean-up and optimization APIs
   app.post("/api/cleanup/duplicates", (req, res) => {
