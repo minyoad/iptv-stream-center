@@ -4582,7 +4582,7 @@ export default function App() {
                         }`}
                       >
                         <div className="flex justify-between items-start gap-2">
-                          <div>
+                          <div className="flex-1 min-w-0">
                             <div className="flex items-center gap-1.5 flex-wrap">
                               <p className="text-xs font-bold text-slate-800">{cfg.name}</p>
                               {cfg.isp && (
@@ -4596,10 +4596,10 @@ export default function App() {
                                 </span>
                               )}
                             </div>
-                            <p className="text-[10px] text-slate-400 font-mono mt-0.5 truncate max-w-sm">{cfg.url}</p>
+                            <p className="text-[10px] text-slate-400 font-mono mt-0.5 truncate max-w-full">{cfg.url}</p>
                           </div>
                           
-                          <div className="flex items-center gap-2 flex-shrink-0">
+                          <div className="flex items-center gap-2 flex-shrink-0 flex-wrap justify-end">
                             {/* Quick Switch Toggle */}
                             <div className="flex items-center gap-1.5 bg-white px-2 py-1 rounded-xl border border-slate-200 shadow-2xs hover:border-slate-300 transition">
                               <span className="text-[9.5px] font-bold text-slate-500">{cfg.disabled ? "已禁用" : "启用中"}</span>
@@ -4641,7 +4641,7 @@ export default function App() {
                         {/* Last synced metadata message banner */}
                         <div className="text-[10px] text-slate-500 bg-white p-2.5 rounded-lg border border-slate-100 flex flex-col gap-1">
                           <div className="flex justify-between items-center gap-2">
-                            <span className="truncate max-w-[280px] font-medium text-slate-600">
+                            <span className="truncate flex-1 font-medium text-slate-600">
                               {cfg.message || "准备拉取"}
                             </span>
                             <span className="text-slate-400 font-mono flex-shrink-0 bg-slate-50 px-1.5 py-0.5 rounded text-[9px]">
