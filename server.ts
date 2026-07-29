@@ -263,6 +263,113 @@ function invalidateIntegratedEpgCache() {
     if (fs.existsSync(EPG_EXPORT_GZ_PATH)) fs.unlinkSync(EPG_EXPORT_GZ_PATH);
   } catch (_) {}
 }
+
+// Disk cache path & memory cache for exported Playlists (M3U / TXT) by ISP, Province, Category & Params
+const PLAYLIST_CACHE_DIR = path.join(DATA_DIR, "playlist_cache");
+
+interface ExportPlaylistCacheItem {
+  content: string;
+  etag: string;
+  mtimeMs: number;
+}
+
+const exportPlaylistMemoryCache = new Map<string, ExportPlaylistCacheItem>();
+
+function invalidatePlaylistExportCache() {
+  exportPlaylistMemoryCache.clear();
+  try {
+    if (fs.existsSync(PLAYLIST_CACHE_DIR)) {
+      const files = fs.readdirSync(PLAYLIST_CACHE_DIR);
+      for (const file of files) {
+        fs.unlinkSync(path.join(PLAYLIST_CACHE_DIR, file));
+      }
+    }
+  } catch (_) {}
+}
+
+function getPlaylistCacheKey(params: {
+  format: string;
+  category?: string;
+  isp?: string;
+  province?: string;
+  status?: string;
+  limit?: string | number;
+  maxPerChannel?: string | number;
+  baseUrl?: string;
+}): string {
+  const rawKey = [
+    params.format || "m3u",
+    params.category || "",
+    params.isp || "",
+    params.province || "",
+    params.status || "",
+    params.limit || "",
+    params.maxPerChannel || "",
+    params.baseUrl || ""
+  ].join("|");
+  return crypto.createHash("md5").update(rawKey).digest("hex");
+}
+
+function getOrGeneratePlaylistExport(
+  params: {
+    format: "m3u" | "txt";
+    category?: string;
+    isp?: string;
+    province?: string;
+    status?: string;
+    limit?: string | number;
+    maxPerChannel?: string | number;
+    baseUrl?: string;
+  },
+  generatorFn: () => string
+): { content: string; etag: string } {
+  const cacheKey = getPlaylistCacheKey(params);
+  const now = Date.now();
+
+  // 1. Check in-memory cache (15 min TTL)
+  const memItem = exportPlaylistMemoryCache.get(cacheKey);
+  if (memItem && (now - memItem.mtimeMs < 15 * 60 * 1000)) {
+    return { content: memItem.content, etag: memItem.etag };
+  }
+
+  // 2. Check disk file cache (30 min TTL)
+  const ext = params.format === "m3u" ? ".m3u" : ".txt";
+  const filePath = path.join(PLAYLIST_CACHE_DIR, `${cacheKey}${ext}`);
+
+  try {
+    if (!fs.existsSync(PLAYLIST_CACHE_DIR)) {
+      fs.mkdirSync(PLAYLIST_CACHE_DIR, { recursive: true });
+    }
+    if (fs.existsSync(filePath)) {
+      const stats = fs.statSync(filePath);
+      if (now - stats.mtimeMs < 30 * 60 * 1000) {
+        const content = fs.readFileSync(filePath, "utf-8");
+        const etag = `W/"pl-${cacheKey.slice(0, 8)}-${Math.floor(stats.mtimeMs)}-${content.length}"`;
+        exportPlaylistMemoryCache.set(cacheKey, { content, etag, mtimeMs: stats.mtimeMs });
+        return { content, etag };
+      }
+    }
+  } catch (e) {
+    console.warn("[PLAYLIST DISK CACHE LOAD WARN]", e);
+  }
+
+  // 3. Generate content on cache miss
+  const content = generatorFn();
+  const etag = `W/"pl-${cacheKey.slice(0, 8)}-${now}-${content.length}"`;
+
+  exportPlaylistMemoryCache.set(cacheKey, { content, etag, mtimeMs: now });
+
+  try {
+    if (!fs.existsSync(PLAYLIST_CACHE_DIR)) {
+      fs.mkdirSync(PLAYLIST_CACHE_DIR, { recursive: true });
+    }
+    fs.writeFileSync(filePath, content, "utf-8");
+  } catch (err) {
+    console.error("[PLAYLIST DISK CACHE WRITE ERROR]", err);
+  }
+
+  return { content, etag };
+}
 const testStatus: TestStatus = {
   status: "idle",
   total: 0,
@@ -824,6 +931,7 @@ function saveData() {
 
 function saveDataSync() {
   invalidateIntegratedEpgCache();
+  invalidatePlaylistExportCache();
   try {
     const syncDb = db.transaction(() => {
       // 1. Sync settings
@@ -4410,56 +4518,77 @@ ${JSON.stringify(scoredList.map(c => ({ epgId: c.epgId, names: c.displayNames, s
     const host = req.headers.host || "localhost:3000";
     const protocol = req.headers['x-forwarded-proto'] || req.protocol || 'http';
     const baseUrl = `${protocol}://${host}`;
-    let playlistRows = [`#EXTM3U x-tvg-url="${baseUrl}/api/export/epg.xml.gz"`];
 
-    let count = 0;
-    const maxLimit = limit ? Number(limit) : Infinity;
-    const maxPerChannel = queryMaxPerChannel ? Number(queryMaxPerChannel) : 15;
+    const finalIsp = isp ? String(isp) : targetIsp;
+    const finalProvince = province ? String(province) : targetProvince;
 
-    const orderedGroups = [...groups, { id: "g_other", name: "其它频道" }];
-    orderedGroups.forEach((group) => {
-      channels.forEach((channel) => {
-        const isInGroup = channel.groupIds.includes(group.id);
-        const isFallback = group.id === "g_other" && (channel.groupIds.length === 0 || !channel.groupIds.some(id => groups.find(g => g.id === id)));
-        if (!isInGroup && !isFallback) return;
-        const gId = group.id;
-        const groupName = group.name;
+    const cacheParams = {
+      format: "m3u" as const,
+      category: category ? String(category) : undefined,
+      isp: finalIsp || undefined,
+      province: finalProvince || undefined,
+      status: status ? String(status) : undefined,
+      limit: limit ? String(limit) : undefined,
+      maxPerChannel: queryMaxPerChannel ? String(queryMaxPerChannel) : undefined,
+      baseUrl
+    };
 
-        // Filter group level if specific category selected
-        if (category && groupName !== String(category) && gId !== String(category)) return;
+    const { content, etag } = getOrGeneratePlaylistExport(cacheParams, () => {
+      let playlistRows = [`#EXTM3U x-tvg-url="${baseUrl}/api/export/epg.xml.gz"`];
+      let count = 0;
+      const maxLimit = limit ? Number(limit) : Infinity;
+      const maxPerChannel = queryMaxPerChannel ? Number(queryMaxPerChannel) : 15;
 
-        let processedSources = channel.sources;
-        const finalIsp = isp ? String(isp) : targetIsp;
-        const finalProvince = province ? String(province) : targetProvince;
+      const orderedGroups = [...groups, { id: "g_other", name: "其它频道" }];
+      orderedGroups.forEach((group) => {
+        channels.forEach((channel) => {
+          const isInGroup = channel.groupIds.includes(group.id);
+          const isFallback = group.id === "g_other" && (channel.groupIds.length === 0 || !channel.groupIds.some(id => groups.find(g => g.id === id)));
+          if (!isInGroup && !isFallback) return;
+          const gId = group.id;
+          const groupName = group.name;
 
-        processedSources = getPlayableSources(processedSources, finalIsp, finalProvince);
+          // Filter group level if specific category selected
+          if (category && groupName !== String(category) && gId !== String(category)) return;
 
-        if (province) {
-          processedSources = processedSources.filter(source => source.province === String(province));
-        }
+          let processedSources = channel.sources;
 
-        // Prioritize active, RTSP protocol, and lowest latency
-        processedSources = sortSourcesForExport(processedSources);
+          processedSources = getPlayableSources(processedSources, finalIsp, finalProvince);
 
-        // 限制每个频道最大输出数量 (Limit max sources per channel)
-        const sourcesToExport = processedSources.slice(0, maxPerChannel);
-        sourcesToExport.forEach(bestSource => {
-          if (count >= maxLimit) return;
-          if (status && bestSource.status !== String(status)) return;
+          if (province) {
+            processedSources = processedSources.filter(source => source.province === String(province));
+          }
 
-          const channelDisplayName = channel.name;
-          playlistRows.push(
-            `#EXTINF:-1 tvg-id="${channel.epgId}" tvg-name="${channel.name}" tvg-logo="${channel.logo}" group-title="${groupName}",${channelDisplayName}`
-          );
-          playlistRows.push(bestSource.url);
-          count++;
+          // Prioritize active, RTSP protocol, and lowest latency
+          processedSources = sortSourcesForExport(processedSources);
+
+          // 限制每个频道最大输出数量 (Limit max sources per channel)
+          const sourcesToExport = processedSources.slice(0, maxPerChannel);
+          sourcesToExport.forEach(bestSource => {
+            if (count >= maxLimit) return;
+            if (status && bestSource.status !== String(status)) return;
+
+            const channelDisplayName = channel.name;
+            playlistRows.push(
+              `#EXTINF:-1 tvg-id="${channel.epgId}" tvg-name="${channel.name}" tvg-logo="${channel.logo}" group-title="${groupName}",${channelDisplayName}`
+            );
+            playlistRows.push(bestSource.url);
+            count++;
+          });
         });
       });
+      return playlistRows.join("\n");
     });
 
-    res.setHeader("Content-Type", "application/x-mpegurl");
-    res.setHeader("Content-Disposition", "attachment; filename=\"iptv_custom.m3u\"");
-    res.send(playlistRows.join("\n"));
+    if (req.headers["if-none-match"] === etag) {
+      return res.status(304).end();
+    }
+
+    res.setHeader("Content-Type", "application/x-mpegurl; charset=utf-8");
+    res.setHeader("Content-Disposition", 'attachment; filename="iptv_custom.m3u"');
+    res.setHeader("Cache-Control", "public, max-age=1800");
+    res.setHeader("ETag", etag);
+    res.send(content);
   });
 
   // TXT (TVBox compatible) format
@@ -4494,70 +4623,88 @@ ${JSON.stringify(scoredList.map(c => ({ epgId: c.epgId, names: c.displayNames, s
       }
     }
 
-    const exportMap = new Map<string, string[]>();
+    const finalIsp = isp ? String(isp) : targetIsp;
+    const finalProvince = province ? String(province) : targetProvince;
 
-    let count = 0;
-    const maxLimit = limit ? Number(limit) : Infinity;
-    const maxPerChannel = queryMaxPerChannel ? Number(queryMaxPerChannel) : 15;
+    const cacheParams = {
+      format: "txt" as const,
+      category: category ? String(category) : undefined,
+      isp: finalIsp || undefined,
+      province: finalProvince || undefined,
+      status: status ? String(status) : undefined,
+      limit: limit ? String(limit) : undefined,
+      maxPerChannel: queryMaxPerChannel ? String(queryMaxPerChannel) : undefined
+    };
 
-    const orderedGroups = [...groups, { id: "g_other", name: "其它频道" }];
-    orderedGroups.forEach((group) => {
-      channels.forEach((channel) => {
-        const isInGroup = channel.groupIds.includes(group.id);
-        const isFallback = group.id === "g_other" && (channel.groupIds.length === 0 || !channel.groupIds.some(id => groups.find(g => g.id === id)));
-        if (!isInGroup && !isFallback) return;
-        const gId = group.id;
-        const groupName = group.name;
+    const { content, etag } = getOrGeneratePlaylistExport(cacheParams, () => {
+      const exportMap = new Map<string, string[]>();
 
-        if (category && groupName !== String(category) && gId !== String(category)) return;
+      let count = 0;
+      const maxLimit = limit ? Number(limit) : Infinity;
+      const maxPerChannel = queryMaxPerChannel ? Number(queryMaxPerChannel) : 15;
 
-        let processedSources = channel.sources;
-        const finalIsp = isp ? String(isp) : targetIsp;
-        const finalProvince = province ? String(province) : targetProvince;
+      const orderedGroups = [...groups, { id: "g_other", name: "其它频道" }];
+      orderedGroups.forEach((group) => {
+        channels.forEach((channel) => {
+          const isInGroup = channel.groupIds.includes(group.id);
+          const isFallback = group.id === "g_other" && (channel.groupIds.length === 0 || !channel.groupIds.some(id => groups.find(g => g.id === id)));
+          if (!isInGroup && !isFallback) return;
+          const gId = group.id;
+          const groupName = group.name;
 
-        processedSources = getPlayableSources(processedSources, finalIsp, finalProvince);
+          if (category && groupName !== String(category) && gId !== String(category)) return;
 
-        if (province) {
-          processedSources = processedSources.filter(source => source.province === String(province));
-        }
+          let processedSources = channel.sources;
 
-        // Prioritize active, RTSP protocol, and lowest latency
-        processedSources = sortSourcesForExport(processedSources);
+          processedSources = getPlayableSources(processedSources, finalIsp, finalProvince);
 
-        // 限制每个频道最大输出数量 (Limit max sources per channel)
-        const sourcesToExport = processedSources.slice(0, maxPerChannel);
-        sourcesToExport.forEach(bestSource => {
-          if (count >= maxLimit) return;
-          if (status && bestSource.status !== String(status)) return;
-
-          const catName = groupName;
-          if (!exportMap.has(catName)) {
-            exportMap.set(catName, []);
+          if (province) {
+            processedSources = processedSources.filter(source => source.province === String(province));
           }
 
-          const channelDisplayStr = `${channel.name},${bestSource.url}`;
-          
-          exportMap.get(catName)!.push(channelDisplayStr);
-          count++;
+          // Prioritize active, RTSP protocol, and lowest latency
+          processedSources = sortSourcesForExport(processedSources);
+
+          // 限制每个频道最大输出数量 (Limit max sources per channel)
+          const sourcesToExport = processedSources.slice(0, maxPerChannel);
+          sourcesToExport.forEach(bestSource => {
+            if (count >= maxLimit) return;
+            if (status && bestSource.status !== String(status)) return;
+
+            const catName = groupName;
+            if (!exportMap.has(catName)) {
+              exportMap.set(catName, []);
+            }
+
+            const channelDisplayStr = `${channel.name},${bestSource.url}`;
+            
+            exportMap.get(catName)!.push(channelDisplayStr);
+            count++;
+          });
         });
       });
+
+      const fileRows: string[] = [];
+      exportMap.forEach((lines, catName) => {
+        fileRows.push(`${catName},#genre`);
+        fileRows.push(...lines);
+        fileRows.push(""); // empty spacing
+      });
+      return fileRows.join("\n");
     });
 
-    const fileRows: string[] = [];
-    exportMap.forEach((lines, catName) => {
-      fileRows.push(`${catName},#genre`);
-      fileRows.push(...lines);
-      fileRows.push(""); // empty spacing
-    });
+    if (req.headers["if-none-match"] === etag) {
+      return res.status(304).end();
+    }
 
     res.setHeader("Content-Type", "text/plain; charset=utf-8");
-    res.setHeader("Content-Disposition", "attachment; filename=\"iptv_custom.txt\"");
-    res.send(fileRows.join("\n"));
+    res.setHeader("Content-Disposition", 'attachment; filename="iptv_custom.txt"');
+    res.setHeader("Cache-Control", "public, max-age=1800");
+    res.setHeader("ETag", etag);
+    res.send(content);
   });
 
-  // Dynamic Playback API - returns a single optimized raw URL
-  // Usage: GET /api/play/:channelName?isp=电信&province=广东
-  app.get("/api/play/:channelName", async (req, res) => {
+  app.get("/api/play/:channelName" , async (req, res) => {
     try {
       const channelName = req.params.channelName;
       const { isp, province } = req.query;
