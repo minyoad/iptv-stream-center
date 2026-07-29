@@ -621,6 +621,7 @@ function loadData() {
           lastChecked: row.lastChecked || undefined,
           clientIspReported: row.clientIspReported || undefined,
           clientProvinceReported: row.clientProvinceReported || undefined,
+          isolated: row.isolated === 1 ? true : false,
           testCount: row.testCount || 0,
           successCount: row.successCount || 0
         };

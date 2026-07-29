@@ -539,12 +539,16 @@ export default function App() {
       if (res.ok) {
         const data = await res.json();
         setChannels(data.channels || []);
-        if (data.channels && data.channels.length > 0 && !selectedChannel) {
-          setSelectedChannel(data.channels[0]);
-        } else if (selectedChannel) {
-          const fresh = (data.channels || []).find((c: Channel) => c.id === selectedChannel.id);
-          if (fresh) setSelectedChannel(fresh);
-        }
+        
+        // Use a functional state update to avoid closure staleness
+        setSelectedChannel(prev => {
+          if (!prev) {
+            return (data.channels && data.channels.length > 0) ? data.channels[0] : null;
+          }
+          const fresh = (data.channels || []).find((c: Channel) => c.id === prev.id);
+          return fresh || null;
+        });
+
         setSyncConfigs(data.syncConfigs || []);
         setGroups(data.groups || []);
         setEpgSources(data.epgSources || []);
