@@ -1516,11 +1516,7 @@ async function fetchBufferWithFallback(urlStr: string, userAgent: string): Promi
           res.on("end", () => {
             const buffer = Buffer.concat(chunks);
             const contentEncoding = res.headers["content-encoding"] || "";
-            const isGzipped = (
-              targetUrlStr.toLowerCase().endsWith(".gz") ||
-              contentEncoding.toLowerCase().includes("gzip") ||
-              (buffer.length >= 2 && buffer[0] === 0x1f && buffer[1] === 0x8b)
-            );
+            const isGzipped = (buffer.length >= 2 && buffer[0] === 0x1f && buffer[1] === 0x8b);
             resolve({ buffer, isGzipped });
           });
         });
@@ -1551,11 +1547,7 @@ async function fetchBufferWithFallback(urlStr: string, userAgent: string): Promi
     const arrayBuffer = await res.arrayBuffer();
     const buffer = Buffer.from(arrayBuffer);
     const contentEncoding = res.headers.get("content-encoding") || "";
-    const isGzipped = (
-      urlStr.toLowerCase().endsWith(".gz") ||
-      contentEncoding.toLowerCase().includes("gzip") ||
-      (buffer.length >= 2 && buffer[0] === 0x1f && buffer[1] === 0x8b)
-    );
+    const isGzipped = (buffer.length >= 2 && buffer[0] === 0x1f && buffer[1] === 0x8b);
     return { buffer, isGzipped };
   } catch (fetchErr: any) {
     console.log(`[EPG SYNC] Standard fetch failed for ${urlStr}: ${fetchErr.message || fetchErr}. Attempting recovery via bypass direct fetch...`);
@@ -2367,6 +2359,7 @@ async function startServer() {
   });
 
     app.get("/api/all-data", (req, res) => {
+    res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
     res.json({
       channels,
       syncConfigs,
