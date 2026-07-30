@@ -4599,6 +4599,13 @@ ${JSON.stringify(scoredList.map(c => ({ epgId: c.epgId, names: c.displayNames, s
             processedSources = processedSources.filter(source => source.province === String(province));
           }
 
+          // Default: exclude inactive and unknown/checking sources if status is not explicitly asked for
+          if (!status) {
+            processedSources = processedSources.filter(source => source.status === "active");
+          } else if (status) {
+            processedSources = processedSources.filter(source => source.status === String(status));
+          }
+
           // Prioritize active, RTSP protocol, and lowest latency
           processedSources = sortSourcesForExport(processedSources);
 
@@ -4606,7 +4613,6 @@ ${JSON.stringify(scoredList.map(c => ({ epgId: c.epgId, names: c.displayNames, s
           const sourcesToExport = processedSources.slice(0, maxPerChannel);
           sourcesToExport.forEach(bestSource => {
             if (count >= maxLimit) return;
-            if (status && bestSource.status !== String(status)) return;
 
             const channelDisplayName = channel.name;
             playlistRows.push(
@@ -4703,6 +4709,13 @@ ${JSON.stringify(scoredList.map(c => ({ epgId: c.epgId, names: c.displayNames, s
             processedSources = processedSources.filter(source => source.province === String(province));
           }
 
+          // Default: exclude inactive and unknown/checking sources if status is not explicitly asked for
+          if (!status) {
+            processedSources = processedSources.filter(source => source.status === "active");
+          } else if (status) {
+            processedSources = processedSources.filter(source => source.status === String(status));
+          }
+
           // Prioritize active, RTSP protocol, and lowest latency
           processedSources = sortSourcesForExport(processedSources);
 
@@ -4710,7 +4723,6 @@ ${JSON.stringify(scoredList.map(c => ({ epgId: c.epgId, names: c.displayNames, s
           const sourcesToExport = processedSources.slice(0, maxPerChannel);
           sourcesToExport.forEach(bestSource => {
             if (count >= maxLimit) return;
-            if (status && bestSource.status !== String(status)) return;
 
             const catName = groupName;
             if (!exportMap.has(catName)) {
@@ -4788,13 +4800,14 @@ ${JSON.stringify(scoredList.map(c => ({ epgId: c.epgId, names: c.displayNames, s
       
       // Filter out isolated sources & filter by ISP via existing helper
       let processedSources = getPlayableSources(channel.sources, targetIsp, targetProvince);
+      processedSources = processedSources.filter(s => s.status === "active");
       
       // Prioritize active, RTSP protocol, and lowest latency
       processedSources = sortSourcesForExport(processedSources);
 
       if (processedSources.length === 0) {
         // Fallback to channel sources just in case ISP filtering was too aggressive
-        processedSources = sortSourcesForExport(channel.sources.filter(s => !s.isolated));
+        processedSources = sortSourcesForExport(channel.sources.filter(s => !s.isolated && s.status === "active"));
       }
       
       if (processedSources.length === 0) {
