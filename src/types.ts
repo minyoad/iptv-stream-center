@@ -59,6 +59,7 @@ export interface TestStatus {
   status: "idle" | "running";
   total: number;
   checked: number;
+  lastDataUpdate?: number;
   results: {
     id: string;
     channelId: string;

@@ -595,6 +595,8 @@ export default function App() {
     
     let timerId: any = null;
     let isMounted = true;
+    let prevDataUpdate: number | null = null;
+    let prevTestStatus: string | null = null;
 
     const poll = async () => {
       try {
@@ -604,11 +606,34 @@ export default function App() {
         if (res.ok) {
           const statusData = await res.json() as TestStatus;
           setTestingStatus(statusData);
+          
+          let shouldRefetch = false;
+
+          if (statusData.lastDataUpdate) {
+            if (prevDataUpdate !== null && prevDataUpdate !== statusData.lastDataUpdate) {
+              shouldRefetch = true;
+            }
+            prevDataUpdate = statusData.lastDataUpdate;
+          }
+
           if (statusData.status === "running") {
-            // Refresh channel data live to show checked progress
+            shouldRefetch = true;
+          } else if (prevTestStatus === "running" && statusData.status === "idle") {
+            shouldRefetch = true;
+          }
+          
+          prevTestStatus = statusData.status;
+
+          if (shouldRefetch) {
+            // Refresh channel data live to show checked progress or external data updates
             const resChannels = await fetch("/api/channels?full=true");
             if (resChannels.ok && isMounted) {
-              setChannels(await resChannels.json());
+              const freshChannels = await resChannels.json();
+              setChannels(freshChannels);
+              setSelectedChannel(prev => {
+                if (!prev) return (freshChannels && freshChannels.length > 0) ? freshChannels[0] : null;
+                return freshChannels.find((c: Channel) => c.id === prev.id) || null;
+              });
             }
           }
           // Poll every 2s when running, else every 10s when idle
@@ -1727,7 +1752,38 @@ export default function App() {
     await Promise.all(pool);
 
     setIsClientTesting(false);
-    showFeedback("success", `[${clientTestIsp} + BGP/多线] 探针测速完成！评估出 ${resultsTemp.filter(r => r.status === "active").length} 条可用源，可点按 [同步评估报告] 上报！`);
+    showFeedback("success", `[${clientTestIsp} + BGP/多线] 探针测速完成！评估出 ${resultsTemp.filter(r => r.status === "active").length} 条可用源，正在自动同步至服务器...`);
+    
+    // Automatically submit results
+    if (resultsTemp.length > 0) {
+      try {
+        const res = await fetch("/api/sources/client-test-results", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            results: resultsTemp,
+            clientIsp: clientTestIsp,
+            clientProvince: clientTestProvince
+          })
+        });
+        if (res.ok) {
+          showFeedback("success", `已自动回传 ${resultsTemp.length} 条探针测试结果，UI 局部数据已更新`);
+          setClientTestResults([]);
+          setClientTestProgress(0);
+          setClientTestTotal(0);
+          
+          const resChannels = await fetch("/api/channels?full=true");
+          if (resChannels.ok) {
+            const freshChannels = await resChannels.json();
+            setChannels(freshChannels);
+            setSelectedChannel(prev => {
+              if (!prev) return (freshChannels && freshChannels.length > 0) ? freshChannels[0] : null;
+              return freshChannels.find((c: Channel) => c.id === prev.id) || null;
+            });
+          }
+        }
+      } catch (_) {}
+    }
   };
 
   const submitClientSideProbeTest = async () => {
@@ -1752,7 +1808,16 @@ export default function App() {
         setClientTestResults([]);
         setClientTestProgress(0);
         setClientTestTotal(0);
-        await fetchData();
+        // Force a local partial update of the channel list to ensure UI immediately reflects the new source status
+        const resChannels = await fetch("/api/channels?full=true");
+        if (resChannels.ok) {
+          const freshChannels = await resChannels.json();
+          setChannels(freshChannels);
+          setSelectedChannel(prev => {
+            if (!prev) return (freshChannels && freshChannels.length > 0) ? freshChannels[0] : null;
+            return freshChannels.find((c: Channel) => c.id === prev.id) || null;
+          });
+        }
       } else {
         const err = await res.json();
         showFeedback("error", err.error || "回传测试数据被拒绝");

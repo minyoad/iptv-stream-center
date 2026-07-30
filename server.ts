@@ -75,6 +75,7 @@ interface TestStatus {
   status: "idle" | "running";
   total: number;
   checked: number;
+  lastDataUpdate?: number;
   results: {
     id: string;
     channelId: string;
@@ -925,6 +926,7 @@ function loadData() {
 
 // Save Database to SQLite disk
 let saveTimer: NodeJS.Timeout | null = null;
+let globalLastDataUpdate = Date.now();
 function saveData() {
   if (saveTimer) return;
   saveTimer = setTimeout(() => {
@@ -934,6 +936,7 @@ function saveData() {
 }
 
 function saveDataSync() {
+  globalLastDataUpdate = Date.now();
   invalidateIntegratedEpgCache();
   invalidatePlaylistExportCache();
   try {
@@ -4070,7 +4073,7 @@ app.get("/api/channels", async (req, res) => {
   });
 
   app.get("/api/sources/test-status", (req, res) => {
-    res.json(testStatus);
+    res.json({ ...testStatus, lastDataUpdate: globalLastDataUpdate });
   });
 
   // Detect client IP information (ISP and Province)
