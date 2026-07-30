@@ -1160,8 +1160,8 @@ function checkAndPerformDailyBackup() {
       console.log(`[Backup] Generating daily automated SQLite snapshot: ${backupDbName}`);
       fs.copyFileSync(sqlitePath, backupDbPath);
 
-      // Generate a companion restorable legacy JSON file
-      const backupJsonName = `iptv_data_backup_${dateStr}.json`;
+      // Generate a companion restorable legacy JSON file, compressed
+      const backupJsonName = `iptv_data_backup_${dateStr}.json.gz`;
       const backupJsonPath = path.join(DATA_DIR, backupJsonName);
       if (!fs.existsSync(backupJsonPath)) {
         const backupJson = {
@@ -1172,7 +1172,7 @@ function checkAndPerformDailyBackup() {
           adminPassword,
           githubProxy,
         };
-        fs.writeFileSync(backupJsonPath, JSON.stringify(backupJson, null, 2), "utf-8");
+        fs.writeFileSync(backupJsonPath, zlib.gzipSync(Buffer.from(JSON.stringify(backupJson, null, 2), "utf-8")));
       }
       
       cleanOldBackups();
@@ -1186,11 +1186,11 @@ function cleanOldBackups() {
   try {
     const files = fs.readdirSync(DATA_DIR);
     
-    const autoJsonBackups = files.filter(f => f.startsWith("iptv_data_backup_2") && f.endsWith(".json")).sort();
+    const autoJsonBackups = files.filter(f => f.startsWith("iptv_data_backup_2") && (f.endsWith(".json") || f.endsWith(".json.gz"))).sort();
     const autoSqliteBackups = files.filter(f => f.startsWith("iptv_data_sqlite_backup_") && f.endsWith(".db")).sort();
     
     // 我们保留最近的 30 个手动备份和还原前备份
-    const manualBackups = files.filter(f => (f.startsWith("iptv_data_backup_manual_") || f.startsWith("iptv_data_backup_before_restore_")) && f.endsWith(".json"))
+    const manualBackups = files.filter(f => (f.startsWith("iptv_data_backup_manual_") || f.startsWith("iptv_data_backup_before_restore_")) && (f.endsWith(".json") || f.endsWith(".json.gz")))
         .map(f => ({ name: f, time: fs.statSync(path.join(DATA_DIR, f)).mtime.getTime() }))
         .sort((a, b) => a.time - b.time)
         .map(obj => obj.name);
@@ -5004,7 +5004,7 @@ ${JSON.stringify(scoredList.map(c => ({ epgId: c.epgId, names: c.displayNames, s
       }
       const files = fs.readdirSync(DATA_DIR);
       const backupFiles = files
-        .filter((f) => f.startsWith("iptv_data_backup_") && f.endsWith(".json"));
+        .filter((f) => f.startsWith("iptv_data_backup_") && (f.endsWith(".json") || f.endsWith(".json.gz")));
       
       const backups = backupFiles.map((filename) => {
         const filePath = path.join(DATA_DIR, filename);
@@ -5021,7 +5021,12 @@ ${JSON.stringify(scoredList.map(c => ({ epgId: c.epgId, names: c.displayNames, s
         }
         
         try {
-          const content = fs.readFileSync(filePath, "utf-8");
+          let content = "";
+          if (filename.endsWith(".json.gz")) {
+             content = zlib.gunzipSync(fs.readFileSync(filePath)).toString("utf-8");
+          } else {
+             content = fs.readFileSync(filePath, "utf-8");
+          }
           const parsed = JSON.parse(content);
           channelCount = parsed.channels ? parsed.channels.length : 0;
           groupCount = parsed.groups ? parsed.groups.length : 0;
@@ -5061,7 +5066,7 @@ ${JSON.stringify(scoredList.map(c => ({ epgId: c.epgId, names: c.displayNames, s
       const timestamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
       
       const safeTag = tag ? tag.replace(/[^a-zA-Z0-9\u4e00-\u9fa5_-]/g, "").substring(0, 20) : "手动备份";
-      const filename = `iptv_data_backup_manual_${timestamp}.json`;
+      const filename = `iptv_data_backup_manual_${timestamp}.json.gz`;
       const filePath = path.join(DATA_DIR, filename);
       
       const cronJobsData = db.prepare("SELECT * FROM cron_jobs").all();
@@ -5081,7 +5086,7 @@ ${JSON.stringify(scoredList.map(c => ({ epgId: c.epgId, names: c.displayNames, s
         }
       };
       
-      fs.writeFileSync(filePath, JSON.stringify(backupContent, null, 2), "utf-8");
+      fs.writeFileSync(filePath, zlib.gzipSync(Buffer.from(JSON.stringify(backupContent, null, 2), "utf-8")));
       res.json({ success: true, message: "备份已成功创建", filename, tag: safeTag });
     } catch (err: any) {
       res.status(500).json({ error: "创建备份失败: " + err.message });
@@ -5093,7 +5098,7 @@ ${JSON.stringify(scoredList.map(c => ({ epgId: c.epgId, names: c.displayNames, s
       const { filename, content } = req.body;
       
       // Save current database as prior backup to prevent accidental loss
-      const autoBackupName = `iptv_data_backup_before_restore_${Date.now()}.json`;
+      const autoBackupName = `iptv_data_backup_before_restore_${Date.now()}.json.gz`;
       try {
         const priorBackupJson = {
           groups,
@@ -5103,7 +5108,7 @@ ${JSON.stringify(scoredList.map(c => ({ epgId: c.epgId, names: c.displayNames, s
           adminPassword,
           githubProxy,
         };
-        fs.writeFileSync(path.join(DATA_DIR, autoBackupName), JSON.stringify(priorBackupJson, null, 2), "utf-8");
+        fs.writeFileSync(path.join(DATA_DIR, autoBackupName), zlib.gzipSync(Buffer.from(JSON.stringify(priorBackupJson, null, 2), "utf-8")));
       } catch (backupErr) {
         console.error("[Restore Backup] Failed to write safety prior backup:", backupErr);
       }
@@ -5135,7 +5140,20 @@ ${JSON.stringify(scoredList.map(c => ({ epgId: c.epgId, names: c.displayNames, s
         return res.status(404).json({ error: "未找到指定的备份文件: " + safeFilename });
       }
       
-      fs.copyFileSync(filePath, DATA_FILE);
+      let parsedBackupData: any = null;
+      try {
+         let rawData = "";
+         if (filePath.endsWith(".json.gz")) {
+             rawData = zlib.gunzipSync(fs.readFileSync(filePath)).toString("utf-8");
+         } else {
+             rawData = fs.readFileSync(filePath, "utf-8");
+         }
+         parsedBackupData = JSON.parse(rawData);
+      } catch (e) {
+         return res.status(500).json({ error: "解析备份文件失败: " + e.message });
+      }
+
+      fs.writeFileSync(DATA_FILE, JSON.stringify(parsedBackupData, null, 2), "utf-8");
       loadData();
       res.json({ success: true, message: "成功恢复到指定备份，数据已实时刷新！先前版本已自动备份为 " + autoBackupName });
     } catch (err: any) {

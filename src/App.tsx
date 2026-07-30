@@ -488,46 +488,50 @@ export default function App() {
     const file = e.target.files?.[0];
     if (!file) return;
     
-    // Read the file content
-    const reader = new FileReader();
-    reader.onload = async (event) => {
-      try {
-        const textTask = event.target?.result as string;
-        // Verify JSON parseable
-        const parsed = JSON.parse(textTask);
-        if (!parsed.channels && !parsed.groups) {
-          showFeedback("error", "上传失败：检测到文件内不包含合法的 channels 或 groups IPTV 数据节点");
-          return;
-        }
-
-        triggerConfirm(
-          "上传并还原本地备份？",
-          `您上传了本地外部备份 [${file.name}]。您确定要应用此备份覆盖当前系统数据库吗？当前数据将被完全覆写。系统在恢复前依然会为您暂存一份紧急恢复包。`,
-          async () => {
-            try {
-              const res = await fetch("/api/backups/restore", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ content: textTask })
-              });
-              const data = await res.json();
-              if (res.ok && data.success) {
-                showFeedback("success", data.message || "本地备份文件还原成功！");
-                await fetchData();
-                fetchBackups();
-              } else {
-                showFeedback("error", data.error || "加载本地备份失败");
-              }
-            } catch (err) {
-              showFeedback("error", "服务器还原本地文件通信异常");
-            }
-          }
-        );
-      } catch (err) {
-        showFeedback("error", "解析 JSON 格式失败，请确保您上传的是合法的 json 备份文件");
+    try {
+      let textTask = "";
+      if (file.name.endsWith(".gz")) {
+        const ds = new DecompressionStream("gzip");
+        const decompressedStream = file.stream().pipeThrough(ds);
+        textTask = await new Response(decompressedStream).text();
+      } else {
+        textTask = await file.text();
       }
-    };
-    reader.readAsText(file);
+
+      // Verify JSON parseable
+      const parsed = JSON.parse(textTask);
+      if (!parsed.channels && !parsed.groups) {
+        showFeedback("error", "上传失败：检测到文件内不包含合法的 channels 或 groups IPTV 数据节点");
+        return;
+      }
+
+      triggerConfirm(
+        "上传并还原本地备份？",
+        `您上传了本地外部备份 [${file.name}]。您确定要应用此备份覆盖当前系统数据库吗？当前数据将被完全覆写。系统在恢复前依然会为您暂存一份紧急恢复包。`,
+        async () => {
+          try {
+            const res = await fetch("/api/backups/restore", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ content: textTask })
+            });
+            const data = await res.json();
+            if (res.ok && data.success) {
+              showFeedback("success", data.message || "本地备份文件还原成功！");
+              await fetchData();
+              fetchBackups();
+            } else {
+              showFeedback("error", data.error || "加载本地备份失败");
+            }
+          } catch (err) {
+            showFeedback("error", "服务器还原本地文件通信异常");
+          }
+        }
+      );
+    } catch (err) {
+      showFeedback("error", "解析格式失败，请确保上传的是合法的 JSON 备份文件");
+    }
+    
     // Clear input so same file can be chosen again
     e.target.value = "";
   };
@@ -5881,7 +5885,7 @@ export default function App() {
                     <div className="relative border-2 border-dashed border-slate-200 rounded-2xl p-4 text-center hover:bg-slate-50/50 transition cursor-pointer">
                       <input 
                         type="file"
-                        accept=".json"
+                        accept=".json,.gz"
                         onChange={handleUploadBackupLocal}
                         className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
                         id="backup_file_upload_input"
@@ -6415,7 +6419,7 @@ export default function App() {
               </div>
 
               <div className="space-y-1.5">
-                <label className="text-slate-700 font-bold">粘贴订阅 JSON 备份文本或上传本地备份文件 *</label>
+                <label className="text-slate-700 font-bold">粘贴订阅 JSON 备份文本或上传本地备份文件 (*.json, *.gz) *</label>
                 
                 {/* File input directly in modal */}
                 <div className="flex items-center justify-center w-full">
@@ -6427,21 +6431,28 @@ export default function App() {
                     </div>
                     <input 
                       type="file" 
-                      accept=".json,application/json" 
+                      accept=".json,application/json,.gz,application/gzip" 
                       className="hidden" 
-                      onChange={(e) => {
+                      onChange={async (e) => {
                         const file = e.target.files?.[0];
                         if (file) {
-                          const reader = new FileReader();
-                          reader.onload = (evt) => {
-                            const result = evt.target?.result;
-                            if (typeof result === "string") {
-                              setImportSubscriptionsContent(result);
-                              showFeedback("success", `成功读取文件, 共 ${file.size} 字节`);
+                          try {
+                            let result = "";
+                            if (file.name.endsWith(".gz")) {
+                              const ds = new DecompressionStream("gzip");
+                              const decompressedStream = file.stream().pipeThrough(ds);
+                              result = await new Response(decompressedStream).text();
+                            } else {
+                              result = await file.text();
                             }
-                          };
-                          reader.readAsText(file);
+                            setImportSubscriptionsContent(result);
+                            showFeedback("success", `成功读取文件, 共 ${file.size} 字节`);
+                          } catch (err) {
+                            showFeedback("error", "文件读取或解压失败");
+                          }
                         }
+                        // Clear to allow re-upload
+                        e.target.value = "";
                       }}
                     />
                   </label>
