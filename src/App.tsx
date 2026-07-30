@@ -152,6 +152,8 @@ export default function App() {
 
   // Form states for modals/editors
   const [channelFilterStatus, setChannelFilterStatus] = useState<"active" | "all_with_isolated" | "isolated">("active");
+  const [isCleanupModalOpen, setIsCleanupModalOpen] = useState(false);
+  const [cleanupFailThreshold, setCleanupFailThreshold] = useState<number>(1);
   const [isChannelModalOpen, setIsChannelModalOpen] = useState(false);
   const [editingChannel, setEditingChannel] = useState<Channel | null>(null);
   const [channelForm, setChannelForm] = useState({
@@ -2110,22 +2112,25 @@ export default function App() {
 
   // Clean invalid sources
   const cleanupInvalidSources = () => {
-    triggerConfirm(
-      "一键清理失效线路",
-      "这将会一键清理所有在测速中返回失败 (inactive) 的线路。确定继续吗？",
-      async () => {
-        try {
-          const res = await fetch("/api/cleanup/inactive", { method: "POST" });
-          const data = await res.json();
-          if (res.ok) {
-            showFeedback("success", data.message || "失效源清理完成");
-            await fetchData();
-          }
-        } catch (err) {
-          showFeedback("error", "系统交互错误");
-        }
+    setIsCleanupModalOpen(true);
+  };
+
+  const executeCleanup = async () => {
+    try {
+      const res = await fetch("/api/cleanup/inactive", { 
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ failThreshold: cleanupFailThreshold })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        showFeedback("success", data.message || "失效源隔离完成");
+        setIsCleanupModalOpen(false);
+        await fetchData();
       }
-    );
+    } catch (err) {
+      showFeedback("error", "系统交互错误");
+    }
   };
 
   // File manual import (Upload / Paste text)
@@ -6789,6 +6794,58 @@ export default function App() {
                 </button>
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {isCleanupModalOpen && (
+        <div className="fixed inset-0 z-[100] bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-sm w-full p-6 shadow-2xl border border-slate-150 space-y-4 flex flex-col animate-fade-in animate-duration-200">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 bg-amber-50 text-amber-600 rounded-full flex items-center justify-center shrink-0">
+                <ShieldAlert className="w-5 h-5" />
+              </div>
+              <h3 className="text-sm font-black text-slate-800">一键智能隔离失效线路</h3>
+            </div>
+            <p className="text-xs text-slate-500 font-semibold leading-relaxed">
+              此操作会将测速结果为“失效”的线路进行软隔离。隔离后的线路将不再出现在播放列表或导出文件中。
+            </p>
+            
+            <div className="pt-2">
+              <label className="block text-xs font-bold text-slate-700 mb-2">失败次数阈值</label>
+              <select
+                value={cleanupFailThreshold}
+                onChange={(e) => setCleanupFailThreshold(Number(e.target.value))}
+                className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm font-medium focus:outline-none focus:ring-2 focus:ring-amber-500/50"
+              >
+                <option value={0}>清理所有当前失效的线路 (只要最新一次失败)</option>
+                <option value={1}>隔离净失败 ≥ 1 次的线路</option>
+                <option value={2}>隔离净失败 ≥ 2 次的线路 (推荐)</option>
+                <option value={3}>隔离净失败 ≥ 3 次的线路</option>
+                <option value={5}>隔离净失败 ≥ 5 次的线路</option>
+              </select>
+              <p className="text-[10px] text-slate-400 mt-1.5 leading-relaxed">
+                净失败次数 = 总测试次数 - 成功次数。您可以选择仅隔离那些连续多次验证均失败的顽固源。
+              </p>
+            </div>
+
+            <div className="flex gap-2.5 pt-2">
+              <button
+                type="button"
+                onClick={() => setIsCleanupModalOpen(false)}
+                className="w-1/2 py-2.5 border border-slate-200 hover:bg-slate-50 text-slate-600 text-xs rounded-xl font-bold cursor-pointer transition text-center"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                onClick={executeCleanup}
+                className="w-1/2 py-2.5 bg-amber-600 hover:bg-amber-700 text-white text-xs rounded-xl font-bold cursor-pointer transition shadow-md shadow-amber-600/20 text-center flex justify-center items-center gap-1.5"
+              >
+                <ShieldAlert className="w-3.5 h-3.5" />
+                确定隔离
+              </button>
+            </div>
           </div>
         </div>
       )}

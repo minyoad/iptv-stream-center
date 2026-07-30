@@ -4868,10 +4868,19 @@ ${JSON.stringify(scoredList.map(c => ({ epgId: c.epgId, names: c.displayNames, s
   });
 
   app.post("/api/cleanup/inactive", (req, res) => {
+    const { failThreshold } = req.body || {};
+    const threshold = parseInt(failThreshold as string) || 0;
+
     let affectedCount = 0;
     channels.forEach((channel) => {
       channel.sources.forEach((s) => {
         if (s.status === "inactive" && !s.isolated) {
+          if (threshold > 0) {
+            const failures = (s.testCount || 0) - (s.successCount || 0);
+            if (failures < threshold) {
+              return; // Skip isolating if it hasn't failed enough times
+            }
+          }
           s.isolated = true;
           affectedCount++;
         }
@@ -4879,7 +4888,7 @@ ${JSON.stringify(scoredList.map(c => ({ epgId: c.epgId, names: c.displayNames, s
     });
 
     saveData();
-    res.json({ success: true, message: `成功隔离 (软删除) ${affectedCount} 个失效链接直播源` });
+    res.json({ success: true, message: `成功隔离 (软隐藏) ${affectedCount} 个失效链接直播源` });
   });
 
   // DB Manual Backup & Restore APIs

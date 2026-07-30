@@ -7,11 +7,12 @@ import logging
 import shutil
 import urllib.parse
 import socket
+import ssl
 import aiohttp
 
 # ==================== [用户自定义参数配置区] ====================
 # [1] 直播源系统的远端中枢服务器 URL (不要以 "/" 结尾)
-SERVER_BASE_URL = "https://ais-pre-h22cqilbhbuzga4hfgpz7g-276461038601.asia-southeast1.run.app" 
+SERVER_BASE_URL = "https://iptvs.mybacc.com" 
 
 # [2] 本设备的真实物理宽带网络环境属性
 CLIENT_ISP = "AUTO"         
@@ -82,16 +83,23 @@ async def phase_1_network_check(session: aiohttp.ClientSession, url: str) -> tup
             
     
     # 针对普通 HTTP / HTTPS 或 HLS / M3U8 直播源，使用轻量请求
+    # allow_redirects=False：只验证源 URL 可达，不跟随重定向。
+    # 重定向目标可能是 RTSP/非标准 HTTP 服务器，aiohttp 跟随会报 Bad status line。
+    # 实际流内容校验由 Phase 2 的 ffprobe/ffmpeg 负责。
     else:
         try:
             ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36"
-            async with session.get(url, timeout=PHASE_I_TIMEOUT, allow_redirects=True, headers={"User-Agent": ua}) as response:
-                # 只认可 200 级别的响应为可用，403/404 等代表无法连通
+            async with session.get(url, timeout=PHASE_I_TIMEOUT, allow_redirects=False, headers={"User-Agent": ua}) as response:
+                # 2xx 成功 / 3xx 重定向 均视为源 URL 可达
                 if response.status >= 200 and response.status < 400:
-                    latency = int((time.time() - start_time) * 1050)
+                    latency = int((time.time() - start_time) * 1000)
                     return True, latency
-        except Exception:
-            pass
+        except asyncio.TimeoutError:
+            logger.warning(f"⏱ Phase 1 超时 ({PHASE_I_TIMEOUT}s): {url[:60]}")
+        except aiohttp.ClientConnectorError as e:
+            logger.warning(f"🔌 Phase 1 连接失败: {url[:60]} -> {e}")
+        except Exception as e:
+            logger.warning(f"❓ Phase 1 未知异常: {url[:60]} -> {type(e).__name__}: {e}")
 
         return False, 9999
 
@@ -210,7 +218,11 @@ async def main():
 
     # 首要物理扫描底层依赖
     ff_engine = detect_ff_player()
-    connector = aiohttp.TCPConnector(ssl=False, limit=50)
+    # 创建 SSL 上下文：支持 HTTPS 但跳过证书校验（测试/内网域名证书通常无效）
+    ssl_context = ssl.create_default_context()
+    ssl_context.check_hostname = False
+    ssl_context.verify_mode = ssl.CERT_NONE
+    connector = aiohttp.TCPConnector(ssl=ssl_context, limit=50)
     
     import urllib.parse
     
@@ -380,5 +392,48 @@ async def main():
         logger.info(f"已保存测试前文件: sources_before.txt (共 {len(all_sources_before)} 条)")
         logger.info(f"已保存测试后文件: sources_after.txt (共 {len(all_sources_after)} 条)")
 
+async def test_single_url(url: str):
+    """测试单个 URL 的连通性和解码状况（独立于主流程）"""
+    logger.info("=" * 60)
+    logger.info(f"🔬 单URL测试模式")
+    logger.info(f"📡 目标: {url}")
+    logger.info(f"⏱  Phase 1 超时: {PHASE_I_TIMEOUT}s | Phase 2 解码: {PHASE_II_DECODE_SEC}s")
+    logger.info("=" * 60)
+
+    ff_engine = detect_ff_player()
+    ssl_context = ssl.create_default_context()
+    ssl_context.check_hostname = False
+    ssl_context.verify_mode = ssl.CERT_NONE
+    connector = aiohttp.TCPConnector(ssl=ssl_context, limit=1)
+
+    async with aiohttp.ClientSession(connector=connector) as session:
+        # Phase 1
+        logger.info(f"\n📍 [Phase 1] 网络连通性检查...")
+        p1_ok, p1_latency = await phase_1_network_check(session, url)
+        if not p1_ok:
+            logger.error(f"❌ [Phase 1] 网络不通！延迟: {p1_latency}ms")
+            return
+        logger.info(f"✅ [Phase 1] 网络可达，延迟: {p1_latency}ms")
+
+        if not ff_engine:
+            logger.warning("⚠️  未找到 FFmpeg 工具，无法进行 Phase 2 解码验证")
+            logger.info(f"📊 最终结果: active (仅 Phase 1 通过)")
+            return
+
+        # Phase 2
+        logger.info(f"\n📍 [Phase 2] 流媒体解码验证 ({ff_engine['type']})...")
+        p2_ok, p2_latency = await phase_2_decode_check(ff_engine, url)
+        if p2_ok:
+            logger.info(f"🎉 [Phase 2] 解码通过！延迟: {p2_latency}ms")
+            logger.info(f"📊 最终结果: ✅ active（二段验证全部通过）")
+        else:
+            logger.warning(f"❌ [Phase 2] 解码失败！能连接但无法提取播放帧")
+            logger.info(f"📊 最终结果: ❌ inactive（网络通但解码失败）")
+
+
 if __name__ == "__main__":
-    asyncio.run(main())
+    import sys
+    if len(sys.argv) > 1:
+        asyncio.run(test_single_url(sys.argv[1]))
+    else:
+        asyncio.run(main())
