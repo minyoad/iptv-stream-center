@@ -1747,7 +1747,7 @@ export default function App() {
       }
     };
 
-    const countOfThreads = Math.min(clientThreadCount, listToTest.length);
+    const countOfThreads = Math.min(clientThreadCount, clientTestList.length);
     const pool = Array.from({ length: countOfThreads }, runWorker);
     await Promise.all(pool);
 

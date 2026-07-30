@@ -43,6 +43,7 @@ interface Channel {
   alias: string[];
   epgId: string;
   sources: LiveSource[];
+  isolated?: boolean;
 }
 
 interface SyncConfig {
@@ -85,7 +86,7 @@ interface TestStatus {
   }[];
 }
 
-const DATA_DIR = path.join(process.cwd(), "data");
+const DATA_DIR = process.env.DATA_DIR || (fs.existsSync("/data") ? "/data" : path.join(process.cwd(), "data"));
 const DATA_FILE = path.join(DATA_DIR, "iptv_data.json");
 
 // Ensure data folder exists
@@ -270,6 +271,9 @@ function invalidateIntegratedEpgCache() {
 
 // Disk cache path & memory cache for exported Playlists (M3U / TXT) by ISP, Province, Category & Params
 const PLAYLIST_CACHE_DIR = path.join(DATA_DIR, "playlist_cache");
+if (!fs.existsSync(PLAYLIST_CACHE_DIR)) {
+  fs.mkdirSync(PLAYLIST_CACHE_DIR, { recursive: true });
+}
 
 interface ExportPlaylistCacheItem {
   content: string;
@@ -330,13 +334,13 @@ function getOrGeneratePlaylistExport(
   const cacheKey = getPlaylistCacheKey(params);
   const now = Date.now();
 
-  // 1. Check in-memory cache (15 min TTL)
+  // 1. Check in-memory cache (No TTL)
   const memItem = exportPlaylistMemoryCache.get(cacheKey);
-  if (memItem && (now - memItem.mtimeMs < 15 * 60 * 1000)) {
+  if (memItem) {
     return { content: memItem.content, etag: memItem.etag };
   }
 
-  // 2. Check disk file cache (30 min TTL)
+  // 2. Check disk file cache (No TTL)
   const ext = params.format === "m3u" ? ".m3u" : ".txt";
   const filePath = path.join(PLAYLIST_CACHE_DIR, `${cacheKey}${ext}`);
 
@@ -346,12 +350,10 @@ function getOrGeneratePlaylistExport(
     }
     if (fs.existsSync(filePath)) {
       const stats = fs.statSync(filePath);
-      if (now - stats.mtimeMs < 30 * 60 * 1000) {
-        const content = fs.readFileSync(filePath, "utf-8");
-        const etag = `W/"pl-${cacheKey.slice(0, 8)}-${Math.floor(stats.mtimeMs)}-${content.length}"`;
-        exportPlaylistMemoryCache.set(cacheKey, { content, etag, mtimeMs: stats.mtimeMs });
-        return { content, etag };
-      }
+      const content = fs.readFileSync(filePath, "utf-8");
+      const etag = `W/"pl-${cacheKey.slice(0, 8)}-${Math.floor(stats.mtimeMs)}-${content.length}"`;
+      exportPlaylistMemoryCache.set(cacheKey, { content, etag, mtimeMs: stats.mtimeMs });
+      return { content, etag };
     }
   } catch (e) {
     console.warn("[PLAYLIST DISK CACHE LOAD WARN]", e);
@@ -914,6 +916,16 @@ function loadData() {
 
     if (updated) {
       saveData();
+    } else {
+      // Proactively generate caches on startup if not updated
+      setTimeout(() => {
+        try {
+          getOrGenerateIntegratedEpgXml();
+          generateDefaultPlaylists();
+        } catch(e) {
+          console.error("[STARTUP CACHE GEN ERROR]", e);
+        }
+      }, 2000);
     }
 
   } catch (error) {
@@ -927,7 +939,12 @@ function loadData() {
 // Save Database to SQLite disk
 let saveTimer: NodeJS.Timeout | null = null;
 let globalLastDataUpdate = Date.now();
-function saveData() {
+let shouldInvalidateCaches = false;
+
+function saveData(invalidate = true) {
+  if (invalidate) {
+    shouldInvalidateCaches = true;
+  }
   if (saveTimer) return;
   saveTimer = setTimeout(() => {
     saveTimer = null;
@@ -935,10 +952,85 @@ function saveData() {
   }, 1000);
 }
 
+function generateDefaultPlaylists() {
+  const m3uPath = path.join(DATA_DIR, "iptv_custom.m3u");
+  const txtPath = path.join(DATA_DIR, "iptv_custom.txt");
+
+  let playlistRows = [`#EXTM3U x-tvg-url="/api/export/epg.xml.gz"`];
+  const exportMap = new Map<string, string[]>();
+  let count = 0;
+  const maxLimit = Infinity;
+  const maxPerChannel = 15;
+
+  const orderedGroups = [...groups, { id: "g_other", name: "其它频道" }];
+  
+  orderedGroups.forEach((group) => {
+    channels.forEach((channel) => {
+      if (channel.isolated) return;
+      const isInGroup = channel.groupIds.includes(group.id);
+      const isFallback = group.id === "g_other" && (channel.groupIds.length === 0 || !channel.groupIds.some(id => groups.find(g => g.id === id)));
+      if (!isInGroup && !isFallback) return;
+
+      let processedSources = channel.sources.filter(source => source.status === "active");
+      processedSources = sortSourcesForExport(processedSources);
+      
+      const sourcesToExport = processedSources.slice(0, maxPerChannel);
+      const groupName = group.name;
+
+      sourcesToExport.forEach(bestSource => {
+        if (count >= maxLimit) return;
+        const channelDisplayName = channel.name;
+        
+        // M3U
+        playlistRows.push(
+          `#EXTINF:-1 tvg-id="${channel.epgId}" tvg-name="${channel.name}" tvg-logo="${channel.logo}" group-title="${groupName}",${channelDisplayName}`
+        );
+        playlistRows.push(bestSource.url);
+
+        // TXT
+        if (!exportMap.has(groupName)) {
+          exportMap.set(groupName, []);
+        }
+        exportMap.get(groupName)!.push(`${channel.name},${bestSource.url}`);
+        
+        count++;
+      });
+    });
+  });
+
+  const m3uContent = playlistRows.join("\n");
+  
+  const fileRows: string[] = [];
+  exportMap.forEach((lines, catName) => {
+    fileRows.push(`${catName},#genre`);
+    fileRows.push(...lines);
+    fileRows.push("");
+  });
+  const txtContent = fileRows.join("\n");
+
+  try {
+    fs.writeFileSync(m3uPath, m3uContent, "utf-8");
+    fs.writeFileSync(txtPath, txtContent, "utf-8");
+  } catch (err) {
+    console.error("[STATIC PLAYLIST WRITE ERROR]", err);
+  }
+}
+
 function saveDataSync() {
   globalLastDataUpdate = Date.now();
-  invalidateIntegratedEpgCache();
-  invalidatePlaylistExportCache();
+  if (shouldInvalidateCaches) {
+    invalidateIntegratedEpgCache();
+    invalidatePlaylistExportCache();
+    shouldInvalidateCaches = false;
+    
+    // Proactively generate caches to ensure they are available in /data
+    try {
+      getOrGenerateIntegratedEpgXml();
+      generateDefaultPlaylists();
+    } catch(e) {
+      console.error("[PROACTIVE CACHE GEN ERROR]", e);
+    }
+  }
   try {
     const syncDb = db.transaction(() => {
       // 1. Sync settings
@@ -1304,7 +1396,7 @@ async function runConcurrentTest(selectedSources: { id: string; channelId: strin
   await Promise.all(pool);
 
   testStatus.status = "idle";
-  saveData();
+  saveData(false);
 }
 
 function updateSourceDbStatus(channelId: string, sourceId: string, status: "active" | "inactive" | "checking" | "unknown", latency?: number) {
@@ -1441,32 +1533,29 @@ function findMatchingEpgEntry(ch: Channel, cache: EpgCacheIndexed): EpgEntry | n
 function getOrGenerateIntegratedEpgXml(): { xml: string; gz: Buffer; etag: string } {
   const now = Date.now();
 
-  // 1. Check in-memory cache (15 mins TTL)
+  // 1. Check in-memory cache (No TTL)
   if (
     integratedEpgXmlCache &&
     integratedEpgXmlGzCache &&
-    integratedEpgEtag &&
-    now - integratedEpgCacheTime < 15 * 60 * 1000
+    integratedEpgEtag
   ) {
     return { xml: integratedEpgXmlCache, gz: integratedEpgXmlGzCache, etag: integratedEpgEtag };
   }
 
-  // 2. Check disk file cache (30 mins TTL)
+  // 2. Check disk file cache (No TTL)
   try {
     if (fs.existsSync(EPG_EXPORT_XML_PATH) && fs.existsSync(EPG_EXPORT_GZ_PATH)) {
       const stats = fs.statSync(EPG_EXPORT_GZ_PATH);
-      if (now - stats.mtimeMs < 30 * 60 * 1000) {
-        const xml = fs.readFileSync(EPG_EXPORT_XML_PATH, "utf-8");
-        const gz = fs.readFileSync(EPG_EXPORT_GZ_PATH);
-        const etag = `W/"epg-${Math.floor(stats.mtimeMs)}-${stats.size}"`;
+      const xml = fs.readFileSync(EPG_EXPORT_XML_PATH, "utf-8");
+      const gz = fs.readFileSync(EPG_EXPORT_GZ_PATH);
+      const etag = `W/"epg-${Math.floor(stats.mtimeMs)}-${stats.size}"`;
 
-        integratedEpgXmlCache = xml;
-        integratedEpgXmlGzCache = gz;
-        integratedEpgCacheTime = stats.mtimeMs;
-        integratedEpgEtag = etag;
+      integratedEpgXmlCache = xml;
+      integratedEpgXmlGzCache = gz;
+      integratedEpgCacheTime = stats.mtimeMs;
+      integratedEpgEtag = etag;
 
-        return { xml, gz, etag };
-      }
+      return { xml, gz, etag };
     }
   } catch (e) {
     console.warn("[EPG DISK CACHE LOAD WARN]", e);
