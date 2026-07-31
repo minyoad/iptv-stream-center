@@ -3546,7 +3546,7 @@ export default function App() {
                       <div>
                         <span className="text-[9px] sm:text-[10px] uppercase font-bold text-slate-400 tracking-wider">有效可用</span>
                         <div className="text-lg sm:text-xl font-black text-emerald-600 mt-0.5 sm:mt-1 font-mono">
-                          {filteredGlobalSources.filter(s => s.status === "active").length} <span className="text-xs text-slate-500 font-sans">条</span>
+                          {filteredGlobalSources.filter(s => s.status === "active" && !s.isolated).length} <span className="text-xs text-slate-500 font-sans">条</span>
                         </div>
                       </div>
                       <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center border border-emerald-100 shrink-0">
@@ -3741,7 +3741,7 @@ export default function App() {
                             <span className="font-bold text-slate-700 text-[10.5px]">仅加载可用与未测试线路</span>
                           </label>
                           <span className="text-[10px] bg-sky-100 text-sky-800 px-1.5 py-0.5 rounded shrink-0 font-extrabold font-mono">
-                            {filteredGlobalSources.filter(s => s.status === "active" || s.status === "unknown" || s.status === "checking").length} 条
+                            {filteredGlobalSources.filter(s => !s.isolated && (s.status === "active" || s.status === "unknown" || s.status === "checking")).length} 条
                           </span>
                         </div>
 

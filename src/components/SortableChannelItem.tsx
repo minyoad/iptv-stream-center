@@ -50,7 +50,8 @@ export const SortableChannelItem: React.FC<SortableChannelItemProps> = ({
     zIndex: isDragging ? 20 : 1,
   };
 
-  const activeCount = channel.sources.filter((s) => s.status === "active").length;
+  const activeCount = channel.sources.filter((s) => s.status === "active" && !s.isolated).length;
+  const totalCount = channel.sources.filter((s) => !s.isolated).length;
   const groupNames = channel.groupIds
     .map((gId) => groups.find((g) => g.id === gId)?.name)
     .filter(Boolean)
@@ -135,7 +136,7 @@ export const SortableChannelItem: React.FC<SortableChannelItemProps> = ({
       <div className="flex items-center gap-1 shrink ml-1 min-w-0 justify-end">
         {/* Count pill badge */}
         <span className="text-[9px] font-bold bg-slate-100 text-slate-500 px-1 py-0.5 rounded hidden lg:inline-block shrink-0">
-          {activeCount}/{channel.sources.length}
+          {activeCount}/{totalCount}
         </span>
 
         {/* Group Name badge */}
