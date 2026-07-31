@@ -1690,7 +1690,7 @@ async function getClientIpGeo(ipString: string): Promise<{ province: string, isp
 
   try {
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 1200);
+    const timeoutId = setTimeout(() => controller.abort(), 3000);
 
     const checkUrl = `http://ip-api.com/json/${ip}?lang=zh-CN`;
     const res = await fetch(checkUrl, { signal: controller.signal });
@@ -1747,11 +1747,14 @@ async function getClientIpGeo(ipString: string): Promise<{ province: string, isp
 
   try {
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 1200);
+    const timeoutId = setTimeout(() => controller.abort(), 3000);
     const res = await fetch(`https://whois.pconline.com.cn/ipJson.jsp?ip=${ip}&json=true`, { signal: controller.signal });
     clearTimeout(timeoutId);
     if (res.ok) {
-      const data = await res.json();
+      const buffer = await res.arrayBuffer();
+      const decoder = new TextDecoder("gbk");
+      const text = decoder.decode(buffer);
+      const data = JSON.parse(text);
       if (data && data.pro) {
         let province = data.pro.replace("省", "").replace("市", "");
         let isp = "";
