@@ -4545,7 +4545,17 @@ export default function App() {
                         className="w-4 h-4 text-indigo-600 rounded cursor-pointer"
                       />
                       <div className="flex-1 w-full">
-                        <div className="text-xs font-bold text-slate-700 mb-1">{api.name}</div>
+                        <input 
+                          type="text"
+                          value={api.name}
+                          onChange={(e) => {
+                            const newApis = [...ipGeoApis];
+                            newApis[idx].name = e.target.value;
+                            setIpGeoApis(newApis);
+                          }}
+                          className="w-1/2 min-w-[150px] px-2 py-1 -ml-2 text-xs font-bold text-slate-700 mb-1 bg-transparent border-b border-transparent hover:border-slate-300 focus:border-indigo-500 focus:outline-none transition-colors"
+                          placeholder="API 名称"
+                        />
                         <input 
                           type="text"
                           value={api.url}
