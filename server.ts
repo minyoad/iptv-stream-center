@@ -103,6 +103,19 @@ let epgSources: EpgSource[] = [];
 let adminPassword = process.env.ADMIN_PASSWORD || "";
 let githubProxy = "";
 let autoCreateChannel = true;
+export interface IpGeoApi {
+  id: string;
+  name: string;
+  url: string;
+  enabled: boolean;
+}
+
+let ipGeoApis: IpGeoApi[] = [
+  { id: "ip-api", name: "ip-api.com", url: "http://ip-api.com/json/{{ip}}?lang=zh-CN", enabled: true },
+  { id: "pconline", name: "太平洋电脑网", url: "https://whois.pconline.com.cn/ipJson.jsp?ip={{ip}}&json=true", enabled: true }
+];
+let autoSwitchGeoApi = true;
+
 
 const SQLITE_DB_PATH = path.join(DATA_DIR, "iptv_sqlite.db");
 let db: Database.Database;
@@ -380,7 +393,7 @@ function getOrGeneratePlaylistExport(
     if (!fs.existsSync(READABLE_DIR)) {
       fs.mkdirSync(READABLE_DIR, { recursive: true });
     }
-    const parts = [params.format || "m3u"];
+    const parts: string[] = [params.format || "m3u"];
     if (params.category) parts.push(params.category);
     if (params.isp) parts.push(params.isp);
     if (params.province) parts.push(params.province);
@@ -742,6 +755,11 @@ function loadData() {
         if (row.key === "adminPassword") adminPassword = row.value;
         if (row.key === "githubProxy") githubProxy = row.value;
         if (row.key === "autoCreateChannel") autoCreateChannel = (row.value === "true" || row.value === "1");
+        if (row.key === "ipGeoApis") {
+          try { ipGeoApis = JSON.parse(row.value); } catch(e) {}
+        }
+        if (row.key === "autoSwitchGeoApi") autoSwitchGeoApi = (row.value === "true" || row.value === "1");
+
       }
 
       const loadedGroups = db.prepare("SELECT * FROM groups").all();
@@ -1057,6 +1075,9 @@ function saveDataSync() {
       insertSetting.run("adminPassword", adminPassword);
       insertSetting.run("githubProxy", githubProxy);
       insertSetting.run("autoCreateChannel", autoCreateChannel ? "true" : "false");
+      insertSetting.run("ipGeoApis", JSON.stringify(ipGeoApis));
+      insertSetting.run("autoSwitchGeoApi", autoSwitchGeoApi ? "true" : "false");
+
 
       // 2. Sync groups
       db.exec("DELETE FROM groups");
@@ -1688,90 +1709,71 @@ async function getClientIpGeo(ipString: string): Promise<{ province: string, isp
     return ipGeoCache.get(ip)!;
   }
 
-  try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 3000);
+  const enabledApis = ipGeoApis.filter(a => a.enabled);
+  if (enabledApis.length === 0) return { province: "", isp: "" };
 
-    const checkUrl = `http://ip-api.com/json/${ip}?lang=zh-CN`;
-    const res = await fetch(checkUrl, { signal: controller.signal });
-    clearTimeout(timeoutId);
+  const provinces = ["北京", "上海", "天津", "重庆", "河北", "山西", "辽宁", "吉林", "黑龙江", "江苏", "浙江", "安徽", "福建", "江西", "山东", "河南", "湖北", "湖南", "广东", "海南", "四川", "贵州", "云南", "陕西", "甘肃", "青海", "台湾", "内蒙古", "广西", "西藏", "宁夏", "新疆", "香港", "澳门"];
+  const ispKeywords = [
+    { keyword: "telecom", name: "电信" },
+    { keyword: "unicom", name: "联通" },
+    { keyword: "mobile", name: "移动" },
+    { keyword: "chinanet", name: "电信" },
+    { keyword: "broadband", name: "广电" },
+    { keyword: "cantv", name: "广电" },
+    { keyword: "chinasat", name: "广电" },
+    { keyword: "电信", name: "电信" },
+    { keyword: "联通", name: "联通" },
+    { keyword: "移动", name: "移动" },
+    { keyword: "铁通", name: "铁通" },
+    { keyword: "广电", name: "广电" }
+  ];
 
-    if (res.ok) {
-      const data = await res.json();
-      if (data && data.status === "success") {
-        let province = "";
-        let isp = "";
+  for (const api of enabledApis) {
+    try {
+      const url = api.url.replace("{{ip}}", ip);
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 3000);
+      const res = await fetch(url, { signal: controller.signal });
+      clearTimeout(timeoutId);
 
-        const regName = data.regionName || "";
-        const ispStr = data.isp || "";
+      if (res.ok) {
+        const buffer = await res.arrayBuffer();
+        let text = "";
+        try {
+          text = new TextDecoder("utf-8", { fatal: true }).decode(buffer);
+        } catch (e) {
+          text = new TextDecoder("gbk").decode(buffer);
+        }
 
-        const provinces = ["北京", "上海", "天津", "重庆", "河北", "山西", "辽宁", "吉林", "黑龙江", "江苏", "浙江", "安徽", "福建", "江西", "山东", "河南", "湖北", "湖南", "广东", "海南", "四川", "贵州", "云南", "陕西", "甘肃", "青海", "台湾", "内蒙古", "广西", "西藏", "宁夏", "新疆", "香港", "澳门"];
+        const rawLower = text.toLowerCase();
+        let matchedProvince = "";
         for (const p of provinces) {
-          if (regName.includes(p)) {
-            province = p;
+          if (rawLower.includes(p.toLowerCase())) {
+            matchedProvince = p;
             break;
           }
         }
 
-        const ispKeywords = [
-          { keyword: "telecom", name: "电信" },
-          { keyword: "unicom", name: "联通" },
-          { keyword: "mobile", name: "移动" },
-          { keyword: "chinanet", name: "电信" },
-          { keyword: "broadband", name: "广电" },
-          { keyword: "cantv", name: "广电" },
-          { keyword: "chinasat", name: "广电" },
-          { keyword: "电信", name: "电信" },
-          { keyword: "联通", name: "联通" },
-          { keyword: "移动", name: "移动" },
-          { keyword: "铁通", name: "铁通" },
-          { keyword: "广电", name: "广电" },
-        ];
-        
+        let matchedIsp = "";
         for (const ik of ispKeywords) {
-          if (ispStr.toLowerCase().includes(ik.keyword)) {
-            isp = ik.name;
+          if (rawLower.includes(ik.keyword.toLowerCase())) {
+            matchedIsp = ik.name;
             break;
           }
         }
 
-        const geo = { province, isp };
-        console.log(`[IP GEO LOOKUP] Resolved IP ${ip}:`, geo);
-        ipGeoCache.set(ip, geo);
-        return geo;
+        if (matchedProvince || matchedIsp) {
+          const geo = { province: matchedProvince, isp: matchedIsp };
+          ipGeoCache.set(ip, geo);
+          console.log(`[IP GEO LOOKUP] Resolved IP ${ip} via ${api.name}: province=${geo.province}, isp=${geo.isp}`);
+          return geo;
+        }
       }
+    } catch (err: any) {
+      console.error(`[IP GEO LOOKUP ERROR] API ${api.name} for ${ip}: ${err.message || err}`);
     }
-  } catch (err: any) {
-    console.error(`[IP GEO LOOKUP ERROR] for ${ip}:`, err.message || err);
-  }
 
-  try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 3000);
-    const res = await fetch(`https://whois.pconline.com.cn/ipJson.jsp?ip=${ip}&json=true`, { signal: controller.signal });
-    clearTimeout(timeoutId);
-    if (res.ok) {
-      const buffer = await res.arrayBuffer();
-      const decoder = new TextDecoder("gbk");
-      const text = decoder.decode(buffer);
-      const data = JSON.parse(text);
-      if (data && data.pro) {
-        let province = data.pro.replace("省", "").replace("市", "");
-        let isp = "";
-        const addr = data.addr || "";
-        if (addr.includes("电信")) isp = "电信";
-        else if (addr.includes("联通")) isp = "联通";
-        else if (addr.includes("移动")) isp = "移动";
-        else if (addr.includes("广电")) isp = "广电";
-        
-        const geo = { province, isp };
-        console.log(`[IP GEO LOOKUP FALLBACK] Resolved IP ${ip}:`, geo);
-        ipGeoCache.set(ip, geo);
-        return geo;
-      }
-    }
-  } catch (err: any) {
-    console.error(`[IP GEO LOOKUP FALLBACK ERROR] for ${ip}:`, err.message || err);
+    if (!autoSwitchGeoApi) break;
   }
 
   return { province: "", isp: "" };
@@ -2686,19 +2688,26 @@ async function startServer() {
   // API Endpoints
   // Settings Endpoints
   app.get("/api/settings", (req, res) => {
-    res.json({ githubProxy, autoCreateChannel });
+    res.json({ githubProxy, autoCreateChannel, ipGeoApis, autoSwitchGeoApi });
   });
 
   app.post("/api/settings", (req, res) => {
-    const { githubProxy: proxy, autoCreateChannel: autoCreate } = req.body;
+    const { githubProxy: proxy, autoCreateChannel: autoCreate, ipGeoApis: newIpGeoApis, autoSwitchGeoApi: newAutoSwitchGeoApi } = req.body;
     if (proxy !== undefined) {
       githubProxy = (proxy || "").trim();
     }
     if (autoCreate !== undefined) {
       autoCreateChannel = !!autoCreate;
     }
+    if (newIpGeoApis !== undefined) {
+      ipGeoApis = newIpGeoApis;
+    }
+    if (newAutoSwitchGeoApi !== undefined) {
+      autoSwitchGeoApi = !!newAutoSwitchGeoApi;
+    }
+
     saveData();
-    res.json({ success: true, githubProxy, autoCreateChannel });
+    res.json({ success: true, githubProxy, autoCreateChannel, ipGeoApis, autoSwitchGeoApi });
   });
 
   // EPG Sources REST Endpoints
@@ -2896,7 +2905,7 @@ async function startServer() {
       syncConfigs,
       groups,
       epgSources,
-      settings: { githubProxy, autoCreateChannel }
+      settings: { githubProxy, autoCreateChannel, ipGeoApis, autoSwitchGeoApi }
     });
   });
 
@@ -4766,7 +4775,16 @@ ${JSON.stringify(scoredList.map(c => ({ epgId: c.epgId, names: c.displayNames, s
     res.setHeader("Content-Disposition", 'attachment; filename="iptv_custom.m3u"');
     res.setHeader("Cache-Control", "public, max-age=1800");
     res.setHeader("ETag", etag);
-    res.send(content);
+    res.setHeader("X-Client-IP", resolvedClientIp || "");
+    res.setHeader("X-Client-ISP", encodeURIComponent(targetIsp || ""));
+    res.setHeader("X-Client-Province", encodeURIComponent(targetProvince || ""));
+    const m3uDebugHeader = `\n# [Debug Info] Client IP: ${resolvedClientIp || "N/A"} | Detected ISP: ${targetIsp || "None"} | Detected Province: ${targetProvince || "None"}`;
+    const firstLineEnd = content.indexOf("\n");
+    if (firstLineEnd !== -1) {
+      res.send(content.slice(0, firstLineEnd) + m3uDebugHeader + content.slice(firstLineEnd));
+    } else {
+      res.send(content + m3uDebugHeader);
+    }
   });
 
   // TXT (TVBox compatible) format
@@ -4887,6 +4905,9 @@ ${JSON.stringify(scoredList.map(c => ({ epgId: c.epgId, names: c.displayNames, s
     res.setHeader("Content-Disposition", 'attachment; filename="iptv_custom.txt"');
     res.setHeader("Cache-Control", "public, max-age=1800");
     res.setHeader("ETag", etag);
+    res.setHeader("X-Client-IP", resolvedClientIp || "");
+    res.setHeader("X-Client-ISP", encodeURIComponent(targetIsp || ""));
+    res.setHeader("X-Client-Province", encodeURIComponent(targetProvince || ""));
     res.send(content);
   });
 

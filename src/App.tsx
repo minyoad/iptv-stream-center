@@ -36,13 +36,21 @@ import {
   ChevronDown,
   X,
   Menu
-} from "lucide-react";
+, Globe } from "lucide-react";
 import { Channel, LiveSource, SyncConfig, TestStatus, EpgGuide, Group, EpgSource } from "./types";
 import { arrayMove } from "@dnd-kit/sortable";
 import DashboardView from "./components/DashboardView";
 import StatsView from "./components/StatsView";
 import { DraggableChannelList } from "./components/DraggableChannelList";
 import { DraggableGroupList } from "./components/DraggableGroupList";
+
+
+export interface IpGeoApi {
+  id: string;
+  name: string;
+  url: string;
+  enabled: boolean;
+}
 
 export default function App() {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
@@ -51,6 +59,9 @@ export default function App() {
   const [groups, setGroups] = useState<Group[]>([]);
   const [githubProxy, setGithubProxy] = useState("");
   const [githubProxyInput, setGithubProxyInput] = useState("");
+  const [ipGeoApis, setIpGeoApis] = useState<IpGeoApi[]>([]);
+  const [autoSwitchGeoApi, setAutoSwitchGeoApi] = useState(true);
+  const [isSavingNetwork, setIsSavingNetwork] = useState(false);
   const [autoCreateChannel, setAutoCreateChannel] = useState(true);
   const [isBatchSyncing, setIsBatchSyncing] = useState(false);
   const [isSavingProxy, setIsSavingProxy] = useState(false);
@@ -566,6 +577,8 @@ export default function App() {
           setGithubProxy(data.settings.githubProxy || "");
           setGithubProxyInput(data.settings.githubProxy || "");
           setAutoCreateChannel(data.settings.autoCreateChannel !== false);
+          setIpGeoApis(data.settings.ipGeoApis || []);
+          setAutoSwitchGeoApi(data.settings.autoSwitchGeoApi !== false);
         }
       }
     } catch (err) {
@@ -792,6 +805,31 @@ export default function App() {
       }
     } catch (e) {
       setAuthError("无法连接到主服务器，请检查网络后再试");
+    }
+  };
+
+  const saveNetworkSettings = async () => {
+    setIsSavingNetwork(true);
+    try {
+      const res = await fetch("/api/settings", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ ipGeoApis, autoSwitchGeoApi })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setIpGeoApis(data.ipGeoApis || []);
+        setAutoSwitchGeoApi(data.autoSwitchGeoApi !== false);
+        showFeedback("success", "网络设置已成功保存！");
+      } else {
+        showFeedback("error", "保存网络设置失败");
+      }
+    } catch (e) {
+      showFeedback("error", "请求异常，请检查网络");
+    } finally {
+      setIsSavingNetwork(false);
     }
   };
 
@@ -4477,6 +4515,71 @@ export default function App() {
                     <br />• <b>M3U 规范:</b> 解析包含 <code>#EXTINF</code>, <code>tvg-logo</code>, <code>group-title</code> 等参数的高级频道元数据，并映射至分类中。
                     <br />• <b>TXT (TVBox 规范):</b> 解析 <code>分类名,#genre</code> 行与其下逗号分割的频道名和线路列表，自动建立关系结构。
                   </p>
+                </div>
+              </div>
+
+              
+              {/* IP Geo Settings */}
+              <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm space-y-4 mb-4" id="ip_geo_settings_card">
+                <div className="flex items-center gap-3 mb-4">
+                  <div className="p-2 bg-indigo-50 text-indigo-600 rounded-xl">
+                    <Globe className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h3 className="font-bold text-slate-800 text-sm">IP 地理位置检测服务</h3>
+                    <p className="text-[11px] text-slate-500 font-medium">配置客户端 IP 的省份/运营商自动检测 API (导出 m3u 时使用)</p>
+                  </div>
+                </div>
+                
+                <div className="space-y-4">
+                  {ipGeoApis.map((api, idx) => (
+                    <div key={api.id} className="flex flex-col sm:flex-row items-center gap-3 p-3 bg-slate-50 border border-slate-100 rounded-xl">
+                      <input 
+                        type="checkbox"
+                        checked={api.enabled}
+                        onChange={(e) => {
+                          const newApis = [...ipGeoApis];
+                          newApis[idx].enabled = e.target.checked;
+                          setIpGeoApis(newApis);
+                        }}
+                        className="w-4 h-4 text-indigo-600 rounded cursor-pointer"
+                      />
+                      <div className="flex-1 w-full">
+                        <div className="text-xs font-bold text-slate-700 mb-1">{api.name}</div>
+                        <input 
+                          type="text"
+                          value={api.url}
+                          onChange={(e) => {
+                            const newApis = [...ipGeoApis];
+                            newApis[idx].url = e.target.value;
+                            setIpGeoApis(newApis);
+                          }}
+                          className="w-full px-3 py-2 text-[11px] font-mono border border-slate-200 rounded-lg focus:outline-none focus:border-indigo-500"
+                          placeholder="URL (包含 {{ip}} 占位符)"
+                        />
+                      </div>
+                    </div>
+                  ))}
+                  
+                  <label className="flex items-center gap-2 cursor-pointer mt-2 pl-1">
+                    <input
+                      type="checkbox"
+                      checked={autoSwitchGeoApi}
+                      onChange={(e) => setAutoSwitchGeoApi(e.target.checked)}
+                      className="w-4 h-4 text-indigo-600 rounded focus:ring-indigo-500 border-slate-300"
+                    />
+                    <span className="text-xs font-bold text-slate-700">自动切换备用源 (当首选 API 失败或返回为空时自动轮询下一个)</span>
+                  </label>
+                  
+                  <div className="pt-2 flex justify-end">
+                    <button
+                      onClick={saveNetworkSettings}
+                      disabled={isSavingNetwork}
+                      className="px-6 py-2.5 bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-400 text-white font-bold text-xs rounded-xl shadow transition duration-150 cursor-pointer"
+                    >
+                      {isSavingNetwork ? "正在保存..." : "保存网络设置"}
+                    </button>
+                  </div>
                 </div>
               </div>
 
