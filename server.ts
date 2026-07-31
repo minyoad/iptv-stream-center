@@ -374,6 +374,19 @@ function getOrGeneratePlaylistExport(
       fs.mkdirSync(PLAYLIST_CACHE_DIR, { recursive: true });
     }
     fs.writeFileSync(filePath, content, "utf-8");
+
+    // Save human readable copy to data/playlists_export
+    const READABLE_DIR = path.join(DATA_DIR, "playlists_export");
+    if (!fs.existsSync(READABLE_DIR)) {
+      fs.mkdirSync(READABLE_DIR, { recursive: true });
+    }
+    const parts = [params.format || "m3u"];
+    if (params.category) parts.push(params.category);
+    if (params.isp) parts.push(params.isp);
+    if (params.province) parts.push(params.province);
+    if (params.status) parts.push(`status_${params.status}`);
+    const humanName = (parts.length > 1 ? parts.join("_") : parts[0] + "_all") + (params.format === "txt" ? ".txt" : ".m3u");
+    fs.writeFileSync(path.join(READABLE_DIR, humanName.replace(/[<>:"/\\|?*]+/g, "_")), content, "utf-8");
   } catch (err) {
     console.error("[PLAYLIST DISK CACHE WRITE ERROR]", err);
   }
@@ -1833,7 +1846,22 @@ function getPlayableSources(sources: LiveSource[], targetIsp: string, targetProv
   if (targetIsp) {
     const normTargetIsp = targetIsp.trim();
     filtered = filtered.filter(src => {
-      const srcIsp = (src.isp || "").trim();
+      let srcIsp = (src.isp || "").trim();
+      
+      // Auto-detect ISP from URL if empty or "其它"
+      if (!srcIsp || srcIsp === "其它" || srcIsp === "其他") {
+        const urlLower = (src.url || "").toLowerCase();
+        if (urlLower.includes("chinamobile") || urlLower.includes("cmvideo") || urlLower.includes("cmcc") || urlLower.includes(".yd.") || urlLower.includes("migu")) {
+          srcIsp = "移动";
+        } else if (urlLower.includes("chinanet") || urlLower.includes("ctcc") || urlLower.includes("telecom") || urlLower.includes(".dx.")) {
+          srcIsp = "电信";
+        } else if (urlLower.includes("unicom") || urlLower.includes("cucc") || urlLower.includes(".lt.")) {
+          srcIsp = "联通";
+        } else if (urlLower.includes("cbn") || urlLower.includes("broadcasting") || urlLower.includes("guangdian")) {
+          srcIsp = "广电";
+        }
+      }
+
       if (!srcIsp || srcIsp === "其它" || srcIsp === "其他") {
         return true;
       }
@@ -1843,6 +1871,10 @@ function getPlayableSources(sources: LiveSource[], targetIsp: string, targetProv
       }
       const sIsp = srcIsp.replace("中国", "");
       const tIsp = normTargetIsp.replace("中国", "");
+      
+      // Prevent empty string match if replace caused it
+      if (!sIsp) return true;
+
       if (sIsp.includes(tIsp) || tIsp.includes(sIsp)) {
         return true;
       }
@@ -2433,6 +2465,83 @@ setInterval(async () => {
 
 
 // Express Setup Configuration
+function preGenerateIspPlaylists() {
+  const isps = ["", "电信", "联通", "移动", "广电", "BGP"];
+  console.log("[CACHE] Pre-generating standard ISP playlists to data/playlists_export...");
+  const baseUrl = "http://localhost:3000";
+  for (const isp of isps) {
+    // Generate both m3u and txt
+    for (const format of ["m3u", "txt"]) {
+      const cacheParams = {
+        format: format as "m3u" | "txt",
+        isp: isp || undefined,
+        baseUrl
+      };
+      
+      getOrGeneratePlaylistExport(cacheParams, () => {
+        if (format === "m3u") {
+          let playlistRows = [`#EXTM3U x-tvg-url="${baseUrl}/api/export/epg.xml.gz"`];
+          const orderedGroups = [...groups, { id: "g_other", name: "其它频道" }];
+          orderedGroups.forEach((group) => {
+            if (group.isolated) return;
+            channels.forEach((channel) => {
+              if (channel.isolated) return;
+              const isInGroup = channel.groupIds.includes(group.id);
+              const isFallback = group.id === "g_other" && (channel.groupIds.length === 0 || !channel.groupIds.some(id => groups.find(g => g.id === id)));
+              if (!isInGroup && !isFallback) return;
+              
+              let processedSources = channel.sources;
+              processedSources = getPlayableSources(processedSources, isp, "");
+              processedSources = processedSources.filter(source => source.status === "active");
+              processedSources = sortSourcesForExport(processedSources);
+              
+              const sourcesToExport = processedSources.slice(0, 15);
+              sourcesToExport.forEach(bestSource => {
+                playlistRows.push(
+                  `#EXTINF:-1 tvg-id="${channel.epgId}" tvg-name="${channel.name}" tvg-logo="${channel.logo}" group-title="${group.name}",${channel.name}`
+                );
+                playlistRows.push(bestSource.url);
+              });
+            });
+          });
+          return playlistRows.join("\n");
+        } else {
+          let playlistRows: string[] = [];
+          const orderedGroups = [...groups, { id: "g_other", name: "其它频道" }];
+          orderedGroups.forEach((group) => {
+            if (group.isolated) return;
+            let groupChannels: string[] = [];
+            
+            channels.forEach((channel) => {
+              if (channel.isolated) return;
+              const isInGroup = channel.groupIds.includes(group.id);
+              const isFallback = group.id === "g_other" && (channel.groupIds.length === 0 || !channel.groupIds.some(id => groups.find(g => g.id === id)));
+              if (!isInGroup && !isFallback) return;
+              
+              let processedSources = channel.sources;
+              processedSources = getPlayableSources(processedSources, isp, "");
+              processedSources = processedSources.filter(source => source.status === "active");
+              processedSources = sortSourcesForExport(processedSources);
+              
+              const sourcesToExport = processedSources.slice(0, 15);
+              if (sourcesToExport.length > 0) {
+                const urls = sourcesToExport.map(s => s.url).join("#");
+                groupChannels.push(`${channel.name},${urls}`);
+              }
+            });
+            if (groupChannels.length > 0) {
+              playlistRows.push(`${group.name},#genre#`);
+              playlistRows.push(...groupChannels);
+            }
+          });
+          return playlistRows.join("\n");
+        }
+      });
+    }
+  }
+}
+
+
 async function startServer() {
   const app = express();
   const PORT = 3000;
@@ -5135,6 +5244,7 @@ ${JSON.stringify(scoredList.map(c => ({ epgId: c.epgId, names: c.displayNames, s
 
   // Bind to PORT 3000 and 0.0.0.0
   app.listen(PORT, "0.0.0.0", () => {
+    preGenerateIspPlaylists();
     console.log(`Server loaded with ${channels.length} channels, running on http://localhost:${PORT}`);
   });
 }
