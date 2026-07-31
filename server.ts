@@ -1595,10 +1595,9 @@ function getOrGenerateIntegratedEpgXml(): { xml: string; gz: Buffer; etag: strin
     let found = false;
     for (const cache of activeCaches) {
       const entry = findMatchingEpgEntry(c, cache);
-      if (entry && entry.programs && entry.programs.length > 0) {
+      if (entry && entry.programs && entry.programs.length > matchedPrograms.length) {
         matchedPrograms = entry.programs;
         found = true;
-        break;
       }
     }
 
@@ -4406,6 +4405,7 @@ app.get("/api/channels", async (req, res) => {
 
     const getEpgForChannelAndDate = (ch: Channel) => {
       const activeEpgSrcs = epgSources.filter(s => s.active);
+      let bestPrograms: any[] = [];
       for (const src of activeEpgSrcs) {
         const cache = getEpgCache(src.id);
         if (cache) {
@@ -4421,12 +4421,15 @@ app.get("/api/channels", async (req, res) => {
                 title: p.title
               };
             });
-            if (filtered.length > 0) {
+            if (filtered.length > bestPrograms.length) {
               filtered.sort((a: any, b: any) => a.time.localeCompare(b.time));
-              return filtered;
+              bestPrograms = filtered;
             }
           }
         }
+      }
+      if (bestPrograms.length > 0) {
+        return bestPrograms;
       }
       return getSchedulesForChannel(ch.id, ch.name);
     };
