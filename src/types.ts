@@ -16,6 +16,7 @@ export interface LiveSource {
 export interface Group {
   id: string;
   name: string;
+  isolated?: boolean;
 }
 
 export interface Channel {

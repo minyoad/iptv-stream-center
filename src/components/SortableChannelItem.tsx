@@ -17,8 +17,6 @@ interface SortableChannelItemProps {
   onEditChannel: (ch: Channel) => void;
   onDeleteChannel: (chId: string) => void;
   onToggleIsolateChannel?: (chId: string, isolated: boolean) => void;
-  isFirst?: boolean;
-  isLast?: boolean;
 }
 
 export const SortableChannelItem: React.FC<SortableChannelItemProps> = ({
@@ -34,8 +32,6 @@ export const SortableChannelItem: React.FC<SortableChannelItemProps> = ({
   onEditChannel,
   onDeleteChannel,
   onToggleIsolateChannel,
-  isFirst,
-  isLast,
 }) => {
   const {
     attributes,
@@ -152,42 +148,6 @@ export const SortableChannelItem: React.FC<SortableChannelItemProps> = ({
 
         {/* Button Actions */}
         <div className="flex items-center gap-0 shrink-0">
-          {onMoveUp && (
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                onMoveUp();
-              }}
-              disabled={isFirst}
-              className={`p-1 rounded transition ${
-                isFirst
-                  ? "text-slate-200 cursor-not-allowed"
-                  : "text-slate-400 hover:text-indigo-600 hover:bg-slate-100"
-              }`}
-              title="上移"
-            >
-              <ChevronUp className="w-3.5 h-3.5" />
-            </button>
-          )}
-
-          {onMoveDown && (
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                onMoveDown();
-              }}
-              disabled={isLast}
-              className={`p-1 rounded transition ${
-                isLast
-                  ? "text-slate-200 cursor-not-allowed"
-                  : "text-slate-400 hover:text-indigo-600 hover:bg-slate-100"
-              }`}
-              title="下移"
-            >
-              <ChevronDown className="w-3.5 h-3.5" />
-            </button>
-          )}
-
           {onToggleIsolateChannel && (
             <button
               onClick={(e) => {

@@ -1216,62 +1216,6 @@ export default function App() {
     }
   };
 
-  const handleMoveGroup = async (index: number, direction: 'up' | 'down') => {
-    if (direction === 'up' && index === 0) return;
-    if (direction === 'down' && index === groups.length - 1) return;
-    
-    const newGroups = [...groups];
-    const swapIndex = direction === 'up' ? index - 1 : index + 1;
-    [newGroups[index], newGroups[swapIndex]] = [newGroups[swapIndex], newGroups[index]];
-    
-    // Optistic UI
-    setGroups(newGroups);
-
-    try {
-      const res = await fetch("/api/groups/reorder", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ groupIds: newGroups.map(g => g.id) })
-      });
-      if (!res.ok) {
-        showFeedback("error", "重新排序失败");
-        await fetchData();
-      }
-    } catch (e) {
-      showFeedback("error", "重新排序失败");
-      await fetchData();
-    }
-  };
-
-  const handleMoveChannel = async (id: string, direction: 'up' | 'down') => {
-    const index = channels.findIndex(c => c.id === id);
-    if (index === -1) return;
-    if (direction === 'up' && index === 0) return;
-    if (direction === 'down' && index === channels.length - 1) return;
-    
-    const newChannels = [...channels];
-    const swapIndex = direction === 'up' ? index - 1 : index + 1;
-    [newChannels[index], newChannels[swapIndex]] = [newChannels[swapIndex], newChannels[index]];
-    
-    // Optistic UI update
-    setChannels(newChannels);
-
-    try {
-      const res = await fetch("/api/channels/reorder", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ channelIds: newChannels.map(c => c.id) })
-      });
-      if (!res.ok) {
-        showFeedback("error", "重新排序失败");
-        await fetchData();
-      }
-    } catch (e) {
-      showFeedback("error", "重新排序失败");
-      await fetchData();
-    }
-  };
-
   const handleBatchGroupSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (selectedChannelIds.length === 0) return;
@@ -2848,8 +2792,23 @@ export default function App() {
                           }
                         );
                       }}
-                      onMoveGroupUp={(idx) => handleMoveGroup(idx, "up")}
-                      onMoveGroupDown={(idx) => handleMoveGroup(idx, "down")}
+                      onToggleIsolateGroup={async (id, isolated) => {
+                        try {
+                          const res = await fetch(`/api/groups/${id}/isolated`, {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({ isolated }),
+                          });
+                          if (res.ok) {
+                            showFeedback("success", isolated ? "已将该分组排除导出" : "已将该分组包含在导出中");
+                            await fetchData();
+                          } else {
+                            showFeedback("error", "操作失败");
+                          }
+                        } catch (err) {
+                          showFeedback("error", "网络错误");
+                        }
+                      }}
                       onReorderGroups={handleReorderGroups}
                     />
                   </div>
@@ -3096,8 +3055,6 @@ export default function App() {
                             );
                           }
                         }}
-                        onMoveChannelUp={(chId) => handleMoveChannel(chId, "up")}
-                        onMoveChannelDown={(chId) => handleMoveChannel(chId, "down")}
                         onEditChannel={(ch) => openChannelEdit(ch)}
                         onDeleteChannel={(chId) => handleDeleteChannel(chId)}
                         onToggleIsolateChannel={(chId, isolate) => handleToggleIsolateChannel(chId, isolate)}

@@ -26,8 +26,7 @@ interface DraggableGroupListProps {
   channels: Channel[];
   onRenameGroup: (id: string, name: string) => void;
   onDeleteGroup: (group: Group) => void;
-  onMoveGroupUp?: (index: number) => void;
-  onMoveGroupDown?: (index: number) => void;
+  onToggleIsolateGroup?: (id: string, isolated: boolean) => void;
   onReorderGroups: (activeId: string, overId: string) => void;
 }
 
@@ -36,8 +35,7 @@ export const DraggableGroupList: React.FC<DraggableGroupListProps> = ({
   channels,
   onRenameGroup,
   onDeleteGroup,
-  onMoveGroupUp,
-  onMoveGroupDown,
+  onToggleIsolateGroup,
   onReorderGroups,
 }) => {
   const [activeGroup, setActiveGroup] = useState<Group | null>(null);
@@ -107,14 +105,7 @@ export const DraggableGroupList: React.FC<DraggableGroupListProps> = ({
                 countChannels={countChannels}
                 onRenameGroup={onRenameGroup}
                 onDeleteGroup={onDeleteGroup}
-                onMoveUp={
-                  onMoveGroupUp ? () => onMoveGroupUp(index) : undefined
-                }
-                onMoveDown={
-                  onMoveGroupDown ? () => onMoveGroupDown(index) : undefined
-                }
-                isFirst={index === 0}
-                isLast={index === groups.length - 1}
+                onToggleIsolateGroup={onToggleIsolateGroup}
               />
             );
           })}

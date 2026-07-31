@@ -33,6 +33,7 @@ interface LiveSource {
 interface Group {
   id: string;
   name: string;
+  isolated?: boolean;
 }
 
 interface Channel {
@@ -216,6 +217,9 @@ function initSqlite() {
   } catch (e) {}
   try {
     db.exec("ALTER TABLE channels ADD COLUMN isolated INTEGER DEFAULT 0");
+  } catch (e) {}
+  try {
+    db.exec("ALTER TABLE groups ADD COLUMN isolated INTEGER DEFAULT 0");
   } catch (e) {}
 
   // Seed default cron jobs if empty
@@ -730,7 +734,8 @@ function loadData() {
       const loadedGroups = db.prepare("SELECT * FROM groups").all();
       groups = loadedGroups.map((g: any) => ({
         id: g.id,
-        name: g.name
+        name: g.name,
+        isolated: g.isolated === 1 ? true : false
       }));
 
       const loadedSyncConfigs = db.prepare("SELECT * FROM sync_configs").all();
@@ -965,6 +970,7 @@ function generateDefaultPlaylists() {
   const orderedGroups = [...groups, { id: "g_other", name: "其它频道" }];
   
   orderedGroups.forEach((group) => {
+    if (group.isolated) return;
     channels.forEach((channel) => {
       if (channel.isolated) return;
       const isInGroup = channel.groupIds.includes(group.id);
@@ -1041,9 +1047,9 @@ function saveDataSync() {
 
       // 2. Sync groups
       db.exec("DELETE FROM groups");
-      const insertGroup = db.prepare("INSERT INTO groups (id, name) VALUES (?, ?)");
+      const insertGroup = db.prepare("INSERT INTO groups (id, name, isolated) VALUES (?, ?, ?)");
       for (const g of groups) {
-        insertGroup.run(g.id, g.name);
+        insertGroup.run(g.id, g.name, g.isolated ? 1 : 0);
       }
 
       // 3. Sync channels & sources
@@ -2682,13 +2688,14 @@ async function startServer() {
   });
 
   app.post("/api/groups", (req, res) => {
-    const { name } = req.body;
+    const { name, isolated } = req.body;
     if (!name) {
       return res.status(400).json({ error: "分组名称不能为空" });
     }
     const newGroup: Group = {
       id: "g_" + Math.random().toString(36).substring(2, 10),
       name,
+      isolated: !!isolated,
     };
     groups.push(newGroup);
     saveData();
@@ -2697,15 +2704,30 @@ async function startServer() {
 
   app.put("/api/groups/:id", (req, res) => {
     const { id } = req.params;
-    const { name } = req.body;
+    const { name, isolated } = req.body;
 
     const group = groups.find((g) => g.id === id);
     if (!group) {
       return res.status(404).json({ error: "未找到该分组" });
     }
     if (name) group.name = name;
+    if (isolated !== undefined) group.isolated = !!isolated;
     saveData();
     res.json(group);
+  });
+
+  app.post("/api/groups/:id/isolated", (req, res) => {
+    const { id } = req.params;
+    const { isolated } = req.body;
+    
+    const group = groups.find((g) => g.id === id);
+    if (!group) {
+      return res.status(404).json({ error: "Group not found" });
+    }
+    
+    group.isolated = !!isolated;
+    saveData();
+    res.json({ success: true, isolated: group.isolated });
   });
 
   
@@ -4577,6 +4599,7 @@ ${JSON.stringify(scoredList.map(c => ({ epgId: c.epgId, names: c.displayNames, s
 
       const orderedGroups = [...groups, { id: "g_other", name: "其它频道" }];
       orderedGroups.forEach((group) => {
+        if (group.isolated) return;
         channels.forEach((channel) => {
           if (channel.isolated) return;
           const isInGroup = channel.groupIds.includes(group.id);
@@ -4688,6 +4711,7 @@ ${JSON.stringify(scoredList.map(c => ({ epgId: c.epgId, names: c.displayNames, s
 
       const orderedGroups = [...groups, { id: "g_other", name: "其它频道" }];
       orderedGroups.forEach((group) => {
+        if (group.isolated) return;
         channels.forEach((channel) => {
           if (channel.isolated) return;
           const isInGroup = channel.groupIds.includes(group.id);

@@ -29,8 +29,6 @@ interface DraggableChannelListProps {
   onSelectChannel: (ch: Channel) => void;
   onDoubleClickChannel: (ch: Channel) => void;
   onToggleCheckChannel: (chId: string, checked: boolean) => void;
-  onMoveChannelUp?: (chId: string) => void;
-  onMoveChannelDown?: (chId: string) => void;
   onEditChannel: (ch: Channel) => void;
   onDeleteChannel: (chId: string) => void;
   onToggleIsolateChannel?: (chId: string, isolated: boolean) => void;
@@ -45,8 +43,6 @@ export const DraggableChannelList: React.FC<DraggableChannelListProps> = ({
   onSelectChannel,
   onDoubleClickChannel,
   onToggleCheckChannel,
-  onMoveChannelUp,
-  onMoveChannelDown,
   onEditChannel,
   onDeleteChannel,
   onToggleIsolateChannel,
@@ -115,17 +111,9 @@ export const DraggableChannelList: React.FC<DraggableChannelListProps> = ({
               onSelectChannel={onSelectChannel}
               onDoubleClickChannel={onDoubleClickChannel}
               onToggleCheckChannel={onToggleCheckChannel}
-              onMoveUp={
-                onMoveChannelUp ? () => onMoveChannelUp(ch.id) : undefined
-              }
-              onMoveDown={
-                onMoveChannelDown ? () => onMoveChannelDown(ch.id) : undefined
-              }
               onEditChannel={onEditChannel}
               onDeleteChannel={onDeleteChannel}
               onToggleIsolateChannel={onToggleIsolateChannel}
-              isFirst={index === 0}
-              isLast={index === channels.length - 1}
             />
           ))}
         </div>

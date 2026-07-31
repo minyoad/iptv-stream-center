@@ -1,7 +1,7 @@
 import React from "react";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { GripVertical, ChevronUp, ChevronDown, Trash2 } from "lucide-react";
+import { GripVertical, ShieldAlert, ShieldCheck, Trash2 } from "lucide-react";
 import { Group } from "../types";
 
 interface SortableGroupItemProps {
@@ -9,10 +9,7 @@ interface SortableGroupItemProps {
   countChannels: number;
   onRenameGroup: (id: string, name: string) => void;
   onDeleteGroup: (group: Group) => void;
-  onMoveUp?: () => void;
-  onMoveDown?: () => void;
-  isFirst?: boolean;
-  isLast?: boolean;
+  onToggleIsolateGroup?: (id: string, isolated: boolean) => void;
 }
 
 export const SortableGroupItem: React.FC<SortableGroupItemProps> = ({
@@ -20,10 +17,7 @@ export const SortableGroupItem: React.FC<SortableGroupItemProps> = ({
   countChannels,
   onRenameGroup,
   onDeleteGroup,
-  onMoveUp,
-  onMoveDown,
-  isFirst,
-  isLast,
+  onToggleIsolateGroup,
 }) => {
   const {
     attributes,
@@ -48,6 +42,8 @@ export const SortableGroupItem: React.FC<SortableGroupItemProps> = ({
       className={`p-4 border rounded-2xl flex items-center justify-between transition ${
         isDragging
           ? "border-2 border-dashed border-indigo-400 bg-indigo-50/50 shadow-md"
+          : group.isolated
+          ? "bg-orange-50/20 border-orange-200 opacity-80"
           : "border-slate-200 bg-slate-50/50 hover:border-slate-300"
       }`}
       id={`group_item_${group.id}`}
@@ -64,16 +60,23 @@ export const SortableGroupItem: React.FC<SortableGroupItemProps> = ({
         </div>
 
         <div className="space-y-1 flex-1 min-w-0">
-          <input
-            type="text"
-            defaultValue={group.name}
-            onBlur={(e) => {
-              const val = e.target.value.trim();
-              if (!val || val === group.name) return;
-              onRenameGroup(group.id, val);
-            }}
-            className="font-bold text-slate-800 text-xs bg-transparent border-b border-transparent focus:border-indigo-500 focus:outline-none hover:bg-slate-200/40 p-0.5 rounded transition w-full"
-          />
+          <div className="flex items-center gap-2">
+            <input
+              type="text"
+              defaultValue={group.name}
+              onBlur={(e) => {
+                const val = e.target.value.trim();
+                if (!val || val === group.name) return;
+                onRenameGroup(group.id, val);
+              }}
+              className={`font-bold text-slate-800 text-xs bg-transparent border-b border-transparent focus:border-indigo-500 focus:outline-none hover:bg-slate-200/40 p-0.5 rounded transition ${group.isolated ? 'text-slate-500 line-through decoration-slate-400/50' : ''}`}
+            />
+            {group.isolated && (
+              <span className="text-[9px] font-bold bg-orange-100 text-orange-700 border border-orange-200 px-1 py-0.5 rounded shrink-0">
+                不导出
+              </span>
+            )}
+          </div>
           <p className="text-[10px] text-slate-400 font-medium">
             关联频道:{" "}
             <span className="font-mono text-slate-600 font-bold">
@@ -85,37 +88,23 @@ export const SortableGroupItem: React.FC<SortableGroupItemProps> = ({
       </div>
 
       <div className="flex items-center gap-2 shrink-0">
-        <div className="flex flex-col items-center gap-0.5">
-          {onMoveUp && (
-            <button
-              onClick={onMoveUp}
-              disabled={isFirst}
-              className={`p-1 rounded transition ${
-                isFirst
-                  ? "text-slate-200 cursor-not-allowed"
-                  : "text-slate-400 hover:text-indigo-600 hover:bg-indigo-50"
-              }`}
-              title="上移"
-            >
-              <ChevronUp className="w-3 h-3" />
-            </button>
-          )}
-
-          {onMoveDown && (
-            <button
-              onClick={onMoveDown}
-              disabled={isLast}
-              className={`p-1 rounded transition ${
-                isLast
-                  ? "text-slate-200 cursor-not-allowed"
-                  : "text-slate-400 hover:text-indigo-600 hover:bg-indigo-50"
-              }`}
-              title="下移"
-            >
-              <ChevronDown className="w-3 h-3" />
-            </button>
-          )}
-        </div>
+        {onToggleIsolateGroup && (
+          <button
+            onClick={() => onToggleIsolateGroup(group.id, !group.isolated)}
+            className={`p-2 border rounded-xl transition shadow-2xs cursor-pointer ${
+              group.isolated
+                ? "bg-emerald-50 hover:bg-emerald-100 border-emerald-200 text-emerald-600"
+                : "bg-white hover:bg-orange-50 border-slate-200 text-slate-400 hover:text-orange-600"
+            }`}
+            title={group.isolated ? "包含在导出列表" : "从导出列表排除"}
+          >
+            {group.isolated ? (
+              <ShieldCheck className="w-3.5 h-3.5" />
+            ) : (
+              <ShieldAlert className="w-3.5 h-3.5" />
+            )}
+          </button>
+        )}
 
         <button
           onClick={() => onDeleteGroup(group)}
