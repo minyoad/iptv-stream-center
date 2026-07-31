@@ -3176,16 +3176,16 @@ export default function App() {
                             <span className="flex items-center gap-1.5 flex-wrap">
                               <Clock className="w-4 h-4 mr-1 text-indigo-600" />
                               EPG 实时节目导视表 [ {epgGuide.epgId} ]
-                              {epgGuide.isSimulated && (
+                              {epgGuide.programs.length === 0 && (
                                 <span className="px-1.5 py-0.5 bg-amber-100 text-amber-800 border border-amber-200 text-[9px] rounded font-bold flex items-center shrink-0">
-                                  ⚠️ 未成功匹配外部源 (使用本地默认模版模拟)
+                                  ⚠️ 未成功匹配外部源
                                 </span>
                               )}
                             </span>
                             <button className="text-[10px] text-slate-400 font-semibold cursor-pointer" onClick={()=>setEpgGuide(null)}>关闭预览</button>
                           </div>
 
-                          {epgGuide.isSimulated && selectedChannel && (
+                          {epgGuide.programs.length === 0 && selectedChannel && (
                             <div className="bg-amber-50/60 p-3 rounded-lg border border-amber-100/60 text-xs text-amber-800 space-y-2">
                               <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-2">
                                 <span><b>智能校准提示：</b>当前的外部 EPG ID (<b>{epgGuide.epgId}</b>) 尚未能在启用的外部源中检索到今日节目数据。您可以使用 Gemini AI 基于频道名智能校正匹配。</span>

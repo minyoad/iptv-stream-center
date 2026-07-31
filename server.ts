@@ -1575,17 +1575,6 @@ function getOrGenerateIntegratedEpgXml(): { xml: string; gz: Buffer; etag: strin
     return `  <channel id="${epgIdEscaped}">\n    <display-name lang="zh">${escapeXml(c.name)}</display-name>\n    <icon src="${escapeXml(c.logo)}" />\n  </channel>`;
   }).join("\n");
 
-  const programTemplates = [
-    { start: "000000", stop: "060000", title: "深夜温情院线" },
-    { start: "060000", stop: "090000", title: "早晨第一线新闻" },
-    { start: "090000", stop: "120000", title: "经典文娱纪实节目" },
-    { start: "120000", stop: "130000", title: "午间时势观察" },
-    { start: "130000", stop: "180000", title: "午后黄金人气戏剧" },
-    { start: "180000", stop: "190000", title: "傍晚热门民生探索" },
-    { start: "190000", stop: "200000", title: "晚间新闻报道集锦" },
-    { start: "200000", stop: "223000", title: "金牌晚间档品质剧场" },
-    { start: "223000", stop: "235959", title: "深夜体育与军事视界" },
-  ];
   const todayStr = new Date().toISOString().split("T")[0].replace(/-/g, "");
 
   const programTags = activeExportChannels.map((c) => {
@@ -1606,9 +1595,7 @@ function getOrGenerateIntegratedEpgXml(): { xml: string; gz: Buffer; etag: strin
         return `  <programme start="${escapeXml(prog.start)}" stop="${escapeXml(prog.stop)}" channel="${epgIdEscaped}">\n    <title lang="zh">${escapeXml(prog.title)}</title>\n    ${prog.desc ? `<desc lang="zh">${escapeXml(prog.desc)}</desc>` : ""}\n  </programme>`;
       }).join("\n");
     } else {
-      return programTemplates.map((p) => {
-        return `  <programme start="${todayStr}${p.start} +0800" stop="${todayStr}${p.stop} +0800" channel="${epgIdEscaped}">\n    <title lang="zh">${escapeXml(p.title)}</title>\n    <desc lang="zh">由 IPTV 电视服务自动同步 matching epg channel id [${epgIdEscaped}]。</desc>\n  </programme>`;
-      }).join("\n");
+      return "";
     }
   }).join("\n");
 
@@ -4331,78 +4318,6 @@ app.get("/api/channels", async (req, res) => {
     const { channelId, date } = req.query;
     const targetDate = date ? String(date) : new Date().toISOString().split("T")[0];
 
-    // Build responsive hourly program items based on category/channelId
-    // Standard programs corresponding to general tastes
-    const programsTemplate = [
-      { time: "00:30", title: "深夜剧场：海外精选剧集" },
-      { time: "06:00", title: "晨光早报：全球资讯连线" },
-      { time: "07:30", title: "朝闻天下：今日头条聚焦" },
-      { time: "09:00", title: "生活大百科：健康与膳食" },
-      { time: "10:30", title: "纪录片：飞越神州大地" },
-      { time: "12:00", title: "午间快报 / 新闻30分" },
-      { time: "13:00", title: "午后星光影院 / 电视剧场" },
-      { time: "15:30", title: "法治进行时：案例普法讲座" },
-      { time: "17:00", title: "少儿卡通欢乐季：动画推荐" },
-      { time: "18:00", title: "共同关注：社会热点探索" },
-      { time: "19:00", title: "新闻联播 / 每日政经焦点" },
-      { time: "19:30", title: "黄金档剧场：家和万事兴" },
-      { time: "21:30", title: "今日关注 / 环球军事解析" },
-      { time: "22:45", title: "晚间慢新闻 / 财经观察" },
-      { time: "23:30", title: "体育集锦：巅峰竞技速览" },
-    ];
-
-    // Customize items to look extremely high fidelity based on station keywords
-    const getSchedulesForChannel = (chId: string, chName: string) => {
-      const lowerName = (chName || "").toLowerCase();
-      if (lowerName.includes("体育") || lowerName.includes("cctv5") || lowerName.includes("cctv-5")) {
-        return [
-          { time: "00:00", title: "体育赛事录像：欧冠1/4决赛" },
-          { time: "06:00", title: "健身舞动：早晨活力拉伸" },
-          { time: "08:00", title: "体育新闻：晨报速递" },
-          { time: "09:30", title: "实况录像：美职篮常规赛精选" },
-          { time: "12:00", title: "体坛快讯：午间直击" },
-          { time: "13:30", title: "排球经典回眸：女排超级联赛" },
-          { time: "15:00", title: "直播：全国游泳大奖赛决赛" },
-          { time: "18:00", title: "体育新闻：体育世界" },
-          { time: "19:30", title: "直播：中超联赛第15轮焦点大战" },
-          { time: "22:00", title: "天下足球：足坛风云人物" },
-          { time: "23:30", title: "武林大会：中国传统武术争霸" },
-        ];
-      }
-      if (lowerName.includes("电影") || lowerName.includes("cctv6") || lowerName.includes("cctv-6")) {
-        return [
-          { time: "00:10", title: "译制经典：《肖申克的救赎》" },
-          { time: "06:00", title: "华语动作精选：《一代宗师》" },
-          { time: "08:15", title: "中国电影报道：大牌探班" },
-          { time: "09:00", title: "温情家庭影院：《寻找朱莉》" },
-          { time: "11:50", title: "译制片大汇聚：《盗梦空间》" },
-          { time: "14:10", title: "古装史诗大片：《赤壁(上)》" },
-          { time: "17:00", title: "科幻高能影院：《流浪地球》" },
-          { time: "19:05", title: "中国电影报道：金鸡奖巡礼" },
-          { time: "20:15", title: "首播影院：新片独家推荐" },
-          { time: "22:30", title: "悬疑佳作：《看不见的客人》" },
-        ];
-      }
-      if (lowerName.includes("新闻") || lowerName.includes("cctv13") || lowerName.includes("cctv-13")) {
-        return [
-          { time: "00:00", title: "新闻直播间：国际全解析" },
-          { time: "06:00", title: "朝闻天下：晨间资讯首发" },
-          { time: "09:00", title: "新闻直播间：国内整点聚焦" },
-          { time: "12:00", title: "新闻30分：快报直达" },
-          { time: "12:30", title: "每周质量报告：消费提示" },
-          { time: "13:00", title: "新闻直播间：各地新闻资讯" },
-          { time: "18:00", title: "共同关注：温暖民生故事" },
-          { time: "19:00", title: "新闻联播：政经要闻" },
-          { time: "19:35", title: "焦点访谈：深度舆论监督" },
-          { time: "20:00", title: "东方时空：大国重器系列" },
-          { time: "21:30", title: "新闻1+1：时事热点微评" },
-          { time: "22:00", title: "国际时讯：环球视野" },
-          { time: "23:00", title: "24小时：今日核心梳理" },
-        ];
-      }
-      return programsTemplate;
-    };
-
     const getEpgForChannelAndDate = (ch: Channel) => {
       const activeEpgSrcs = epgSources.filter(s => s.active);
       let bestPrograms: any[] = [];
@@ -4431,31 +4346,18 @@ app.get("/api/channels", async (req, res) => {
       if (bestPrograms.length > 0) {
         return bestPrograms;
       }
-      return getSchedulesForChannel(ch.id, ch.name);
+      return [];
     };
 
     if (channelId) {
       const channel = channels.find((c) => c.id === channelId);
       if (channel) {
-        let isSimulated = true;
-        const activeEpgSrcs = epgSources.filter(s => s.active);
-        for (const src of activeEpgSrcs) {
-          const cache = getEpgCache(src.id);
-          if (cache) {
-            const entry = findMatchingEpgEntry(channel, cache);
-            if (entry && entry.programs && entry.programs.length > 0) {
-              isSimulated = false;
-              break;
-            }
-          }
-        }
-
         return res.json({
           channelId,
           channelName: channel.name,
           date: targetDate,
           epgId: channel.epgId,
-          isSimulated,
+          isSimulated: false,
           programs: getEpgForChannelAndDate(channel),
         });
       }
