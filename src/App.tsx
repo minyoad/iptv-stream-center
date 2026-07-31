@@ -987,6 +987,10 @@ export default function App() {
   };
 
   const handleToggleIsolateChannel = async (id: string, isolate: boolean) => {
+    // Optimistic UI update
+    setChannels((prev) =>
+      prev.map((c) => (c.id === id ? { ...c, isolated: isolate } : c))
+    );
     try {
       const res = await fetch(`/api/channels/${id}/isolated`, {
         method: "POST",
@@ -997,11 +1001,41 @@ export default function App() {
         showFeedback("success", isolate ? "频道已成功隔离 (不在导出及播放列表中呈现)" : "频道已恢复（解除隔离）");
         await fetchData();
       } else {
+        // Revert optimistic update
+        await fetchData();
         const err = await res.json();
         showFeedback("error", err.error || "操作失败");
       }
     } catch (e) {
+      // Revert optimistic update
+      await fetchData();
       showFeedback("error", "网络超时");
+    }
+  };
+
+  const handleToggleIsolateGroup = async (id: string, isolate: boolean) => {
+    // Optimistic UI update
+    setGroups((prev) =>
+      prev.map((g) => (g.id === id ? { ...g, isolated: isolate } : g))
+    );
+    try {
+      const res = await fetch(`/api/groups/${id}/isolated`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ isolated: isolate }),
+      });
+      if (res.ok) {
+        showFeedback("success", isolate ? "已将该分组排除导出" : "已将该分组包含在导出中");
+        await fetchData();
+      } else {
+        // Revert optimistic update
+        await fetchData();
+        showFeedback("error", "操作失败");
+      }
+    } catch (err) {
+      // Revert optimistic update
+      await fetchData();
+      showFeedback("error", "网络错误");
     }
   };
 
@@ -2792,23 +2826,7 @@ export default function App() {
                           }
                         );
                       }}
-                      onToggleIsolateGroup={async (id, isolated) => {
-                        try {
-                          const res = await fetch(`/api/groups/${id}/isolated`, {
-                            method: "POST",
-                            headers: { "Content-Type": "application/json" },
-                            body: JSON.stringify({ isolated }),
-                          });
-                          if (res.ok) {
-                            showFeedback("success", isolated ? "已将该分组排除导出" : "已将该分组包含在导出中");
-                            await fetchData();
-                          } else {
-                            showFeedback("error", "操作失败");
-                          }
-                        } catch (err) {
-                          showFeedback("error", "网络错误");
-                        }
-                      }}
+                      onToggleIsolateGroup={handleToggleIsolateGroup}
                       onReorderGroups={handleReorderGroups}
                     />
                   </div>
