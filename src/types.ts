@@ -35,8 +35,6 @@ export interface SyncConfig {
   name: string;
   url: string;
   type: "m3u" | "txt";
-  autoSync: boolean;
-  syncInterval: number; // in hours
   lastSynced?: string;
   status: "success" | "failed" | "never";
   message?: string;

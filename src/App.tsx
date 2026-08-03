@@ -193,8 +193,6 @@ export default function App() {
     name: "",
     url: "",
     type: "m3u" as "m3u" | "txt",
-    autoSync: true,
-    syncInterval: 12,
     isp: ""
   });
 
@@ -2169,9 +2167,7 @@ export default function App() {
     setSyncForm({
        name: "",
        url: "",
-       type: "m3u",
-       autoSync: true,
-       syncInterval: 12,
+       type: "m3u" as "m3u" | "txt",
        isp: ""
      });
     setIsSyncModalOpen(true);
@@ -4884,9 +4880,9 @@ export default function App() {
 
                             <span className={`text-[9px] uppercase font-bold tracking-wider px-2 py-0.5 rounded-full ${
                               cfg.disabled ? "bg-rose-100 text-rose-700" :
-                              cfg.autoSync ? "bg-emerald-100 text-emerald-800" : "bg-slate-200 text-slate-600"
+                              "bg-emerald-100 text-emerald-800"
                             }`}>
-                              {cfg.disabled ? "已停止" : cfg.autoSync ? `定时 ${cfg.syncInterval}h` : "手动触发"}
+                              {cfg.disabled ? "已停止" : "统一自动同步"}
                             </span>
                             
                             <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${
@@ -4937,8 +4933,6 @@ export default function App() {
                                     name: cfg.name,
                                     url: cfg.url,
                                     type: cfg.type,
-                                    autoSync: cfg.autoSync,
-                                    syncInterval: cfg.syncInterval,
                                     isp: cfg.isp || ""
                                   });
                                   setIsSyncModalOpen(true);
@@ -6227,7 +6221,7 @@ export default function App() {
               </div>
 
               <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-1.5">
+                <div className="space-y-1.5 col-span-2">
                   <label>文件类型 (Format Type)</label>
                   <select 
                     value={syncForm.type}
@@ -6238,36 +6232,7 @@ export default function App() {
                     <option value="txt">TVBox TXT 格式</option>
                   </select>
                 </div>
-
-                <div className="space-y-1.5">
-                  <label>自动定时同步后台自动拉取</label>
-                  <div className="flex items-center gap-2.5 h-10">
-                    <input 
-                      type="checkbox" 
-                      checked={syncForm.autoSync}
-                      onChange={(e)=>setSyncForm({...syncForm, autoSync: e.target.checked})}
-                      className="w-4 h-4 text-indigo-600 rounded"
-                    />
-                    <span className="font-sans">定时轮询拉取</span>
-                  </div>
-                </div>
               </div>
-
-              {syncForm.autoSync && (
-                <div className="space-y-1.5 animate-fade-in font-sans">
-                  <label>自动轮询周期频度 (小时/h)</label>
-                  <select 
-                    value={syncForm.syncInterval}
-                    onChange={(e)=>setSyncForm({...syncForm, syncInterval: Number(e.target.value)})}
-                    className="w-full text-xs p-2.5 border border-slate-200 rounded-xl bg-slate-50 focus:outline-none font-semibold text-slate-700"
-                  >
-                    <option value={1}>每隔 1 小时 (轮询检测)</option>
-                    <option value={6}>每隔 6 小时</option>
-                    <option value={12}>每隔 12 小时</option>
-                    <option value={24}>每隔 24 小时 (每日晚间同步)</option>
-                  </select>
-                </div>
-              )}
 
               <div className="space-y-1.5 font-sans" id="sync_form_isp_block">
                 <label>强制将导入的直播源设置为特定运营商 (ISP)</label>

@@ -685,8 +685,6 @@ const DEFAULT_SYNC_CONFIGS: SyncConfig[] = [
     name: "範例 IPTV GitHub 源",
     url: "https://raw.githubusercontent.com/fanmingming/live/main/tv/m3u/ipv6.m3u",
     type: "m3u",
-    autoSync: true,
-    syncInterval: 12,
     status: "never",
   }
 ];
@@ -775,8 +773,6 @@ function loadData() {
         name: sc.name,
         url: sc.url,
         type: sc.type,
-        autoSync: sc.autoSync === 1,
-        syncInterval: sc.syncInterval,
         lastSynced: sc.lastSynced || undefined,
         status: sc.status || "never",
         message: sc.message || undefined,
@@ -1132,7 +1128,7 @@ function saveDataSync() {
       db.exec("DELETE FROM sync_configs");
       const insertSync = db.prepare(`
         INSERT INTO sync_configs (id, name, url, type, autoSync, syncInterval, lastSynced, status, message, disabled, consecutiveFailures, contentHash, isp)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, 1, 12, ?, ?, ?, ?, ?, ?, ?)
       `);
       for (const sc of syncConfigs) {
         insertSync.run(
@@ -1140,8 +1136,6 @@ function saveDataSync() {
           sc.name,
           sc.url,
           sc.type,
-          sc.autoSync ? 1 : 0,
-          sc.syncInterval,
           sc.lastSynced || "",
           sc.status || "never",
           sc.message || "",
@@ -2389,7 +2383,6 @@ async function performSync(config: SyncConfig, force = false) {
     config.lastSynced = new Date().toISOString();
     if (config.consecutiveFailures >= 3) {
       config.disabled = true;
-      config.autoSync = false;
       config.message = `连续导入失败 ${config.consecutiveFailures} 次，已自动禁用: ${err.message || err}`;
     } else {
       config.message = `同步失败 (连续第 ${config.consecutiveFailures} 次失败): ${err.message || err}`;
@@ -3900,8 +3893,6 @@ app.get("/api/channels", async (req, res) => {
           name: String(item.name).trim(),
           url: String(item.url).trim(),
           type: item.type === "txt" ? "txt" : "m3u",
-          autoSync: item.autoSync !== undefined ? !!item.autoSync : true,
-          syncInterval: Number(item.syncInterval) || 12,
           status: item.status || "never",
           message: item.message || "",
           lastSynced: item.lastSynced,
@@ -3924,8 +3915,6 @@ app.get("/api/channels", async (req, res) => {
               ...syncConfigs[existingIdx],
               name: imported.name,
               type: imported.type,
-              autoSync: imported.autoSync,
-              syncInterval: imported.syncInterval,
               isp: imported.isp,
             };
           } else {
@@ -3946,7 +3935,7 @@ app.get("/api/channels", async (req, res) => {
   });
 
   app.post("/api/sync-configs", (req, res) => {
-    const { name, url, type, autoSync, syncInterval, isp } = req.body;
+    const { name, url, type, isp } = req.body;
     if (!name || !url) {
       return res.status(400).json({ error: "同步名称和URL为必填项" });
     }
@@ -3956,8 +3945,6 @@ app.get("/api/channels", async (req, res) => {
       name,
       url,
       type: type || "m3u",
-      autoSync: !!autoSync,
-      syncInterval: Number(syncInterval) || 12,
       status: "never",
       isp: isp ? String(isp).trim() : undefined,
     };
@@ -3969,7 +3956,7 @@ app.get("/api/channels", async (req, res) => {
 
   app.put("/api/sync-configs/:id", (req, res) => {
     const { id } = req.params;
-    const { name, url, type, autoSync, syncInterval, isp, disabled } = req.body;
+    const { name, url, type, isp, disabled } = req.body;
 
     const config = syncConfigs.find((c) => c.id === id);
     if (!config) {
@@ -3989,14 +3976,6 @@ app.get("/api/channels", async (req, res) => {
     if (isp !== undefined) {
       config.isp = isp ? String(isp).trim() : undefined;
     }
-    if (autoSync !== undefined) {
-      config.autoSync = autoSync;
-      if (autoSync === true) {
-        config.disabled = false;
-        config.consecutiveFailures = 0;
-      }
-    }
-    if (syncInterval !== undefined) config.syncInterval = Number(syncInterval);
     if (disabled !== undefined) {
       config.disabled = !!disabled;
       if (disabled === false) {
