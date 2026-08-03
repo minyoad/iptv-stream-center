@@ -166,7 +166,8 @@ function initSqlite() {
       disabled INTEGER,
       consecutiveFailures INTEGER,
       contentHash TEXT,
-      isp TEXT
+      isp TEXT,
+      aliasOnly INTEGER DEFAULT 0
     );
     CREATE TABLE IF NOT EXISTS epg_sources (
       id TEXT PRIMARY KEY,
@@ -779,7 +780,8 @@ function loadData() {
         disabled: sc.disabled === 1,
         consecutiveFailures: sc.consecutiveFailures || 0,
         contentHash: sc.contentHash || undefined,
-        isp: sc.isp || undefined
+        isp: sc.isp || undefined,
+        aliasOnly: sc.aliasOnly === 1
       }));
 
       const loadedEpgSources = db.prepare("SELECT * FROM epg_sources").all();
@@ -1127,8 +1129,8 @@ function saveDataSync() {
       // 4. Sync sync_configs
       db.exec("DELETE FROM sync_configs");
       const insertSync = db.prepare(`
-        INSERT INTO sync_configs (id, name, url, type, autoSync, syncInterval, lastSynced, status, message, disabled, consecutiveFailures, contentHash, isp)
-        VALUES (?, ?, ?, ?, 1, 12, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO sync_configs (id, name, url, type, autoSync, syncInterval, lastSynced, status, message, disabled, consecutiveFailures, contentHash, isp, aliasOnly)
+        VALUES (?, ?, ?, ?, 1, 12, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
       for (const sc of syncConfigs) {
         insertSync.run(
@@ -1142,7 +1144,8 @@ function saveDataSync() {
           sc.disabled ? 1 : 0,
           sc.consecutiveFailures || 0,
           sc.contentHash || "",
-          sc.isp || ""
+          sc.isp || "",
+          sc.aliasOnly ? 1 : 0
         );
       }
 
@@ -2202,7 +2205,7 @@ async function performSync(config: SyncConfig, force = false) {
           );
 
           if (!channel) {
-            if (!autoCreateChannel) {
+            if (!autoCreateChannel || config.aliasOnly) {
               currentInfo = null; // reset
               continue;
             }
@@ -2240,10 +2243,15 @@ async function performSync(config: SyncConfig, force = false) {
                 }
               });
             }
-            // Update logo if current logo is auto-generated
-            if (currentInfo!.logo && (!channel!.logo || channel!.logo.includes("unsplash.com") || channel!.logo === "")) {
+            // Update logo if current logo is auto-generated or if aliasOnly mode is enabled
+            if (currentInfo!.logo && (config.aliasOnly || !channel!.logo || channel!.logo.includes("unsplash.com") || channel!.logo === "")) {
               channel!.logo = currentInfo!.logo;
             }
+          }
+
+          if (config.aliasOnly) {
+            currentInfo = null;
+            continue;
           }
 
           // Add source if URL not already there
@@ -2321,7 +2329,7 @@ async function performSync(config: SyncConfig, force = false) {
           );
 
           if (!channel) {
-            if (!autoCreateChannel) {
+            if (!autoCreateChannel || config.aliasOnly) {
               continue;
             }
             const channelId = "ch_" + Math.random().toString(36).substring(2, 10);
@@ -2351,6 +2359,10 @@ async function performSync(config: SyncConfig, force = false) {
                 }
               });
             }
+          }
+
+          if (config.aliasOnly) {
+            continue;
           }
 
           const existingSrc = channel.sources.find((s) => s.url === url);
@@ -3634,7 +3646,7 @@ app.get("/api/channels", async (req, res) => {
 
   // Bulk Upload File Handler Endpoint
   app.post("/api/import/file", (req, res) => {
-    const { content, type } = req.body;
+    const { content, type, aliasOnly } = req.body;
     if (!content) {
       return res.status(400).json({ error: "文件内容不能为空" });
     }
@@ -3654,6 +3666,8 @@ app.get("/api/channels", async (req, res) => {
             const logoMatch = line.match(/tvg-logo="([^"]+)"/) || line.match(/logo="([^"]+)"/);
             const groupMatch = line.match(/group-title="([^"]+)"/);
             const epgMatch = line.match(/tvg-id="([^"]+)"/) || line.match(/epg-id="([^"]+)"/);
+            const tvgNameMatch = line.match(/tvg-name="([^"]+)"/);
+            const aliasMatch = line.match(/tvg-alias="([^"]+)"/) || line.match(/alias="([^"]+)"/) || line.match(/alias-name="([^"]+)"/);
             
             const commaIndex = line.indexOf(",");
             let name = "未知频道";
@@ -3662,11 +3676,20 @@ app.get("/api/channels", async (req, res) => {
             }
             name = stripBitrateAndResolution(name);
 
+            let parsedAliases = [name];
+            if (tvgNameMatch && tvgNameMatch[1]) {
+              parsedAliases.push(...tvgNameMatch[1].split(/[,;，；]/).map(s => s.trim()).filter(Boolean));
+            }
+            if (aliasMatch && aliasMatch[1]) {
+              parsedAliases.push(...aliasMatch[1].split(/[,;，；]/).map(s => s.trim()).filter(Boolean));
+            }
+            parsedAliases = Array.from(new Set(parsedAliases));
+
             currentInfo = {
               name,
               logo: logoMatch ? logoMatch[1] : "",
               category: groupMatch ? groupMatch[1] : "手动导入",
-              alias: [name],
+              alias: parsedAliases,
               epgId: epgMatch ? epgMatch[1] : generateDefaultEpgId(name),
             };
           } else if (line && !line.startsWith("#") && currentInfo) {
@@ -3705,7 +3728,7 @@ app.get("/api/channels", async (req, res) => {
             );
 
             if (!channel) {
-              if (!autoCreateChannel) {
+              if (!autoCreateChannel || aliasOnly) {
                 currentInfo = null;
                 continue;
               }
@@ -3733,10 +3756,23 @@ app.get("/api/channels", async (req, res) => {
                   }
                 });
               }
-              // Update logo if current logo is auto-generated
-              if (currentInfo.logo && (!channel!.logo || channel!.logo.includes("unsplash.com") || channel!.logo === "")) {
+              // Add any aliases parsed from the current m3u metadata
+              if (currentInfo && currentInfo.alias) {
+                currentInfo.alias.forEach((a: string) => {
+                  if (!channel!.alias.includes(a)) {
+                    channel!.alias.push(a);
+                  }
+                });
+              }
+              // Update logo if current logo is auto-generated or if aliasOnly mode is enabled
+              if (currentInfo.logo && (aliasOnly || !channel!.logo || channel!.logo.includes("unsplash.com") || channel!.logo === "")) {
                 channel!.logo = currentInfo.logo;
               }
+            }
+
+            if (aliasOnly) {
+              currentInfo = null;
+              continue;
             }
 
             if (!channel.sources.some((s) => s.url === url)) {
@@ -3804,7 +3840,7 @@ app.get("/api/channels", async (req, res) => {
             );
 
             if (!channel) {
-              if (!autoCreateChannel) {
+              if (!autoCreateChannel || aliasOnly) {
                 continue;
               }
               const cleanName = stdInfo ? stdInfo.templateName : name;
@@ -3833,6 +3869,10 @@ app.get("/api/channels", async (req, res) => {
                   }
                 });
               }
+            }
+
+            if (aliasOnly) {
+              continue;
             }
 
             if (!channel.sources.some((s) => s.url === url)) {
@@ -3900,6 +3940,7 @@ app.get("/api/channels", async (req, res) => {
           consecutiveFailures: Number(item.consecutiveFailures) || 0,
           contentHash: item.contentHash,
           isp: item.isp ? String(item.isp).trim() : undefined,
+          aliasOnly: !!item.aliasOnly
         });
       }
 
@@ -3916,6 +3957,7 @@ app.get("/api/channels", async (req, res) => {
               name: imported.name,
               type: imported.type,
               isp: imported.isp,
+              aliasOnly: imported.aliasOnly
             };
           } else {
             syncConfigs.push(imported);
@@ -3935,7 +3977,7 @@ app.get("/api/channels", async (req, res) => {
   });
 
   app.post("/api/sync-configs", (req, res) => {
-    const { name, url, type, isp } = req.body;
+    const { name, url, type, isp, aliasOnly } = req.body;
     if (!name || !url) {
       return res.status(400).json({ error: "同步名称和URL为必填项" });
     }
@@ -3947,6 +3989,7 @@ app.get("/api/channels", async (req, res) => {
       type: type || "m3u",
       status: "never",
       isp: isp ? String(isp).trim() : undefined,
+      aliasOnly: !!aliasOnly
     };
 
     syncConfigs.push(newConfig);
@@ -3956,7 +3999,7 @@ app.get("/api/channels", async (req, res) => {
 
   app.put("/api/sync-configs/:id", (req, res) => {
     const { id } = req.params;
-    const { name, url, type, isp, disabled } = req.body;
+    const { name, url, type, isp, disabled, aliasOnly } = req.body;
 
     const config = syncConfigs.find((c) => c.id === id);
     if (!config) {
@@ -3975,6 +4018,9 @@ app.get("/api/channels", async (req, res) => {
     if (type) config.type = type;
     if (isp !== undefined) {
       config.isp = isp ? String(isp).trim() : undefined;
+    }
+    if (aliasOnly !== undefined) {
+      config.aliasOnly = !!aliasOnly;
     }
     if (disabled !== undefined) {
       config.disabled = !!disabled;

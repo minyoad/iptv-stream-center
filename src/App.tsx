@@ -193,7 +193,8 @@ export default function App() {
     name: "",
     url: "",
     type: "m3u" as "m3u" | "txt",
-    isp: ""
+    isp: "",
+    aliasOnly: false
   });
 
   // States for subscription backups and import/export
@@ -212,6 +213,7 @@ export default function App() {
   // Manual Text Import paste box
   const [pasteContent, setPasteContent] = useState("");
   const [pasteType, setPasteType] = useState<"m3u" | "txt">("m3u");
+  const [pasteAliasOnly, setPasteAliasOnly] = useState(false);
   const [isImportingText, setIsImportingText] = useState(false);
 
   // EPG preview guide state
@@ -2168,7 +2170,8 @@ export default function App() {
        name: "",
        url: "",
        type: "m3u" as "m3u" | "txt",
-       isp: ""
+       isp: "",
+       aliasOnly: false
      });
     setIsSyncModalOpen(true);
   };
@@ -2229,7 +2232,8 @@ export default function App() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           content: pasteContent,
-          type: pasteType
+          type: pasteType,
+          aliasOnly: pasteAliasOnly
         })
       });
       const data = await res.json();
@@ -4752,6 +4756,18 @@ export default function App() {
                       className="w-full flex-1 p-4 border border-slate-200 rounded-xl font-mono text-xs bg-slate-50 focus:outline-none focus:border-indigo-500 text-slate-700 leading-normal"
                     />
 
+                    <div className="flex items-center justify-between">
+                      <label className="flex items-center gap-2 cursor-pointer text-xs font-bold text-slate-700 select-none">
+                        <input
+                          type="checkbox"
+                          checked={pasteAliasOnly}
+                          onChange={(e) => setPasteAliasOnly(e.target.checked)}
+                          className="w-4 h-4 text-indigo-600 rounded border-slate-300 focus:ring-indigo-500"
+                        />
+                        <span>仅更新已有频道的别名和台标 (不导入新源、不创建新频道)</span>
+                      </label>
+                    </div>
+
                     <button
                       onClick={handlePasteImport}
                       disabled={isImportingText}
@@ -4933,7 +4949,8 @@ export default function App() {
                                     name: cfg.name,
                                     url: cfg.url,
                                     type: cfg.type,
-                                    isp: cfg.isp || ""
+                                    isp: cfg.isp || "",
+                                    aliasOnly: cfg.aliasOnly || false
                                   });
                                   setIsSyncModalOpen(true);
                                 }}
@@ -6250,6 +6267,18 @@ export default function App() {
                   <option value="其它">其它</option>
                 </select>
                 <p className="text-[10px] text-slate-400 font-normal">指定后，该订阅拉取产生的所有直播源都将统一且强制被赋予此 ISP 属性。</p>
+              </div>
+
+              <div className="flex items-center justify-between pt-1">
+                <label className="flex items-center gap-2 cursor-pointer text-xs font-bold text-slate-700 select-none">
+                  <input
+                    type="checkbox"
+                    checked={syncForm.aliasOnly}
+                    onChange={(e) => setSyncForm({...syncForm, aliasOnly: e.target.checked})}
+                    className="w-4 h-4 text-indigo-600 rounded border-slate-300 focus:ring-indigo-500"
+                  />
+                  <span>仅更新已有频道的别名和台标 (作为别名拓展词典，不导入新源)</span>
+                </label>
               </div>
 
               <div className="flex gap-3 pt-3">

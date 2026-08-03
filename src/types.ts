@@ -42,6 +42,7 @@ export interface SyncConfig {
   consecutiveFailures?: number;
   contentHash?: string;
   isp?: string;
+  aliasOnly?: boolean;
 }
 
 export interface EpgSource {
