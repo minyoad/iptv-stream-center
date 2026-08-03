@@ -2133,6 +2133,8 @@ async function performSync(config: SyncConfig, force = false) {
           const logoMatch = line.match(/tvg-logo="([^"]+)"/) || line.match(/logo="([^"]+)"/);
           const groupMatch = line.match(/group-title="([^"]+)"/);
           const epgMatch = line.match(/tvg-id="([^"]+)"/) || line.match(/epg-id="([^"]+)"/);
+          const tvgNameMatch = line.match(/tvg-name="([^"]+)"/);
+          const aliasMatch = line.match(/tvg-alias="([^"]+)"/) || line.match(/alias="([^"]+)"/) || line.match(/alias-name="([^"]+)"/);
           
           let name = "未知频道";
           const lastQuoteIndex = line.lastIndexOf('"');
@@ -2150,11 +2152,20 @@ async function performSync(config: SyncConfig, force = false) {
           }
           name = stripBitrateAndResolution(name);
 
+          let parsedAliases = [name];
+          if (tvgNameMatch && tvgNameMatch[1]) {
+            parsedAliases.push(...tvgNameMatch[1].split(/[,;，；]/).map(s => s.trim()).filter(Boolean));
+          }
+          if (aliasMatch && aliasMatch[1]) {
+            parsedAliases.push(...aliasMatch[1].split(/[,;，；]/).map(s => s.trim()).filter(Boolean));
+          }
+          parsedAliases = Array.from(new Set(parsedAliases));
+
           currentInfo = {
             name,
             logo: logoMatch ? logoMatch[1] : "",
             category: groupMatch ? groupMatch[1] : "其它频道",
-            alias: [name],
+            alias: parsedAliases,
             epgId: epgMatch ? epgMatch[1] : generateDefaultEpgId(name),
           };
         } else if (line && !line.startsWith("#") && currentInfo) {
@@ -2222,6 +2233,14 @@ async function performSync(config: SyncConfig, force = false) {
             // Auto pre-populate missing aliases from standard configuration
             if (stdInfo) {
               stdInfo.aliases.forEach(a => {
+                if (!channel!.alias.includes(a)) {
+                  channel!.alias.push(a);
+                }
+              });
+            }
+            // Add any aliases parsed from the current m3u metadata
+            if (currentInfo && currentInfo.alias) {
+              currentInfo.alias.forEach(a => {
                 if (!channel!.alias.includes(a)) {
                   channel!.alias.push(a);
                 }
