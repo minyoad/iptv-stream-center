@@ -1001,7 +1001,7 @@ export default function App() {
         name: channelForm.name,
         groupIds: finalGroupIds,
         logo: channelForm.logo,
-        alias: channelForm.alias.split(",").map(s => s.trim()).filter(Boolean),
+        alias: Array.from(new Set(channelForm.alias.split(/[,;，；:]/).map(s => s.trim()).filter(Boolean))),
         epgId: channelForm.epgId,
         isolated: channelForm.isolated
       };

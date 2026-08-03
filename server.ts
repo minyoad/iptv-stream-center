@@ -2149,12 +2149,17 @@ async function performSync(config: SyncConfig, force = false) {
           }
           name = stripBitrateAndResolution(name);
 
-          let parsedAliases = [name];
+          const nameParts = name.split(/[,;，；:]/).map(s => s.trim()).filter(Boolean);
+          if (nameParts.length > 0) {
+            name = nameParts[0];
+          }
+
+          let parsedAliases = [...nameParts];
           if (tvgNameMatch && tvgNameMatch[1]) {
-            parsedAliases.push(...tvgNameMatch[1].split(/[,;，；]/).map(s => s.trim()).filter(Boolean));
+            parsedAliases.push(...tvgNameMatch[1].split(/[,;，；:]/).map(s => s.trim()).filter(Boolean));
           }
           if (aliasMatch && aliasMatch[1]) {
-            parsedAliases.push(...aliasMatch[1].split(/[,;，；]/).map(s => s.trim()).filter(Boolean));
+            parsedAliases.push(...aliasMatch[1].split(/[,;，；:]/).map(s => s.trim()).filter(Boolean));
           }
           parsedAliases = Array.from(new Set(parsedAliases));
 
@@ -2243,8 +2248,8 @@ async function performSync(config: SyncConfig, force = false) {
                 }
               });
             }
-            // Update logo if current logo is auto-generated or if aliasOnly mode is enabled
-            if (currentInfo!.logo && (config.aliasOnly || !channel!.logo || channel!.logo.includes("unsplash.com") || channel!.logo === "")) {
+            // Unconditionally update logo if provided in the M3U
+            if (currentInfo!.logo) {
               channel!.logo = currentInfo!.logo;
             }
           }
@@ -2297,6 +2302,11 @@ async function performSync(config: SyncConfig, force = false) {
           let name = nameWithSpecs.split("#")[0].trim();
           name = stripBitrateAndResolution(name);
 
+          const nameParts = name.split(/[,;，；:]/).map(s => s.trim()).filter(Boolean);
+          if (nameParts.length > 0) {
+            name = nameParts[0];
+          }
+
           // Resolve group
           const catNames = currentCategory.split(/[,;，；]/).map(s => s.trim()).filter(Boolean);
           if (catNames.length === 0) catNames.push("其它频道");
@@ -2335,8 +2345,8 @@ async function performSync(config: SyncConfig, force = false) {
             const channelId = "ch_" + Math.random().toString(36).substring(2, 10);
             const cleanName = stdInfo ? stdInfo.templateName : name;
             const cleanAliases = stdInfo 
-              ? Array.from(new Set([cleanName, name, ...stdInfo.aliases]))
-              : [name];
+              ? Array.from(new Set([cleanName, ...nameParts, ...stdInfo.aliases]))
+              : Array.from(new Set(nameParts));
 
             channel = {
               id: channelId,
@@ -2359,6 +2369,13 @@ async function performSync(config: SyncConfig, force = false) {
                 }
               });
             }
+            // Add any aliases parsed from the current TXT metadata
+            nameParts.forEach(a => {
+              if (!channel!.alias.includes(a)) {
+                channel!.alias.push(a);
+              }
+            });
+            channel!.alias = Array.from(new Set(channel!.alias));
           }
 
           if (config.aliasOnly) {
@@ -3071,7 +3088,7 @@ app.get("/api/channels", async (req, res) => {
 
     if (logo !== undefined) channel.logo = logo;
     if (alias !== undefined) {
-      channel.alias = Array.isArray(alias) ? alias : alias.split(",").map((s: string) => s.trim());
+      channel.alias = Array.from(new Set(Array.isArray(alias) ? alias : alias.split(/[,;，；:]/).map((s: string) => s.trim()).filter(Boolean)));
     }
     if (epgId !== undefined) channel.epgId = epgId;
     if (isolated !== undefined) channel.isolated = !!isolated;
@@ -3676,12 +3693,17 @@ app.get("/api/channels", async (req, res) => {
             }
             name = stripBitrateAndResolution(name);
 
-            let parsedAliases = [name];
+            const nameParts = name.split(/[,;，；:]/).map(s => s.trim()).filter(Boolean);
+            if (nameParts.length > 0) {
+              name = nameParts[0];
+            }
+
+            let parsedAliases = [...nameParts];
             if (tvgNameMatch && tvgNameMatch[1]) {
-              parsedAliases.push(...tvgNameMatch[1].split(/[,;，；]/).map(s => s.trim()).filter(Boolean));
+              parsedAliases.push(...tvgNameMatch[1].split(/[,;，；:]/).map(s => s.trim()).filter(Boolean));
             }
             if (aliasMatch && aliasMatch[1]) {
-              parsedAliases.push(...aliasMatch[1].split(/[,;，；]/).map(s => s.trim()).filter(Boolean));
+              parsedAliases.push(...aliasMatch[1].split(/[,;，；:]/).map(s => s.trim()).filter(Boolean));
             }
             parsedAliases = Array.from(new Set(parsedAliases));
 
@@ -3764,8 +3786,8 @@ app.get("/api/channels", async (req, res) => {
                   }
                 });
               }
-              // Update logo if current logo is auto-generated or if aliasOnly mode is enabled
-              if (currentInfo.logo && (aliasOnly || !channel!.logo || channel!.logo.includes("unsplash.com") || channel!.logo === "")) {
+              // Unconditionally update logo if provided in the M3U
+              if (currentInfo.logo) {
                 channel!.logo = currentInfo.logo;
               }
             }
@@ -3808,6 +3830,11 @@ app.get("/api/channels", async (req, res) => {
             let name = nameWithSpecs.split("#")[0].trim();
             name = stripBitrateAndResolution(name);
 
+            const nameParts = name.split(/[,;，；:]/).map(s => s.trim()).filter(Boolean);
+            if (nameParts.length > 0) {
+              name = nameParts[0];
+            }
+
             // Resolve categories
             const catNames = currentCategory.split(/[,;，；]/).map((s: string) => s.trim()).filter(Boolean);
             if (catNames.length === 0) catNames.push("手动导入");
@@ -3844,9 +3871,9 @@ app.get("/api/channels", async (req, res) => {
                 continue;
               }
               const cleanName = stdInfo ? stdInfo.templateName : name;
-              const cleanAliases = stdInfo
-                ? Array.from(new Set([cleanName, name, ...stdInfo.aliases]))
-                : [name];
+              const cleanAliases = stdInfo 
+                ? Array.from(new Set([cleanName, ...nameParts, ...stdInfo.aliases]))
+                : Array.from(new Set(nameParts));
 
               channel = {
                 id: "ch_" + Math.random().toString(36).substring(2, 10),
@@ -3869,6 +3896,13 @@ app.get("/api/channels", async (req, res) => {
                   }
                 });
               }
+              // Add any aliases parsed from the current TXT metadata
+              nameParts.forEach(a => {
+                if (!channel!.alias.includes(a)) {
+                  channel!.alias.push(a);
+                }
+              });
+              channel!.alias = Array.from(new Set(channel!.alias));
             }
 
             if (aliasOnly) {
