@@ -44,6 +44,8 @@ import StatsView from "./components/StatsView";
 import { DraggableChannelList } from "./components/DraggableChannelList";
 import { DraggableGroupList } from "./components/DraggableGroupList";
 
+// Define the global variable provided by Vite
+declare const __APP_BUILD_VERSION__: string;
 
 export interface IpGeoApi {
   id: string;
@@ -2653,6 +2655,14 @@ export default function App() {
           </button>
         </div>
 
+        {/* Sidebar Footer with Build Version */}
+        {typeof __APP_BUILD_VERSION__ !== 'undefined' && (
+          <div className="p-4 border-t border-slate-100 text-center">
+            <div className="text-[10px] text-slate-400 font-mono tracking-wider font-semibold">
+              BUILD {__APP_BUILD_VERSION__}
+            </div>
+          </div>
+        )}
 
       </aside>
 
