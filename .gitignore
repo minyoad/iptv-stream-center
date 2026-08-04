@@ -7,3 +7,4 @@ coverage/
 .env*
 !.env.example
 playlist_cache/
+playlists_export/

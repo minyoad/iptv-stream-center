@@ -2261,20 +2261,18 @@ async function performSync(config: SyncConfig, force = false) {
           }
 
           // Add source if URL not already there
-          for (const url of urls) {
-            const existingSrc = channel.sources.find((s) => s.url === url);
-            if (!existingSrc) {
-              channel.sources.push({
-                id: "src_" + Math.random().toString(36).substring(2, 10),
-                url,
-                province,
-                isp,
-                status: "unknown",
-              });
-              importedSourcesCount++;
-            } else if (config.isp) {
-              existingSrc.isp = config.isp;
-            }
+          const existingSrc = channel.sources.find((s) => s.url === url);
+          if (!existingSrc) {
+            channel.sources.push({
+              id: "src_" + Math.random().toString(36).substring(2, 10),
+              url,
+              province,
+              isp,
+              status: "unknown",
+            });
+            importedSourcesCount++;
+          } else if (config.isp) {
+            existingSrc.isp = config.isp;
           }
 
           currentInfo = null; // reset
@@ -3808,17 +3806,15 @@ app.get("/api/channels", async (req, res) => {
               continue;
             }
 
-            for (const url of urls) {
-              if (!channel.sources.some((s) => s.url === url)) {
-                channel.sources.push({
-                  id: "src_" + Math.random().toString(36).substring(2, 10),
-                  url,
-                  province,
-                  isp,
-                  status: "unknown",
-                });
-                importedSourcesCount++;
-              }
+            if (!channel.sources.some((s) => s.url === url)) {
+              channel.sources.push({
+                id: "src_" + Math.random().toString(36).substring(2, 10),
+                url,
+                province,
+                isp,
+                status: "unknown",
+              });
+              importedSourcesCount++;
             }
             currentInfo = null;
           }
@@ -3927,15 +3923,17 @@ app.get("/api/channels", async (req, res) => {
               continue;
             }
 
-            if (!channel.sources.some((s) => s.url === url)) {
-              channel.sources.push({
-                id: "src_" + Math.random().toString(36).substring(2, 10),
-                url,
-                province,
-                isp,
-                status: "unknown",
-              });
-              importedSourcesCount++;
+            for (const url of urls) {
+              if (!channel.sources.some((s) => s.url === url)) {
+                channel.sources.push({
+                  id: "src_" + Math.random().toString(36).substring(2, 10),
+                  url,
+                  province,
+                  isp,
+                  status: "unknown",
+                });
+                importedSourcesCount++;
+              }
             }
           }
         }
