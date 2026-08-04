@@ -247,6 +247,11 @@ function initSqlite() {
     insertCronJob.run("job_epg_sync", "EPG 自动同步", "02:00", 1440, 0); // default inactive, daily at 2AM
     insertCronJob.run("job_github_import", "GitHub 源自动导入", "03:00", 1440, 0); // default inactive, daily at 3AM
   }
+  // Ensure job_server_test exists
+  db.prepare(`
+    INSERT OR IGNORE INTO cron_jobs (id, name, startTime, intervalMinutes, active)
+    VALUES (?, ?, ?, ?, ?)
+  `).run("job_server_test", "全网并发测速", "04:00", 1440, 0);
 }
 
 const EPG_CACHE_DIR = path.join(DATA_DIR, "epg_cache_sources");
@@ -1434,7 +1439,7 @@ async function runConcurrentTest(selectedSources: { id: string; channelId: strin
   await Promise.all(pool);
 
   testStatus.status = "idle";
-  saveData(false);
+  saveData(true);
 }
 
 function updateSourceDbStatus(channelId: string, sourceId: string, status: "active" | "inactive" | "checking" | "unknown", latency?: number) {
@@ -2486,6 +2491,32 @@ async function runCronJob(job: any) {
         if (success) successCount++;
       }
       insertLog.run(logId, job.id, nowStr, "success", `成功同步 ${successCount}/${activeConfigs.length} 个 GitHub 订阅源`);
+    } else if (job.id === "job_server_test") {
+      if (testStatus.status === "running") {
+        insertLog.run(logId, job.id, nowStr, "failed", "当前已有测速任务在运行，跳过定时测速");
+      } else {
+        let targetSources: { id: string; channelId: string; url: string }[] = [];
+        channels.forEach((channel) => {
+          if (channel.isolated) return;
+          if (!channel.sources) return;
+          channel.sources.forEach((source) => {
+            if (source.isolated) return;
+            const specificISPs = ["电信", "联通", "移动", "广电", "铁通"];
+            if (source.isp && specificISPs.includes(source.isp)) return;
+            targetSources.push({
+              id: source.id,
+              channelId: channel.id,
+              url: source.url,
+            });
+          });
+        });
+        if (targetSources.length > 0) {
+          await runConcurrentTest(targetSources, 8);
+          insertLog.run(logId, job.id, nowStr, "success", `成功对 ${targetSources.length} 个直播源进行了测速`);
+        } else {
+          insertLog.run(logId, job.id, nowStr, "success", "没有符合测速条件的直播源");
+        }
+      }
     } else {
       insertLog.run(logId, job.id, nowStr, "failed", "未知的定时任务 ID");
     }
