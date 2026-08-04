@@ -2173,7 +2173,7 @@ async function performSync(config: SyncConfig, force = false) {
           };
         } else if (line && !line.startsWith("#") && currentInfo) {
           // Play stream URL matching current channel
-          const url = line;
+          let url = line.split("$")[0].trim();
           const { province, isp: parsedIsp } = parseIspAndProvince(currentInfo.name + " " + currentInfo.category);
           const isp = config.isp ? config.isp : parsedIsp;
 
@@ -2261,18 +2261,20 @@ async function performSync(config: SyncConfig, force = false) {
           }
 
           // Add source if URL not already there
-          const existingSrc = channel.sources.find((s) => s.url === url);
-          if (!existingSrc) {
-            channel.sources.push({
-              id: "src_" + Math.random().toString(36).substring(2, 10),
-              url,
-              province,
-              isp,
-              status: "unknown",
-            });
-            importedSourcesCount++;
-          } else if (config.isp) {
-            existingSrc.isp = config.isp;
+          for (const url of urls) {
+            const existingSrc = channel.sources.find((s) => s.url === url);
+            if (!existingSrc) {
+              channel.sources.push({
+                id: "src_" + Math.random().toString(36).substring(2, 10),
+                url,
+                province,
+                isp,
+                status: "unknown",
+              });
+              importedSourcesCount++;
+            } else if (config.isp) {
+              existingSrc.isp = config.isp;
+            }
           }
 
           currentInfo = null; // reset
@@ -2295,7 +2297,12 @@ async function performSync(config: SyncConfig, force = false) {
         } else if (line.includes(",")) {
           const parts = line.split(",");
           const nameWithSpecs = parts[0].trim();
-          const url = parts[1].trim();
+          const urls = parts[1].split('#').map(u => {
+            let u2 = u.trim();
+            if (u2.includes('$')) u2 = u2.split('$')[0].trim();
+            return u2;
+          }).filter(Boolean);
+          if (urls.length === 0) continue;
 
           const { province, isp: parsedIsp } = parseIspAndProvince(nameWithSpecs + " " + currentCategory);
           const isp = config.isp ? config.isp : parsedIsp;
@@ -2383,18 +2390,20 @@ async function performSync(config: SyncConfig, force = false) {
             continue;
           }
 
-          const existingSrc = channel.sources.find((s) => s.url === url);
-          if (!existingSrc) {
-            channel.sources.push({
-              id: "src_" + Math.random().toString(36).substring(2, 10),
-              url,
-              province,
-              isp,
-              status: "unknown",
-            });
-            importedSourcesCount++;
-          } else if (config.isp) {
-            existingSrc.isp = config.isp;
+          for (const url of urls) {
+            const existingSrc = channel.sources.find((s) => s.url === url);
+            if (!existingSrc) {
+              channel.sources.push({
+                id: "src_" + Math.random().toString(36).substring(2, 10),
+                url,
+                province,
+                isp,
+                status: "unknown",
+              });
+              importedSourcesCount++;
+            } else if (config.isp) {
+              existingSrc.isp = config.isp;
+            }
           }
         }
       }
@@ -3717,7 +3726,7 @@ app.get("/api/channels", async (req, res) => {
               epgId: epgMatch ? epgMatch[1] : generateDefaultEpgId(name),
             };
           } else if (line && !line.startsWith("#") && currentInfo) {
-            const url = line;
+            let url = line.split("$")[0].trim();
             const { province, isp } = parseIspAndProvince(currentInfo.name + " " + currentInfo.category);
 
             // Resolve categories
@@ -3799,15 +3808,17 @@ app.get("/api/channels", async (req, res) => {
               continue;
             }
 
-            if (!channel.sources.some((s) => s.url === url)) {
-              channel.sources.push({
-                id: "src_" + Math.random().toString(36).substring(2, 10),
-                url,
-                province,
-                isp,
-                status: "unknown",
-              });
-              importedSourcesCount++;
+            for (const url of urls) {
+              if (!channel.sources.some((s) => s.url === url)) {
+                channel.sources.push({
+                  id: "src_" + Math.random().toString(36).substring(2, 10),
+                  url,
+                  province,
+                  isp,
+                  status: "unknown",
+                });
+                importedSourcesCount++;
+              }
             }
             currentInfo = null;
           }
@@ -3826,7 +3837,12 @@ app.get("/api/channels", async (req, res) => {
           } else if (line.includes(",")) {
             const parts = line.split(",");
             const nameWithSpecs = parts[0].trim();
-            const url = parts[1].trim();
+            const urls = parts[1].split('#').map(u => {
+              let u2 = u.trim();
+              if (u2.includes('$')) u2 = u2.split('$')[0].trim();
+              return u2;
+            }).filter(Boolean);
+            if (urls.length === 0) continue;
 
             const { province, isp } = parseIspAndProvince(nameWithSpecs + " " + currentCategory);
             let name = nameWithSpecs.split("#")[0].trim();
