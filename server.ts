@@ -4171,6 +4171,12 @@ app.get("/api/channels", async (req, res) => {
         if (province && province !== "all" && source.province !== province) return;
         if (status && status !== "all" && source.status !== status) return;
 
+        // 服务端全网异步多线程测速，只针对多线直播源，不对指定isp的线路测速
+        const specificISPs = ["电信", "联通", "移动", "广电", "铁通"];
+        if (source.isp && specificISPs.includes(source.isp)) {
+          return;
+        }
+
         targetSources.push({
           id: source.id,
           channelId: channel.id,
