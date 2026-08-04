@@ -236,6 +236,12 @@ function initSqlite() {
   try {
     db.exec("ALTER TABLE groups ADD COLUMN isolated INTEGER DEFAULT 0");
   } catch (e) {}
+  try {
+    db.exec("ALTER TABLE sync_configs ADD COLUMN isp TEXT");
+  } catch (e) {}
+  try {
+    db.exec("ALTER TABLE sync_configs ADD COLUMN aliasOnly INTEGER DEFAULT 0");
+  } catch (e) {}
 
   // Seed default cron jobs if empty
   const hasCronJobs = db.prepare("SELECT COUNT(*) as count FROM cron_jobs").get() as { count: number };
@@ -2155,6 +2161,11 @@ async function performSync(config: SyncConfig, force = false) {
           }
           name = stripBitrateAndResolution(name);
 
+          if (name.includes("线路")) {
+            currentInfo = null;
+            continue;
+          }
+
           const nameParts = name.split(/[,;，；:]/).map(s => s.trim()).filter(Boolean);
           if (nameParts.length > 0) {
             name = nameParts[0];
@@ -2312,6 +2323,10 @@ async function performSync(config: SyncConfig, force = false) {
           // Strip ISP and specifications from standard channel title
           let name = nameWithSpecs.split("#")[0].trim();
           name = stripBitrateAndResolution(name);
+
+          if (name.includes("线路")) {
+            continue;
+          }
 
           const nameParts = name.split(/[,;，；:]/).map(s => s.trim()).filter(Boolean);
           if (nameParts.length > 0) {
@@ -3689,6 +3704,7 @@ app.get("/api/channels", async (req, res) => {
     }
 
     let deletedCount = 0;
+
     channels.forEach((c) => {
       const initialCount = c.sources.length;
       c.sources = c.sources.filter((s) => !sourceIds.includes(s.id));
