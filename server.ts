@@ -4163,8 +4163,10 @@ app.get("/api/channels", async (req, res) => {
     let targetSources: { id: string; channelId: string; url: string }[] = [];
 
     channels.forEach((channel) => {
+      if (channel.isolated) return;
       if (channelIds && !channelIds.includes(channel.id)) return;
       channel.sources.forEach((source) => {
+        if (source.isolated) return;
         // Apply filter constraints if specified
         if (sourceIds && !sourceIds.includes(source.id)) return;
         if (isp && isp !== "all" && source.isp !== isp) return;
@@ -4214,6 +4216,7 @@ app.get("/api/channels", async (req, res) => {
     const targetSources: any[] = [];
 
     channels.forEach((channel) => {
+      if (channel.isolated) return;
       if (!channel.sources) return;
       channel.sources.forEach((s) => {
         if (s.isolated) return;
