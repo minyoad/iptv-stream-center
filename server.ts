@@ -14,6 +14,7 @@ import https from "https";
 import crypto from "crypto";
 import { GoogleGenAI, Type } from "@google/genai";
 import Database from "better-sqlite3";
+import compression from "compression";
 
 interface LiveSource {
   id: string;
@@ -2592,6 +2593,7 @@ async function startServer() {
   const app = express();
   const PORT = 3000;
 
+  app.use(compression());
   app.use(express.json({ limit: "50mb" }));
 
   // Prevent browser caching for all API routes

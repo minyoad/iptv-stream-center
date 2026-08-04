@@ -2333,32 +2333,51 @@ export default function App() {
 
   const categoryCounts = useMemo(() => {
     const map: Record<string, number> = { all: channels.length };
-    groups.forEach((g) => {
-      map[g.name] = channels.filter((c) => c.groupIds.includes(g.id)).length;
+    
+    // Initialize group counts to 0
+    groups.forEach((g) => { map[g.name] = 0; });
+    
+    // Map group id to group name for fast lookup
+    const groupIdToName = new Map<string, string>();
+    groups.forEach(g => groupIdToName.set(g.id, g.name));
+
+    // Count channels for each group
+    channels.forEach(c => {
+      c.groupIds.forEach(gId => {
+        const name = groupIdToName.get(gId);
+        if (name && map[name] !== undefined) {
+          map[name]++;
+        }
+      });
     });
+
     return map;
   }, [channels, groups]);
 
-  const filteredChannels = channels.filter(c => {
-    const groupNames = c.groupIds.map(gId => groups.find(g => g.id === gId)?.name || "").filter(Boolean);
+  const filteredChannels = useMemo(() => {
+    const groupIdToName = new Map<string, string>();
+    groups.forEach(g => groupIdToName.set(g.id, g.name));
+
     const cleanQuery = searchQuery.toLowerCase().replace(/[-_.\s]+/g, "");
-    const matchesSearch = !cleanQuery ||
-                          c.name.toLowerCase().replace(/[-_.\s]+/g, "").includes(cleanQuery) ||
-                          c.alias.some(a => a.toLowerCase().replace(/[-_.\s]+/g, "").includes(cleanQuery)) ||
-                          groupNames.some(gn => gn.toLowerCase().replace(/[-_.\s]+/g, "").includes(cleanQuery));
-    
-    const matchesCategory = selectedCategory === "all" || c.groupIds.some(gId => {
-      const g = groups.find(gl => gl.id === gId);
-      return g && g.name === selectedCategory;
+
+    return channels.filter(c => {
+      const groupNames = c.groupIds.map(gId => groupIdToName.get(gId) || "").filter(Boolean);
+      
+      const matchesSearch = !cleanQuery ||
+                            c.name.toLowerCase().replace(/[-_.\s]+/g, "").includes(cleanQuery) ||
+                            c.alias.some(a => a.toLowerCase().replace(/[-_.\s]+/g, "").includes(cleanQuery)) ||
+                            groupNames.some(gn => gn.toLowerCase().replace(/[-_.\s]+/g, "").includes(cleanQuery));
+      
+      const matchesCategory = selectedCategory === "all" || groupNames.includes(selectedCategory);
+
+      const matchesIsolation =
+        channelFilterStatus === "all_with_isolated" ? true :
+        channelFilterStatus === "isolated" ? !!c.isolated :
+        !c.isolated;
+
+      return matchesSearch && matchesCategory && matchesIsolation;
     });
-
-    const matchesIsolation =
-      channelFilterStatus === "all_with_isolated" ? true :
-      channelFilterStatus === "isolated" ? !!c.isolated :
-      !c.isolated;
-
-    return matchesSearch && matchesCategory && matchesIsolation;
-  });
+  }, [channels, groups, searchQuery, selectedCategory, channelFilterStatus]);
 
   const slicedChannels = useMemo(() => {
     return filteredChannels.slice(0, channelPage * CHANNELS_PER_PAGE);
