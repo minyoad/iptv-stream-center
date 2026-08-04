@@ -4447,8 +4447,8 @@ app.get("/api/channels", async (req, res) => {
     // Merge caches
     for (const src of activeEpgSrcs) {
       const cache = getEpgCache(src.id);
-      if (cache) {
-        for (const [key, value] of Object.entries(cache)) {
+      if (cache && cache.raw) {
+        for (const [key, value] of Object.entries(cache.raw)) {
           if (!combinedCache[key]) {
             combinedCache[key] = { ...value, sourceId: src.id, sourceName: src.name };
           }
