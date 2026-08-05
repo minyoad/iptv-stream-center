@@ -1579,6 +1579,18 @@ function findMatchingEpgEntry(ch: Channel, cache: EpgCacheIndexed): EpgEntry | n
     }
   }
 
+  // 4. Fallback to direct check on explicit user-defined epgId
+  if (ch.epgId && ch.epgId.trim()) {
+    const rawEpgId = ch.epgId.trim();
+    if (cache.raw[rawEpgId]) return cache.raw[rawEpgId];
+
+    const lowerEpgId = rawEpgId.toLowerCase();
+    if (cache.idMap.has(lowerEpgId)) return cache.idMap.get(lowerEpgId)!;
+
+    const normEpgId = normalizeChannelName(rawEpgId);
+    if (normEpgId && cache.idMap.has(normEpgId)) return cache.idMap.get(normEpgId)!;
+  }
+
   return null;
 }
 
@@ -2246,7 +2258,7 @@ async function performSync(config: SyncConfig, force = false) {
               logo: currentInfo!.logo || "https://images.unsplash.com/photo-1598257006458-087169a1f08d?auto=format&fit=crop&w=48&h=48&q=80",
               groupIds: matchedGroupIds,
               alias: cleanAliases,
-              epgId: currentInfo!.epgId,
+              epgId: "",
               sources: [],
             };
             channels.push(channel);
@@ -3824,7 +3836,7 @@ app.get("/api/channels", async (req, res) => {
                 logo: currentInfo.logo || "https://images.unsplash.com/photo-1598257006458-087169a1f08d?auto=format&fit=crop&w=48&h=48&q=80",
                 groupIds: matchedGroupIds,
                 alias: cleanAliases,
-                epgId: currentInfo.epgId,
+                epgId: "",
                 sources: [],
               };
               channels.push(channel);
@@ -4515,71 +4527,41 @@ app.get("/api/channels", async (req, res) => {
   // EPG Mapping Status
   app.get("/api/epg/mapping-status", (req, res) => {
     const activeEpgSrcs = epgSources.filter(s => s.active);
-    const combinedCache: Record<string, { displayNames: string[], programs: any[], sourceId: string, sourceName: string }> = {};
     
-    // Merge caches
+    let epgTotalChannels = 0;
+    const uniqueIds = new Set<string>();
     for (const src of activeEpgSrcs) {
       const cache = getEpgCache(src.id);
       if (cache && cache.raw) {
-        for (const [key, value] of Object.entries(cache.raw)) {
-          if (!combinedCache[key]) {
-            combinedCache[key] = { ...value, sourceId: src.id, sourceName: src.name };
-          }
-        }
+        Object.keys(cache.raw).forEach(k => uniqueIds.add(k));
       }
     }
+    epgTotalChannels = uniqueIds.size;
 
-    const epgTotalChannels = Object.keys(combinedCache).length;
-
-    const mappedChannels = [];
-    const unmappedChannels = [];
+    const mappedChannels: any[] = [];
+    const unmappedChannels: any[] = [];
 
     for (const ch of channels) {
-      // Find matching entry
-      let matchedEntry = null;
-      let matchedOriginalId = null;
+      let matchedEntry: EpgEntry | null = null;
+      let matchedSourceName = "";
+      let matchedOriginalId = "";
 
-      // Duplicate find logic inline or reuse
-      if (ch.epgId) {
-        if (combinedCache[ch.epgId]) {
-           matchedEntry = combinedCache[ch.epgId];
-           matchedOriginalId = ch.epgId;
-        } else {
-           const foundKey = Object.keys(combinedCache).find(k => k.toLowerCase() === ch.epgId.toLowerCase());
-           if (foundKey) {
-             matchedEntry = combinedCache[foundKey];
-             matchedOriginalId = foundKey;
-           }
-        }
-      }
-
-      if (!matchedEntry) {
-        const chNameNorm = normalizeChannelName(ch.name);
-        const aliasNorms = (ch.alias || []).map(a => normalizeChannelName(a)).filter(Boolean);
-        for (const originalId of Object.keys(combinedCache)) {
-          const entry = combinedCache[originalId];
-          const originalIdNorm = normalizeChannelName(originalId);
-          if (ch.epgId && originalIdNorm === normalizeChannelName(ch.epgId)) {
+      for (const src of activeEpgSrcs) {
+        const cache = getEpgCache(src.id);
+        if (cache) {
+          const entry = findMatchingEpgEntry(ch, cache);
+          if (entry) {
             matchedEntry = entry;
-            matchedOriginalId = originalId;
-            break;
-          }
-          if (originalIdNorm === chNameNorm || aliasNorms.includes(originalIdNorm)) {
-            matchedEntry = entry;
-            matchedOriginalId = originalId;
-            break;
-          }
-          let foundInDisp = false;
-          for (const disp of entry.displayNames) {
-            const dispNorm = normalizeChannelName(disp);
-            if (dispNorm === chNameNorm || aliasNorms.includes(dispNorm)) {
-              matchedEntry = entry;
-              matchedOriginalId = originalId;
-              foundInDisp = true;
-              break;
+            matchedSourceName = src.name;
+            // Find the original XML id for this entry
+            for (const [key, val] of Object.entries(cache.raw)) {
+              if (val === entry) {
+                matchedOriginalId = key;
+                break;
+              }
             }
+            break;
           }
-          if (foundInDisp) break;
         }
       }
 
@@ -4590,7 +4572,7 @@ app.get("/api/channels", async (req, res) => {
           epgId: ch.epgId,
           matchedId: matchedOriginalId,
           matchedName: matchedEntry.displayNames[0] || matchedOriginalId,
-          sourceName: matchedEntry.sourceName
+          sourceName: matchedSourceName
         });
       } else {
         unmappedChannels.push({
