@@ -272,8 +272,8 @@ interface EpgEntry {
 
 interface EpgCacheIndexed {
   raw: Record<string, EpgEntry>;
-  exactLowerMap: Map<string, EpgEntry>;
-  normMap: Map<string, EpgEntry>;
+  idMap: Map<string, EpgEntry>;
+  nameMap: Map<string, EpgEntry>;
 }
 
 // Disk cache paths for exported EPG feeds
@@ -1498,23 +1498,23 @@ function parseXmltvTime(timeStr: string): { dateStr: string, timeStr: string } {
 }
 
 function buildEpgIndex(channelMap: Record<string, EpgEntry>): EpgCacheIndexed {
-  const exactLowerMap = new Map<string, EpgEntry>();
-  const normMap = new Map<string, EpgEntry>();
+  const idMap = new Map<string, EpgEntry>();
+  const nameMap = new Map<string, EpgEntry>();
 
   for (const [originalId, entry] of Object.entries(channelMap)) {
     if (!originalId) continue;
-    exactLowerMap.set(originalId.toLowerCase(), entry);
+    idMap.set(originalId.toLowerCase(), entry);
 
     const normId = normalizeChannelName(originalId);
-    if (normId && !normMap.has(normId)) {
-      normMap.set(normId, entry);
+    if (normId && !idMap.has(normId)) {
+      idMap.set(normId, entry);
     }
 
     if (entry.displayNames && Array.isArray(entry.displayNames)) {
       for (const disp of entry.displayNames) {
         const normDisp = normalizeChannelName(disp);
-        if (normDisp && !normMap.has(normDisp)) {
-          normMap.set(normDisp, entry);
+        if (normDisp && !nameMap.has(normDisp)) {
+          nameMap.set(normDisp, entry);
         }
       }
     }
@@ -1522,8 +1522,8 @@ function buildEpgIndex(channelMap: Record<string, EpgEntry>): EpgCacheIndexed {
 
   return {
     raw: channelMap,
-    exactLowerMap,
-    normMap,
+    idMap,
+    nameMap,
   };
 }
 
@@ -1548,45 +1548,33 @@ function getEpgCache(sourceId: string): EpgCacheIndexed | null {
 function findMatchingEpgEntry(ch: Channel, cache: EpgCacheIndexed): EpgEntry | null {
   if (!cache) return null;
 
-  // 1. Direct check on epgId
-  if (ch.epgId && ch.epgId.trim()) {
-    const rawEpgId = ch.epgId.trim();
-    if (cache.raw[rawEpgId]) return cache.raw[rawEpgId];
-
-    const lowerEpgId = rawEpgId.toLowerCase();
-    if (cache.exactLowerMap.has(lowerEpgId)) return cache.exactLowerMap.get(lowerEpgId)!;
-
-    const normEpgId = normalizeChannelName(rawEpgId);
-    if (normEpgId && cache.normMap.has(normEpgId)) return cache.normMap.get(normEpgId)!;
-  }
-
-  // 2. Check channel name normalized
+  // 1. Check channel name normalized (priority)
   const chNameNorm = normalizeChannelName(ch.name);
-  if (chNameNorm && cache.normMap.has(chNameNorm)) {
-    return cache.normMap.get(chNameNorm)!;
+  if (chNameNorm && cache.nameMap.has(chNameNorm)) {
+    return cache.nameMap.get(chNameNorm)!;
   }
 
-  // 3. Check channel alias normalized
+  // 2. Check channel alias normalized
   if (ch.alias && Array.isArray(ch.alias)) {
     for (const a of ch.alias) {
       const aNorm = normalizeChannelName(a);
-      if (aNorm && cache.normMap.has(aNorm)) {
-        return cache.normMap.get(aNorm)!;
+      if (aNorm && cache.nameMap.has(aNorm)) {
+        return cache.nameMap.get(aNorm)!;
       }
     }
   }
 
-  // 4. Check default templates and aliases
+  // 3. Check default templates and aliases
   const aliasTemplate = findAliasTemplate(ch.name);
   if (aliasTemplate) {
     const tNorm = normalizeChannelName(aliasTemplate.templateName);
-    if (tNorm && cache.normMap.has(tNorm)) {
-      return cache.normMap.get(tNorm)!;
+    if (tNorm && cache.nameMap.has(tNorm)) {
+      return cache.nameMap.get(tNorm)!;
     }
     for (const a of aliasTemplate.aliases) {
       const aNorm = normalizeChannelName(a);
-      if (aNorm && cache.normMap.has(aNorm)) {
-        return cache.normMap.get(aNorm)!;
+      if (aNorm && cache.nameMap.has(aNorm)) {
+        return cache.nameMap.get(aNorm)!;
       }
     }
   }
