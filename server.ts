@@ -1579,18 +1579,6 @@ function findMatchingEpgEntry(ch: Channel, cache: EpgCacheIndexed): EpgEntry | n
     }
   }
 
-  // 4. Fallback to direct check on explicit user-defined epgId
-  if (ch.epgId && ch.epgId.trim()) {
-    const rawEpgId = ch.epgId.trim();
-    if (cache.raw[rawEpgId]) return cache.raw[rawEpgId];
-
-    const lowerEpgId = rawEpgId.toLowerCase();
-    if (cache.idMap.has(lowerEpgId)) return cache.idMap.get(lowerEpgId)!;
-
-    const normEpgId = normalizeChannelName(rawEpgId);
-    if (normEpgId && cache.idMap.has(normEpgId)) return cache.idMap.get(normEpgId)!;
-  }
-
   return null;
 }
 
