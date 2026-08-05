@@ -2280,8 +2280,8 @@ async function performSync(config: SyncConfig, force = false) {
                 }
               });
             }
-            // Unconditionally update logo if provided in the M3U
-            if (currentInfo!.logo) {
+            // Update logo if provided in the M3U and current logo is invalid or system-generated
+            if (currentInfo!.logo && (!channel!.logo || channel!.logo.includes("unsplash.com"))) {
               channel!.logo = currentInfo!.logo;
             }
           }
@@ -3857,8 +3857,8 @@ app.get("/api/channels", async (req, res) => {
                   }
                 });
               }
-              // Unconditionally update logo if provided in the M3U
-              if (currentInfo.logo) {
+              // Update logo if provided in the M3U and current logo is invalid or system-generated
+              if (currentInfo.logo && (!channel!.logo || channel!.logo.includes("unsplash.com"))) {
                 channel!.logo = currentInfo.logo;
               }
             }
