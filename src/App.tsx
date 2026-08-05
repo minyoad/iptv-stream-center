@@ -65,6 +65,7 @@ export default function App() {
   const [autoSwitchGeoApi, setAutoSwitchGeoApi] = useState(true);
   const [isSavingNetwork, setIsSavingNetwork] = useState(false);
   const [autoCreateChannel, setAutoCreateChannel] = useState(true);
+  const [m3uLogoVersion, setM3uLogoVersion] = useState("");
   const [isBatchSyncing, setIsBatchSyncing] = useState(false);
   const [isSavingProxy, setIsSavingProxy] = useState(false);
   const [epgSources, setEpgSources] = useState<EpgSource[]>([]);
@@ -338,6 +339,8 @@ export default function App() {
     province: "",
     status: "",
     limit: "",
+    maxPerChannel: "",
+    v: "",
   });
 
   // Unique lists computed from all active live sources
@@ -579,6 +582,7 @@ export default function App() {
           setGithubProxy(data.settings.githubProxy || "");
           setGithubProxyInput(data.settings.githubProxy || "");
           setAutoCreateChannel(data.settings.autoCreateChannel !== false);
+          setM3uLogoVersion(data.settings.m3uLogoVersion || "");
           setIpGeoApis(data.settings.ipGeoApis || []);
           setAutoSwitchGeoApi(data.settings.autoSwitchGeoApi !== false);
         }
@@ -875,6 +879,25 @@ export default function App() {
         showFeedback("success", `全局设置已更新：导入与同步时${val ? "允许" : "静默禁止"}新建频道、分组与分类`);
       } else {
         showFeedback("error", "更新全局设置失败");
+      }
+    } catch (e) {
+      showFeedback("error", "网络连接异常，更新设置失败");
+    }
+  };
+
+  const handleSaveLogoVersion = async () => {
+    try {
+      const res = await fetch("/api/settings", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ m3uLogoVersion })
+      });
+      if (res.ok) {
+        showFeedback("success", `全局 Logo 版本号已更新为: ${m3uLogoVersion || "无(清空)"}`);
+      } else {
+        showFeedback("error", "更新 Logo 版本号失败");
       }
     } catch (e) {
       showFeedback("error", "网络连接异常，更新设置失败");
@@ -2389,6 +2412,7 @@ export default function App() {
     if (exportParams.province) parts.push(`province=${encodeURIComponent(exportParams.province)}`);
     if (exportParams.status) parts.push(`status=${encodeURIComponent(exportParams.status)}`);
     if (exportParams.limit) parts.push(`limit=${encodeURIComponent(exportParams.limit)}`);
+    if (exportParams.maxPerChannel) parts.push(`maxPerChannel=${encodeURIComponent(exportParams.maxPerChannel)}`);
     return parts.length > 0 ? "?" + parts.join("&") : "";
   };
 
@@ -5075,8 +5099,27 @@ export default function App() {
                         value={exportParams.limit}
                         onChange={(e) => setExportParams({...exportParams, limit: e.target.value})}
                         placeholder="不限制"
-                        className="w-full text-xs p-2.5 border border-slate-200 rounded-xl focus:outline-none"
+                        className="w-full text-xs p-2.5 border border-slate-200 rounded-xl focus:outline-none focus:border-indigo-500"
                       />
+                    </div>
+                    
+                    <div className="space-y-1.5">
+                      <label>Logo 强制刷新版本号 (防缓存，全局生效，不改变链接)</label>
+                      <div className="flex gap-2">
+                        <input 
+                          type="text"
+                          value={m3uLogoVersion}
+                          onChange={(e) => setM3uLogoVersion(e.target.value)}
+                          placeholder="如: 2, v3, 20240101"
+                          className="flex-1 text-xs p-2.5 border border-slate-200 rounded-xl focus:outline-none focus:border-indigo-500"
+                        />
+                        <button
+                          onClick={handleSaveLogoVersion}
+                          className="px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs rounded-xl transition whitespace-nowrap"
+                        >
+                          保存版本
+                        </button>
+                      </div>
                     </div>
                   </div>
                 </div>

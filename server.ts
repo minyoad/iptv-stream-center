@@ -53,8 +53,8 @@ interface SyncConfig {
   name: string;
   url: string;
   type: "m3u" | "txt";
-  autoSync: boolean;
-  syncInterval: number; // working in hours (e.g. 1, 6, 12, 24)
+  autoSync?: boolean;
+  syncInterval?: number; // working in hours (e.g. 1, 6, 12, 24)
   lastSynced?: string;
   status: "success" | "failed" | "never";
   message?: string;
@@ -62,6 +62,7 @@ interface SyncConfig {
   consecutiveFailures?: number;
   contentHash?: string;
   isp?: string;
+  aliasOnly?: boolean;
 }
 
 interface EpgSource {
@@ -104,6 +105,7 @@ let epgSources: EpgSource[] = [];
 let adminPassword = process.env.ADMIN_PASSWORD || "";
 let githubProxy = "";
 let autoCreateChannel = true;
+let m3uLogoVersion = "";
 export interface IpGeoApi {
   id: string;
   name: string;
@@ -334,6 +336,7 @@ function getPlaylistCacheKey(params: {
   limit?: string | number;
   maxPerChannel?: string | number;
   baseUrl?: string;
+  v?: string;
 }): string {
   const rawKey = [
     params.format || "m3u",
@@ -343,7 +346,8 @@ function getPlaylistCacheKey(params: {
     params.status || "",
     params.limit || "",
     params.maxPerChannel || "",
-    params.baseUrl || ""
+    params.baseUrl || "",
+    params.v || ""
   ].join("|");
   return crypto.createHash("md5").update(rawKey).digest("hex");
 }
@@ -358,6 +362,7 @@ function getOrGeneratePlaylistExport(
     limit?: string | number;
     maxPerChannel?: string | number;
     baseUrl?: string;
+    v?: string;
   },
   generatorFn: () => string
 ): { content: string; etag: string } {
@@ -765,6 +770,7 @@ function loadData() {
       for (const row of loadedSettings as any[]) {
         if (row.key === "adminPassword") adminPassword = row.value;
         if (row.key === "githubProxy") githubProxy = row.value;
+        if (row.key === "m3uLogoVersion") m3uLogoVersion = row.value;
         if (row.key === "autoCreateChannel") autoCreateChannel = (row.value === "true" || row.value === "1");
         if (row.key === "ipGeoApis") {
           try { ipGeoApis = JSON.parse(row.value); } catch(e) {}
@@ -1085,6 +1091,7 @@ function saveDataSync() {
       insertSetting.run("adminPassword", adminPassword);
       insertSetting.run("githubProxy", githubProxy);
       insertSetting.run("autoCreateChannel", autoCreateChannel ? "true" : "false");
+      insertSetting.run("m3uLogoVersion", m3uLogoVersion);
       insertSetting.run("ipGeoApis", JSON.stringify(ipGeoApis));
       insertSetting.run("autoSwitchGeoApi", autoSwitchGeoApi ? "true" : "false");
 
@@ -2787,11 +2794,11 @@ async function startServer() {
   // API Endpoints
   // Settings Endpoints
   app.get("/api/settings", (req, res) => {
-    res.json({ githubProxy, autoCreateChannel, ipGeoApis, autoSwitchGeoApi });
+    res.json({ githubProxy, autoCreateChannel, ipGeoApis, autoSwitchGeoApi, m3uLogoVersion });
   });
 
   app.post("/api/settings", (req, res) => {
-    const { githubProxy: proxy, autoCreateChannel: autoCreate, ipGeoApis: newIpGeoApis, autoSwitchGeoApi: newAutoSwitchGeoApi } = req.body;
+    const { githubProxy: proxy, autoCreateChannel: autoCreate, ipGeoApis: newIpGeoApis, autoSwitchGeoApi: newAutoSwitchGeoApi, m3uLogoVersion: newM3uLogoVersion } = req.body;
     if (proxy !== undefined) {
       githubProxy = (proxy || "").trim();
     }
@@ -2804,9 +2811,12 @@ async function startServer() {
     if (newAutoSwitchGeoApi !== undefined) {
       autoSwitchGeoApi = !!newAutoSwitchGeoApi;
     }
+    if (newM3uLogoVersion !== undefined) {
+      m3uLogoVersion = (newM3uLogoVersion || "").trim();
+    }
 
     saveData();
-    res.json({ success: true, githubProxy, autoCreateChannel, ipGeoApis, autoSwitchGeoApi });
+    res.json({ success: true, githubProxy, autoCreateChannel, ipGeoApis, autoSwitchGeoApi, m3uLogoVersion });
   });
 
   // EPG Sources REST Endpoints
@@ -4787,7 +4797,7 @@ ${JSON.stringify(scoredList.map(c => ({ epgId: c.epgId, names: c.displayNames, s
   // Example usage: http://localhost:3000/api/export/m3u?isp=电信&status=active
   // Example usage: http://localhost:3000/api/export/txt?province=北京
   app.get("/api/export/m3u", async (req, res) => {
-    const { category, isp, province, status, limit, maxPerChannel: queryMaxPerChannel, ip, clientIp } = req.query;
+    const { category, isp, province, status, limit, maxPerChannel: queryMaxPerChannel, ip, clientIp, v } = req.query;
 
     let targetProvince = province ? String(province) : "";
     let targetIsp = isp ? String(isp) : "";
@@ -4832,7 +4842,8 @@ ${JSON.stringify(scoredList.map(c => ({ epgId: c.epgId, names: c.displayNames, s
       status: status ? String(status) : undefined,
       limit: limit ? String(limit) : undefined,
       maxPerChannel: queryMaxPerChannel ? String(queryMaxPerChannel) : undefined,
-      baseUrl
+      baseUrl,
+      v: m3uLogoVersion || undefined
     };
 
     const { content, etag } = getOrGeneratePlaylistExport(cacheParams, () => {
@@ -4840,6 +4851,7 @@ ${JSON.stringify(scoredList.map(c => ({ epgId: c.epgId, names: c.displayNames, s
       let count = 0;
       const maxLimit = limit ? Number(limit) : Infinity;
       const maxPerChannel = queryMaxPerChannel ? Number(queryMaxPerChannel) : 15;
+      const versionString = m3uLogoVersion || "";
 
       const orderedGroups = [...groups, { id: "g_other", name: "其它频道" }];
       orderedGroups.forEach((group) => {
@@ -4879,8 +4891,13 @@ ${JSON.stringify(scoredList.map(c => ({ epgId: c.epgId, names: c.displayNames, s
             if (count >= maxLimit) return;
 
             const channelDisplayName = channel.name;
+            let logoUrl = channel.logo || "";
+            if (logoUrl && versionString) {
+              logoUrl += (logoUrl.includes("?") ? "&v=" : "?v=") + versionString;
+            }
+            
             playlistRows.push(
-              `#EXTINF:-1 tvg-id="${channel.epgId}" tvg-name="${channel.name}" tvg-logo="${channel.logo}" group-title="${groupName}",${channelDisplayName}`
+              `#EXTINF:-1 tvg-id="${channel.epgId}" tvg-name="${channel.name}" tvg-logo="${logoUrl}" group-title="${groupName}",${channelDisplayName}`
             );
             playlistRows.push(bestSource.url);
             count++;
