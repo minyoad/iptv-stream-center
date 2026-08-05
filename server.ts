@@ -1576,6 +1576,21 @@ function findMatchingEpgEntry(ch: Channel, cache: EpgCacheIndexed): EpgEntry | n
     }
   }
 
+  // 4. Check default templates and aliases
+  const aliasTemplate = findAliasTemplate(ch.name);
+  if (aliasTemplate) {
+    const tNorm = normalizeChannelName(aliasTemplate.templateName);
+    if (tNorm && cache.normMap.has(tNorm)) {
+      return cache.normMap.get(tNorm)!;
+    }
+    for (const a of aliasTemplate.aliases) {
+      const aNorm = normalizeChannelName(a);
+      if (aNorm && cache.normMap.has(aNorm)) {
+        return cache.normMap.get(aNorm)!;
+      }
+    }
+  }
+
   return null;
 }
 
