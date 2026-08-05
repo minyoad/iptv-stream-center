@@ -100,7 +100,7 @@ export const SortableChannelItem: React.FC<SortableChannelItemProps> = ({
           <img
             src={channel.logo}
             alt="logo"
-            className="w-7 h-7 rounded-lg object-contain bg-slate-100 p-0.5 shadow-2xs shrink-0"
+            className="w-7 h-7 rounded-lg object-contain bg-slate-100 p-0.5 shadow-2xs shrink-0 transition-transform duration-300 hover:scale-[3.5] origin-left relative hover:z-50 hover:shadow-xl cursor-zoom-in"
             onError={(e) => {
               (e.target as HTMLImageElement).style.display = "none";
             }}

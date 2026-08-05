@@ -264,6 +264,24 @@ export default function App() {
     setGlobalSourcePage(1);
   }, [globalSourceSearch, globalSourceIsp, globalSourceProvince, globalSourceStatus]);
 
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setIsChannelModalOpen(false);
+        setIsSourceModalOpen(false);
+        setIsSyncModalOpen(false);
+        setIsBatchGroupModalOpen(false);
+        setIsBatchSourceModalOpen(false);
+        setIsBatchGlobalSourceModalOpen(false);
+        setIsMergeModalOpen(false);
+        setIsCleanupModalOpen(false);
+        setIsMappingStatusOpen(false);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
+
   // Option 2 Client Local Speed Test engine and dynamic state
   const [isClientTesting, setIsClientTesting] = useState(false);
   const [clientTestProgress, setClientTestProgress] = useState(0);
@@ -3195,7 +3213,7 @@ export default function App() {
                               <img 
                                 src={selectedChannel.logo} 
                                 alt="logo" 
-                                className="w-10 h-10 rounded-xl object-contain bg-slate-50 border border-slate-100 p-1 shadow-sm" 
+                                className="w-10 h-10 rounded-xl object-contain bg-slate-50 border border-slate-100 p-1 shadow-sm transition-transform duration-300 hover:scale-[3] origin-left relative hover:z-50 hover:shadow-xl cursor-zoom-in" 
                                 onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
                               />
                             ) : (

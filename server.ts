@@ -3014,7 +3014,7 @@ async function startServer() {
       syncConfigs,
       groups,
       epgSources,
-      settings: { githubProxy, autoCreateChannel, ipGeoApis, autoSwitchGeoApi }
+      settings: { githubProxy, autoCreateChannel, ipGeoApis, autoSwitchGeoApi, m3uLogoVersion }
     });
   });
 
