@@ -13,6 +13,7 @@ import {
   RotateCw
 } from "lucide-react";
 import { Channel, LiveSource, SyncConfig } from "../types";
+import StatsView from "./StatsView";
 
 interface DashboardProps {
   channels: Channel[];
@@ -291,6 +292,10 @@ export default function DashboardView({
             </div>
           </div>
         </div>
+      </div>
+
+      <div className="pt-4 border-t border-slate-100">
+        <StatsView channels={channels} />
       </div>
     </div>
   );

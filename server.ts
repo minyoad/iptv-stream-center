@@ -2494,7 +2494,9 @@ function calculateNextRun(startTime: string, intervalMinutes: number, lastRunStr
 
 async function runCronJob(job: any) {
   const nowStr = new Date().toISOString();
-  db.prepare("UPDATE cron_jobs SET lastRun = ? WHERE id = ?").run(nowStr, job.id);
+  // Update nextRun immediately to prevent concurrent triggers by setInterval
+  const nextRun = calculateNextRun(job.startTime, job.intervalMinutes, nowStr);
+  db.prepare("UPDATE cron_jobs SET lastRun = ?, nextRun = ? WHERE id = ?").run(nowStr, nextRun, job.id);
   
   const insertLog = db.prepare("INSERT INTO cron_logs (id, jobId, runAt, status, message) VALUES (?, ?, ?, ?, ?)");
   const logId = Math.random().toString(36).substring(2, 10);
@@ -2548,10 +2550,6 @@ async function runCronJob(job: any) {
   } catch (err: any) {
     insertLog.run(logId, job.id, nowStr, "failed", err.message || "执行失败");
   }
-  
-  // Update nextRun
-  const nextRun = calculateNextRun(job.startTime, job.intervalMinutes, nowStr);
-  db.prepare("UPDATE cron_jobs SET nextRun = ? WHERE id = ?").run(nextRun, job.id);
 }
 
 // Background Cron-like Scheduler to perform Scheduled Sync

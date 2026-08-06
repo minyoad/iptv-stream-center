@@ -40,7 +40,6 @@ import {
 import { Channel, LiveSource, SyncConfig, TestStatus, EpgGuide, Group, EpgSource } from "./types";
 import { arrayMove } from "@dnd-kit/sortable";
 import DashboardView from "./components/DashboardView";
-import StatsView from "./components/StatsView";
 import { DraggableChannelList } from "./components/DraggableChannelList";
 import { DraggableGroupList } from "./components/DraggableGroupList";
 
@@ -2597,22 +2596,6 @@ export default function App() {
           
           <button 
             onClick={() => {
-              setActiveTab("stats");
-              setIsMobileMenuOpen(false);
-            }}
-            className={`w-full flex items-center gap-3.5 px-4 py-3 rounded-xl transition text-xs font-semibold ${
-              activeTab === "stats" 
-              ? "bg-blue-50/75 text-blue-700 font-bold" 
-              : "text-slate-500 hover:bg-slate-50 hover:text-slate-800"
-            }`}
-            id="nav_stats"
-          >
-            <Activity className="w-4 h-4" />
-            线路质量与统计
-          </button>
-
-          <button 
-            onClick={() => {
               setActiveTab("sync");
               setIsMobileMenuOpen(false);
             }}
@@ -2742,7 +2725,6 @@ export default function App() {
             <h1 className="text-xs sm:text-sm md:text-base font-bold text-slate-800 truncate">
               {activeTab === "dashboard" && "直播管理中心一览 (Dashboard)"}
               {activeTab === "channels" && "频道列表与线路维护中心"}
-              {activeTab === "stats" && "线路质量与统计分析 (Stream Statistics)"}
               {activeTab === "sync" && "M3U / TXT 网络同步订阅与自定义文件导入"}
               {activeTab === "export" && "播放接口配置生成工具"}
               {activeTab === "epg" && "EPG XML 节目单同步整合中心"}
@@ -2786,17 +2768,13 @@ export default function App() {
               testingStatus={testingStatus.status}
             />
           )}
-
-          {activeTab === "stats" && (
-            <StatsView channels={channels} />
-          )}
           
           {/* VIEW: CHANNELS & SOURCE EDITOR */}
           {activeTab === "channels" && (
             <div className="space-y-6 animate-fade-in" id="tab_channels_view">
               
               {/* Inner sub-tab selection */}
-              <div className="flex items-center gap-2 sm:gap-2.5 overflow-x-auto pb-1 scrollbar-none">
+              <div className="flex flex-wrap items-center gap-2 sm:gap-2.5 pb-1">
                 <button
                   onClick={() => setChannelSubTab("channels")}
                   className={`px-3.5 sm:px-4 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 shrink-0 cursor-pointer ${
@@ -3007,7 +2985,7 @@ export default function App() {
                       </div>
 
                       {/* Action buttons bar */}
-                      <div className="flex items-center gap-1.5 overflow-x-auto pb-1 sm:pb-0 scrollbar-none shrink-0">
+                      <div className="flex flex-wrap items-center gap-1.5 shrink-0">
                         <button 
                           onClick={cleanupDuplicateSources}
                           className="px-2.5 sm:px-3.5 py-1.5 sm:py-2 border border-orange-200 text-orange-600 hover:bg-orange-50 text-[11px] font-bold rounded-xl transition cursor-pointer flex items-center shrink-0"
@@ -3035,12 +3013,12 @@ export default function App() {
                     </div>
 
                     {/* Touch & Horizontal Scrollable Category Pills bar with Channel Counts */}
-                    <div className="flex md:flex-wrap md:items-start items-center gap-1.5 bg-white border border-slate-200 rounded-xl px-2 py-1.5 overflow-x-auto scrollbar-none shadow-2xs" id="category_pills">
+                    <div className="flex flex-wrap items-center md:items-start gap-1.5 bg-white border border-slate-200 rounded-xl px-2 py-1.5 shadow-2xs" id="category_pills">
                       <div className="flex items-center md:pt-1.5 text-slate-400 pl-1 pr-1 shrink-0 text-xs font-semibold gap-1">
                         <Filter className="w-3.5 h-3.5 text-indigo-500" />
                         <span className="text-[10px] text-slate-400 hidden md:inline">分组:</span>
                       </div>
-                      <div className="flex md:flex-wrap items-center gap-1.5 overflow-x-auto md:overflow-visible scrollbar-none py-0.5 flex-1">
+                      <div className="flex flex-wrap items-center gap-1.5 py-0.5 flex-1">
                         {getUniqueCategories().map((cat) => {
                           const count = categoryCounts[cat] ?? 0;
                           const isSelected = selectedCategory === cat;
@@ -3213,7 +3191,7 @@ export default function App() {
                               <img 
                                 src={selectedChannel.logo} 
                                 alt="logo" 
-                                className="w-10 h-10 rounded-xl object-contain bg-slate-50 border border-slate-100 p-1 shadow-sm transition-transform duration-300 hover:scale-[3] origin-left relative hover:z-50 hover:shadow-xl cursor-zoom-in" 
+                                className="w-10 h-10 rounded-xl object-contain bg-slate-50 border border-slate-100 p-1 shadow-sm transition-all duration-300 ease-in-out hover:scale-[4] hover:border-slate-300 origin-left relative hover:z-50 hover:shadow-xl cursor-zoom-in" 
                                 onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
                               />
                             ) : (
@@ -3669,7 +3647,7 @@ export default function App() {
                       <div className="bg-slate-50/60 p-3 sm:p-4 rounded-xl space-y-3 border border-slate-100 text-xs text-slate-650">
                         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1.5">
                           <span className="font-bold text-[11px] text-slate-600">并发线程数 (Concurrency)：</span>
-                          <div className="flex gap-1 shrink-0 overflow-x-auto scrollbar-none py-0.5">
+                          <div className="flex flex-wrap gap-1 shrink-0 py-0.5">
                             {[4, 8, 16, 24, 32].map((num) => (
                               <button
                                 key={num}
