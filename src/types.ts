@@ -1,3 +1,11 @@
+export interface IpGeoApi {
+  id: string;
+  name: string;
+  url: string;
+  enabled: boolean;
+  failCount?: number;
+}
+
 export interface LiveSource {
   id: string;
   url: string;

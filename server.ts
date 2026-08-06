@@ -111,6 +111,7 @@ export interface IpGeoApi {
   name: string;
   url: string;
   enabled: boolean;
+  failCount?: number;
 }
 
 let ipGeoApis: IpGeoApi[] = [
@@ -1785,11 +1786,28 @@ async function getClientIpGeo(ipString: string): Promise<{ province: string, isp
           const geo = { province: matchedProvince, isp: matchedIsp };
           ipGeoCache.set(ip, geo);
           console.log(`[IP GEO LOOKUP] Resolved IP ${ip} via ${api.name}: province=${geo.province}, isp=${geo.isp}`);
+          
+          // Reset failCount on success
+          if (api.failCount && api.failCount > 0) {
+            api.failCount = 0;
+            saveData();
+          }
+
           return geo;
         }
+      } else {
+        throw new Error(`HTTP Error ${res.status}`);
       }
     } catch (err: any) {
       console.error(`[IP GEO LOOKUP ERROR] API ${api.name} for ${ip}: ${err.message || err}`);
+      
+      // Increment failCount and disable if >= 3
+      api.failCount = (api.failCount || 0) + 1;
+      if (api.failCount >= 3) {
+        console.warn(`[IP GEO LOOKUP] Auto-disabling API ${api.name} due to ${api.failCount} consecutive failures.`);
+        api.enabled = false;
+      }
+      saveData();
     }
 
     if (!autoSwitchGeoApi) break;

@@ -42,16 +42,11 @@ import { arrayMove } from "@dnd-kit/sortable";
 import DashboardView from "./components/DashboardView";
 import { DraggableChannelList } from "./components/DraggableChannelList";
 import { DraggableGroupList } from "./components/DraggableGroupList";
+import { SortableIpGeoApiList } from "./components/SortableIpGeoApiList";
+import { IpGeoApi } from "./types";
 
 // Define the global variable provided by Vite
 declare const __APP_BUILD_VERSION__: string;
-
-export interface IpGeoApi {
-  id: string;
-  name: string;
-  url: string;
-  enabled: boolean;
-}
 
 export default function App() {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
@@ -4618,54 +4613,12 @@ export default function App() {
                 </div>
                 
                 <div className="space-y-4">
-                  {ipGeoApis.map((api, idx) => (
-                    <div key={api.id} className="flex flex-col sm:flex-row items-center gap-3 p-3 bg-slate-50 border border-slate-100 rounded-xl">
-                      <input 
-                        type="checkbox"
-                        checked={api.enabled}
-                        onChange={(e) => {
-                          const newApis = [...ipGeoApis];
-                          newApis[idx].enabled = e.target.checked;
-                          setIpGeoApis(newApis);
-                        }}
-                        className="w-4 h-4 text-indigo-600 rounded cursor-pointer"
-                      />
-                      <div className="flex-1 w-full">
-                        <input 
-                          type="text"
-                          value={api.name}
-                          onChange={(e) => {
-                            const newApis = [...ipGeoApis];
-                            newApis[idx].name = e.target.value;
-                            setIpGeoApis(newApis);
-                          }}
-                          className="w-1/2 min-w-[150px] px-2 py-1 -ml-2 text-xs font-bold text-slate-700 mb-1 bg-transparent border-b border-transparent hover:border-slate-300 focus:border-indigo-500 focus:outline-none transition-colors"
-                          placeholder="API 名称"
-                        />
-                        <input 
-                          type="text"
-                          value={api.url}
-                          onChange={(e) => {
-                            const newApis = [...ipGeoApis];
-                            newApis[idx].url = e.target.value;
-                            setIpGeoApis(newApis);
-                          }}
-                          className="w-full px-3 py-2 text-[11px] font-mono border border-slate-200 rounded-lg focus:outline-none focus:border-indigo-500"
-                          placeholder="URL (包含 {{ip}} 占位符)"
-                        />
-                      </div>
-                    </div>
-                  ))}
-                  
-                  <label className="flex items-center gap-2 cursor-pointer mt-2 pl-1">
-                    <input
-                      type="checkbox"
-                      checked={autoSwitchGeoApi}
-                      onChange={(e) => setAutoSwitchGeoApi(e.target.checked)}
-                      className="w-4 h-4 text-indigo-600 rounded focus:ring-indigo-500 border-slate-300"
-                    />
-                    <span className="text-xs font-bold text-slate-700">自动切换备用源 (当首选 API 失败或返回为空时自动轮询下一个)</span>
-                  </label>
+                  <SortableIpGeoApiList 
+                    ipGeoApis={ipGeoApis} 
+                    setIpGeoApis={setIpGeoApis} 
+                    autoSwitchGeoApi={autoSwitchGeoApi} 
+                    setAutoSwitchGeoApi={setAutoSwitchGeoApi} 
+                  />
                   
                   <div className="pt-2 flex justify-end">
                     <button
