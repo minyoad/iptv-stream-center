@@ -3934,12 +3934,20 @@ export default function App() {
                       </div>
 
                       <div className="space-y-3.5 text-slate-300 leading-relaxed font-sans shrink-0">
-                        <p className="text-xs font-semibold">
-                          我们提供高标准的开放 API 接口。任何外界硬件探针、机顶盒或定时脚本（如 Cron 命令行代测、Kodi 测速插件、TvBox 本地测速包）均可直接批量向该网关发送性能报告。
-【协议特殊处理规则】：
-1. HTTP/HTTPS/HLS/FLV：利用探针无跨域限制探针直测并计算 RTT 响应延时。
-2. RTSP / RTMP：内置 RTSP(端口554) 与 RTMP(端口1935) 智能 TCP Socket 握手机制与协议端口转换降级探测，解决浏览器原生沙箱屏蔽与 TypeError 误判痛点。
-                        </p>
+                        <div className="text-xs font-semibold flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 bg-slate-800/50 p-3 rounded-xl border border-slate-700/50">
+                          <div>
+                            我们提供高标准的开放 API 接口。任何外界硬件探针、机顶盒或定时脚本（如 Cron 命令行代测、Kodi 测速插件、TvBox 本地测速包）均可直接批量向该网关发送性能报告。
+                            <div className="text-slate-400 mt-1">
+                              【协议特殊处理规则】：<br/>
+                              1. HTTP/HTTPS/HLS/FLV：利用探针无跨域限制探针直测并计算 RTT 响应延时。<br/>
+                              2. RTSP / RTMP：内置 RTSP(端口554) 与 RTMP(端口1935) 智能 TCP Socket 握手机制与协议端口转换降级探测，解决浏览器原生沙箱屏蔽与 TypeError 误判痛点。
+                            </div>
+                          </div>
+                          <a href="/iptv_probe2.py" download="iptv_probe2.py" className="bg-indigo-500/20 hover:bg-indigo-500/30 text-indigo-300 border border-indigo-500/30 px-3 py-2 rounded-lg flex items-center gap-1.5 shrink-0 transition font-bold whitespace-nowrap">
+                            <Download className="w-4 h-4" />
+                            下载 Python 本地探针脚本
+                          </a>
+                        </div>
 
                         <div className="space-y-1 bg-slate-950 p-3 rounded-xl border border-slate-800 text-[11px] font-mono">
                           <span className="text-emerald-400 font-bold block pb-1">1. 获取待测源清单接口 (Get Target Test Sources)：</span>
