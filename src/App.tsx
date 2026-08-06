@@ -55,6 +55,7 @@ export interface IpGeoApi {
 
 export default function App() {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  const [isSpeedTestConfigOpen, setIsSpeedTestConfigOpen] = useState(false);
   const [channels, setChannels] = useState<Channel[]>([]);
   const [syncConfigs, setSyncConfigs] = useState<SyncConfig[]>([]);
   const [groups, setGroups] = useState<Group[]>([]);
@@ -3627,7 +3628,41 @@ export default function App() {
                   </div>
 
                   {/* 双驱多维度 ISP 测速工作区 */}
-                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6 bg-slate-50 p-3.5 sm:p-6 rounded-2xl border border-slate-200" id="double_speed_test_center">
+                  <div className="flex items-center justify-between bg-white border border-slate-200 p-4 rounded-xl shadow-xs">
+                    <div className="flex items-center gap-2.5">
+                      <div className="w-8 h-8 rounded-lg bg-indigo-50 flex items-center justify-center shrink-0">
+                        <Activity className="w-4 h-4 text-indigo-600" />
+                      </div>
+                      <div>
+                        <h3 className="text-[13px] font-bold text-slate-800 leading-tight">并发测速与开放平台 (API)</h3>
+                        <p className="text-[10px] text-slate-500 font-semibold mt-0.5 hidden sm:block">展开以配置云端多线程测速参数及查看浏览器端测速引擎</p>
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => setIsSpeedTestConfigOpen(!isSpeedTestConfigOpen)}
+                      className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-colors border cursor-pointer select-none flex items-center gap-1.5 shrink-0 ${
+                        isSpeedTestConfigOpen 
+                          ? "bg-slate-100 text-slate-500 border-slate-200 hover:bg-slate-200" 
+                          : "bg-indigo-50 text-indigo-600 border-indigo-100 hover:bg-indigo-100"
+                      }`}
+                    >
+                      {isSpeedTestConfigOpen ? (
+                        <>
+                          <ChevronUp className="w-3.5 h-3.5" />
+                          收起测速控制台
+                        </>
+                      ) : (
+                        <>
+                          <ChevronDown className="w-3.5 h-3.5" />
+                          展开测速配置
+                        </>
+                      )}
+                    </button>
+                  </div>
+                  
+                  {isSpeedTestConfigOpen && (
+                    <>
+                      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6 bg-slate-50 p-3.5 sm:p-6 rounded-2xl border border-slate-200 animate-fade-in" id="double_speed_test_center">
                     
                     {/* 方案一 Column: 服务端极速多线程测速 */}
                     <div className="bg-white p-3.5 sm:p-5 rounded-xl border border-slate-150 shadow-xs flex flex-col justify-between space-y-3.5" id="server_side_test_scheme">
@@ -3948,6 +3983,8 @@ export default function App() {
                         </div>
                       </div>
                     </div>
+                  )}
+                    </>
                   )}
 
                   {/* Multi-Dimensional Filters Card */}
