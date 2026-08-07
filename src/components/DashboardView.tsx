@@ -31,7 +31,7 @@ export default function DashboardView({
   testingStatus,
 }: DashboardProps) {
   // Stats calculations
-  const totalChannels = channels.length;
+  const totalChannels = channels.filter(c => !c.isolated).length;
   
   let totalSources = 0;
   let activeSources = 0;
@@ -50,8 +50,12 @@ export default function DashboardView({
   const provinceCounts: Record<string, number> = {};
 
   channels.forEach((channel) => {
-    totalSources += channel.sources.length;
+    if (channel.isolated) return;
     channel.sources.forEach((s) => {
+      if (s.isolated) return;
+      
+      totalSources++;
+
       // Status
       if (s.status === "active") activeSources++;
       else if (s.status === "inactive") inactiveSources++;
@@ -150,22 +154,22 @@ export default function DashboardView({
                 <span className="w-2.5 h-2.5 rounded-full bg-slate-400 mr-2" />
                 未检测线路
               </span>
-              <span className="text-sm font-bold text-slate-700">{unknownSources} ({totalSources ? Math.round((unknownSources/totalSources)*100) : 0}%)</span>
+              <span className="text-sm font-bold text-slate-700">{unknownSources} ({totalSources ? Math.max(0, 100 - Math.round((activeSources/totalSources)*100) - Math.round((inactiveSources/totalSources)*100)) : 0}%)</span>
             </div>
 
             {/* Custom SVG gauge bar */}
             <div className="h-3.5 w-full bg-slate-100 rounded-full flex overflow-hidden">
               <div 
                 className="bg-emerald-500 h-full transition-all duration-500" 
-                style={{ width: `${totalSources ? (activeSources/totalSources)*100 : 0}%` }}
+                style={{ flex: activeSources > 0 ? activeSources : 0 }}
               />
               <div 
                 className="bg-rose-500 h-full transition-all duration-500" 
-                style={{ width: `${totalSources ? (inactiveSources/totalSources)*100 : 0}%` }}
+                style={{ flex: inactiveSources > 0 ? inactiveSources : 0 }}
               />
               <div 
                 className="bg-slate-300 h-full transition-all duration-500" 
-                style={{ width: `${totalSources ? (unknownSources/totalSources)*100 : 0}%` }}
+                style={{ flex: unknownSources > 0 ? unknownSources : 0 }}
               />
             </div>
             
