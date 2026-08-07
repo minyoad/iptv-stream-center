@@ -3175,7 +3175,12 @@ app.get("/api/channels", async (req, res) => {
       channel.alias = Array.from(new Set(Array.isArray(alias) ? alias : alias.split(/[,;，；:]/).map((s: string) => s.trim()).filter(Boolean)));
     }
     if (epgId !== undefined) channel.epgId = epgId;
-    if (isolated !== undefined) channel.isolated = !!isolated;
+    if (isolated !== undefined) {
+      channel.isolated = !!isolated;
+      if (channel.sources) {
+        channel.sources.forEach(s => s.isolated = !!isolated);
+      }
+    }
 
     saveData();
     res.json(channel);
@@ -3190,6 +3195,9 @@ app.get("/api/channels", async (req, res) => {
       return res.status(404).json({ error: "未找到该频道" });
     }
     channel.isolated = !!isolated;
+    if (channel.sources) {
+      channel.sources.forEach(s => s.isolated = !!isolated);
+    }
     saveData();
     res.json({ success: true, isolated: channel.isolated });
   });
@@ -3204,6 +3212,9 @@ app.get("/api/channels", async (req, res) => {
     channels.forEach((c) => {
       if (channelIds.includes(c.id)) {
         c.isolated = !!isolated;
+        if (c.sources) {
+          c.sources.forEach(s => s.isolated = !!isolated);
+        }
         updatedCount++;
       }
     });

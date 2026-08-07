@@ -391,7 +391,8 @@ export default function App() {
             channelId: ch.id,
             channelName: ch.name,
             channelLogo: ch.logo,
-            channelGroupIds: ch.groupIds
+            channelGroupIds: ch.groupIds,
+            channelIsolated: ch.isolated
           });
         });
       }
@@ -407,11 +408,14 @@ export default function App() {
 
       const matchesIsp = globalSourceIsp === "all" || item.isp === globalSourceIsp;
       const matchesProvince = globalSourceProvince === "all" || item.province === globalSourceProvince;
+      
       let matchesStatus = false;
-      if (globalSourceStatus === "all") matchesStatus = !item.isolated;
+      const isIsolated = item.isolated || item.channelIsolated;
+      
+      if (globalSourceStatus === "all") matchesStatus = !isIsolated;
       else if (globalSourceStatus === "all_with_isolated") matchesStatus = true;
-      else if (globalSourceStatus === "isolated") matchesStatus = !!item.isolated;
-      else matchesStatus = !item.isolated && item.status === globalSourceStatus;
+      else if (globalSourceStatus === "isolated") matchesStatus = !!isIsolated;
+      else matchesStatus = !isIsolated && item.status === globalSourceStatus;
 
       return matchesText && matchesIsp && matchesProvince && matchesStatus;
     });
@@ -3591,7 +3595,7 @@ export default function App() {
                       <div>
                         <span className="text-[9px] sm:text-[10px] uppercase font-bold text-slate-400 tracking-wider">有效可用</span>
                         <div className="text-lg sm:text-xl font-black text-emerald-600 mt-0.5 sm:mt-1 font-mono">
-                          {filteredGlobalSources.filter(s => s.status === "active" && !s.isolated).length} <span className="text-xs text-slate-500 font-sans">条</span>
+                          {filteredGlobalSources.filter(s => s.status === "active").length} <span className="text-xs text-slate-500 font-sans">条</span>
                         </div>
                       </div>
                       <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center border border-emerald-100 shrink-0">
