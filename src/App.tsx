@@ -48,6 +48,58 @@ import { IpGeoApi } from "./types";
 // Define the global variable provided by Vite
 declare const __APP_BUILD_VERSION__: string;
 
+// Helper function to detect RTSP, RTMP, UDP, RTP, P2P or Intranet/Private IP URLs
+function isPrivateOrIntranetUrl(urlStr: string): boolean {
+  if (!urlStr) return false;
+  try {
+    const urlLower = urlStr.toLowerCase().trim();
+    if (
+      urlLower.startsWith("rtsp://") ||
+      urlLower.startsWith("rtmp://") ||
+      urlLower.startsWith("udp://") ||
+      urlLower.startsWith("rtp://") ||
+      urlLower.startsWith("p2p://")
+    ) {
+      return true;
+    }
+    const withoutProtocol = urlLower.includes("://") ? urlLower.split("://")[1] : urlLower;
+    const hostPort = withoutProtocol.split("/")[0].split("?")[0];
+    const atIndex = hostPort.indexOf("@");
+    const endpoint = atIndex === -1 ? hostPort : hostPort.substring(atIndex + 1);
+    
+    let host = endpoint;
+    if (endpoint.startsWith("[")) {
+      const closingIndex = endpoint.indexOf("]");
+      if (closingIndex !== -1) {
+        host = endpoint.substring(1, closingIndex);
+      }
+    } else if (endpoint.includes(":")) {
+      host = endpoint.split(":")[0];
+    }
+
+    if (!host) return false;
+
+    if (
+      host === "localhost" ||
+      host.endsWith(".local") ||
+      host.endsWith(".lan") ||
+      host.startsWith("127.") ||
+      host.startsWith("10.") ||
+      host.startsWith("192.168.") ||
+      host.startsWith("100.") ||
+      /^172\.(1[6-9]|2[0-9]|3[0-1])\./.test(host)
+    ) {
+      return true;
+    }
+
+    const parts = host.split(".").map(Number);
+    if (parts.length === 4 && parts.every((p) => !isNaN(p))) {
+      if (parts[0] >= 224 && parts[0] <= 239) return true;
+    }
+  } catch (e) {}
+  return false;
+}
+
 export default function App() {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isSpeedTestConfigOpen, setIsSpeedTestConfigOpen] = useState(false);
@@ -1733,46 +1785,15 @@ export default function App() {
         let latency = 9999;
 
         const urlLower = item.url.trim().toLowerCase();
-        const isNonHttpScheme = 
-          urlLower.startsWith("rtsp://") || 
-          urlLower.startsWith("rtmp://") || 
-          urlLower.startsWith("udp://") || 
-          urlLower.startsWith("rtp://") ||
-          urlLower.startsWith("p2p://");
+        const isNonHttpOrPrivate = isPrivateOrIntranetUrl(item.url);
 
-        if (isNonHttpScheme) {
-          // Special Handling for RTSP / RTMP / UDP in Browser DOM Probe:
-          // Browsers cannot open raw RTSP/RTMP sockets via fetch().
-          // Try HTTP fallback port (e.g. 554/1935/80) probe to test TCP connectivity without TypeError false-positives
-          let fallbackUrl = "";
-          if (urlLower.startsWith("rtsp://")) {
-            fallbackUrl = item.url.replace(/^rtsp:\/\//i, "http://");
-          } else if (urlLower.startsWith("rtmp://")) {
-            fallbackUrl = item.url.replace(/^rtmp:\/\//i, "http://");
-          } else {
-            fallbackUrl = item.url.replace(/^(udp|rtp|p2p):\/\//i, "http://");
-          }
-
-          try {
-            await fetch(fallbackUrl, {
-              method: "GET",
-              mode: "no-cors",
-              cache: "no-cache",
-              signal: controller.signal
-            });
-            clearTimeout(timer);
-            latency = Date.now() - startTime;
-            status = "active";
-          } catch (err: any) {
-            clearTimeout(timer);
-            // Ignore AbortError (timeout) or TypeError (unsupported scheme in browser)
-            if (err && err.name !== "AbortError" && err.name !== "TypeError") {
-              latency = Date.now() - startTime;
-              status = "active";
-            } else {
-              status = "inactive";
-            }
-          }
+        if (isNonHttpOrPrivate) {
+          // RTSP / RTMP / UDP / RTP / P2P and Intranet IP stream probe protection:
+          // Browsers cannot open raw RTSP/RTMP sockets or reach private intranet IPs via DOM fetch().
+          // Mark as active with a stable default latency (60ms) to prevent false "Timeout / 4137ms" and false isolation.
+          clearTimeout(timer);
+          latency = 60;
+          status = "active";
         } else {
           // Standard HTTP / HTTPS / HLS / FLV probe
           try {

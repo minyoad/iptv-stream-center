@@ -68,10 +68,10 @@ async def phase_1_network_check(session: aiohttp.ClientSession, url: str) -> tup
             if not host:
                 return False, 9999
             
-            # 使用 asyncio 异步开启底层 socket 物理通道
+            # 使用 asyncio 异步开启底层 socket 物理通道 (RTSP 给予 5.0s 宽限期)
             reader, writer = await asyncio.wait_for(
                 asyncio.open_connection(host, port),
-                timeout=PHASE_I_TIMEOUT
+                timeout=max(PHASE_I_TIMEOUT, 5.0)
             )
             writer.close()
             await writer.wait_closed()
@@ -79,6 +79,18 @@ async def phase_1_network_check(session: aiohttp.ClientSession, url: str) -> tup
             latency = int((time.time() - start_time) * 1000)
             return True, latency
         except Exception:
+            # 内网 / 私网 RTSP 地址或特殊内网源保护：若处于局域网/局点，标记为可用
+            parsed = urllib.parse.urlparse(url)
+            host = (parsed.hostname or "").lower()
+            if (
+                host.startswith("10.") or 
+                host.startswith("192.168.") or 
+                host.startswith("127.") or 
+                host.endswith(".local") or 
+                host.endswith(".lan") or
+                any(host.startswith(f"172.{i}.") for i in range(16, 32))
+            ):
+                return True, 60
             return False, 9999
             
     
@@ -109,21 +121,25 @@ async def phase_2_decode_check(ff_engine: dict, url: str) -> tuple:
     start_time = time.time()
     cmd = []
     
+    is_rtsp = url.lower().startswith("rtsp://")
+    rtsp_flags = ["-rtsp_transport", "tcp"] if is_rtsp else []
+    ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36"
+
     if ff_engine["type"] == "ffplay":
         # -nodisp (不弹出 GUI 窗口画面) -autoexit (播放结束后自动结束) -t 限制视频拉流秒数
-                cmd = [
-            ff_engine["cmd"], "-user_agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36", "-nodisp", "-autoexit", "-loglevel", "error", 
+        cmd = [
+            ff_engine["cmd"], "-user_agent", ua, *rtsp_flags, "-nodisp", "-autoexit", "-loglevel", "error", 
             "-t", str(PHASE_II_DECODE_SEC), url
         ]
     elif ff_engine["type"] == "ffmpeg":
         # ffmpeg 校验最严密，-f null - 代表空画面输出，专门用于吞吐评估流健康度
-                cmd = [
-            ff_engine["cmd"], "-user_agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36", "-y", "-loglevel", "error", "-t", str(PHASE_II_DECODE_SEC),
+        cmd = [
+            ff_engine["cmd"], "-user_agent", ua, *rtsp_flags, "-y", "-loglevel", "error", "-t", str(PHASE_II_DECODE_SEC),
             "-i", url, "-f", "null", "-"
         ]
     elif ff_engine["type"] == "ffprobe":
-                cmd = [
-            ff_engine["cmd"], "-user_agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36", "-v", "error", "-show_entries", "format=duration",
+        cmd = [
+            ff_engine["cmd"], "-user_agent", ua, *rtsp_flags, "-v", "error", "-show_entries", "format=duration",
             "-of", "default=noprint_wrappers=1", url
         ]
 

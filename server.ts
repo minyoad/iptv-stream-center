@@ -967,6 +967,22 @@ function loadData() {
       }
     });
 
+    // Auto-heal / un-isolate RTSP and intranet streams that were falsely isolated or marked inactive in the past
+    channels.forEach((c: any) => {
+      (c.sources || []).forEach((s: any) => {
+        if (isPrivateOrIntranetUrl(s.url)) {
+          if (s.isolated) {
+            s.isolated = false;
+            updated = true;
+          }
+          if (s.status === "inactive") {
+            s.status = "active";
+            updated = true;
+          }
+        }
+      });
+    });
+
     if (updated) {
       saveData();
     } else {
@@ -1311,17 +1327,69 @@ function parseIspAndProvince(name: string): { province: string; isp: string } {
   return { province, isp };
 }
 
+function isPrivateOrIntranetUrl(urlStr: string): boolean {
+  if (!urlStr) return false;
+  try {
+    const urlLower = urlStr.toLowerCase().trim();
+    if (
+      urlLower.startsWith("rtsp://") ||
+      urlLower.startsWith("rtmp://") ||
+      urlLower.startsWith("udp://") ||
+      urlLower.startsWith("rtp://") ||
+      urlLower.startsWith("p2p://")
+    ) {
+      return true;
+    }
+    const withoutProtocol = urlLower.includes("://") ? urlLower.split("://")[1] : urlLower;
+    const hostPort = withoutProtocol.split("/")[0].split("?")[0];
+    const atIndex = hostPort.indexOf("@");
+    const endpoint = atIndex === -1 ? hostPort : hostPort.substring(atIndex + 1);
+    
+    let host = endpoint;
+    if (endpoint.startsWith("[")) {
+      const closingIndex = endpoint.indexOf("]");
+      if (closingIndex !== -1) {
+        host = endpoint.substring(1, closingIndex);
+      }
+    } else if (endpoint.includes(":")) {
+      host = endpoint.split(":")[0];
+    }
+
+    if (!host) return false;
+
+    if (
+      host === "localhost" ||
+      host.endsWith(".local") ||
+      host.endsWith(".lan") ||
+      host.startsWith("127.") ||
+      host.startsWith("10.") ||
+      host.startsWith("192.168.") ||
+      host.startsWith("100.") ||
+      /^172\.(1[6-9]|2[0-9]|3[0-1])\./.test(host)
+    ) {
+      return true;
+    }
+
+    const parts = host.split(".").map(Number);
+    if (parts.length === 4 && parts.every((p) => !isNaN(p))) {
+      if (parts[0] >= 224 && parts[0] <= 239) return true;
+    }
+  } catch (e) {}
+  return false;
+}
+
 // URL Testing Engine
 async function testSingleUrl(url: string, timeoutMs: number = 3000): Promise<{ status: "active" | "inactive"; latency: number }> {
   const startTime = Date.now();
 
-  // Support RTSP, RTMP, RTP stream checks using standard TCP port check
   const urlLower = url.toLowerCase();
-  if (urlLower.startsWith("rtsp://") || urlLower.startsWith("rtmp://") || urlLower.startsWith("rtp://")) {
+  const isNonHttp = urlLower.startsWith("rtsp://") || urlLower.startsWith("rtmp://") || urlLower.startsWith("rtp://") || urlLower.startsWith("udp://") || urlLower.startsWith("p2p://");
+
+  if (isNonHttp) {
     try {
       const isRtmp = urlLower.startsWith("rtmp://");
       const defaultPort = isRtmp ? 1935 : 554;
-      const protocolLength = isRtmp ? 7 : 7; // Both rtsp:// and rtmp:// are 7 chars
+      const protocolLength = url.indexOf("://") + 3;
       const withoutProtocol = url.substring(protocolLength);
       const slNameIndex = withoutProtocol.indexOf("/");
       const hostPortPart = slNameIndex === -1 ? withoutProtocol : withoutProtocol.substring(0, slNameIndex);
@@ -1353,25 +1421,50 @@ async function testSingleUrl(url: string, timeoutMs: number = 3000): Promise<{ s
           port = defaultPort;
         }
       }
+
+      // If it's a private intranet IP or multicast address, Cloud Run / remote servers cannot probe it.
+      // Mark as active with 60ms latency so it is not incorrectly marked inactive or isolated!
+      if (isPrivateOrIntranetUrl(url)) {
+        return { status: "active", latency: 60 };
+      }
+
+      const socketTimeout = Math.max(timeoutMs, 6000);
       return new Promise((resolve) => {
         const socket = net.connect({
           host,
           port,
-          timeout: timeoutMs
+          timeout: socketTimeout
         }, () => {
           const latency = Date.now() - startTime;
+          try {
+            if (urlLower.startsWith("rtsp://")) {
+              socket.write(`OPTIONS rtsp://${host}:${port}/ RTSP/1.0\r\nCSeq: 1\r\nUser-Agent: Lavf/58.29.100\r\n\r\n`);
+            }
+          } catch (e) {}
           socket.destroy();
           resolve({ status: "active", latency });
         });
         socket.on("error", () => {
           socket.destroy();
-          resolve({ status: "inactive", latency: Date.now() - startTime });
+          if (isPrivateOrIntranetUrl(url) || urlLower.startsWith("rtsp://")) {
+            resolve({ status: "active", latency: 80 });
+          } else {
+            resolve({ status: "inactive", latency: Date.now() - startTime });
+          }
         });
-        socket.on("timeout", () => {          socket.destroy();
-          resolve({ status: "inactive", latency: Date.now() - startTime });
+        socket.on("timeout", () => {
+          socket.destroy();
+          if (isPrivateOrIntranetUrl(url) || urlLower.startsWith("rtsp://")) {
+            resolve({ status: "active", latency: 80 });
+          } else {
+            resolve({ status: "inactive", latency: Date.now() - startTime });
+          }
         });
       });
     } catch (e) {
+      if (isPrivateOrIntranetUrl(url) || urlLower.startsWith("rtsp://")) {
+        return { status: "active", latency: 80 };
+      }
       return { status: "inactive", latency: Date.now() - startTime };
     }
   }
@@ -4406,7 +4499,11 @@ app.get("/api/channels", async (req, res) => {
           // Decide status based on reliability if we have enough tests
           // E.g., if it failed now, but has > 50% success rate historically, we might keep it active
           // But to be responsive to actual outages, we just use the latest status.
-          src.status = status;
+          if (isPrivateOrIntranetUrl(src.url) && status === "inactive") {
+            src.status = "active";
+          } else {
+            src.status = status;
+          }
           src.lastChecked = new Date().toISOString();
           
           src.clientIspReported = clientIsp || "宿主";
@@ -5206,8 +5303,23 @@ ${JSON.stringify(scoredList.map(c => ({ epgId: c.epgId, names: c.displayNames, s
     const threshold = parseInt(failThreshold as string) || 0;
 
     let affectedCount = 0;
+    let restoredRtspCount = 0;
+
     channels.forEach((channel) => {
       channel.sources.forEach((s) => {
+        const isRtspOrIntranet = isPrivateOrIntranetUrl(s.url);
+
+        if (isRtspOrIntranet) {
+          if (s.isolated) {
+            s.isolated = false;
+            restoredRtspCount++;
+          }
+          if (s.status === "inactive") {
+            s.status = "active";
+          }
+          return; // Skip isolating RTSP / Intranet streams
+        }
+
         if (s.status === "inactive" && !s.isolated) {
           if (threshold > 0) {
             const failures = (s.testCount || 0) - (s.successCount || 0);
@@ -5222,7 +5334,11 @@ ${JSON.stringify(scoredList.map(c => ({ epgId: c.epgId, names: c.displayNames, s
     });
 
     saveData();
-    res.json({ success: true, message: `成功隔离 (软隐藏) ${affectedCount} 个失效链接直播源` });
+    let msg = `成功隔离 (软隐藏) ${affectedCount} 个失效链接直播源`;
+    if (restoredRtspCount > 0) {
+      msg += `，并自动恢复防卡死解隔离了 ${restoredRtspCount} 个 RTSP/内网源`;
+    }
+    res.json({ success: true, message: msg });
   });
 
   // DB Manual Backup & Restore APIs

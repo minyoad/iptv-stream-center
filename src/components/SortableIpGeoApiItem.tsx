@@ -5,6 +5,7 @@ import { GripVertical, Trash2 } from "lucide-react";
 import { IpGeoApi } from "../types"; // Will move IpGeoApi to types.ts
 
 interface Props {
+  key?: React.Key;
   api: IpGeoApi;
   idx: number;
   onUpdate: (idx: number, field: keyof IpGeoApi, value: any) => void;
