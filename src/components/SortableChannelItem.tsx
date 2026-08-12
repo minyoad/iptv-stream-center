@@ -9,6 +9,7 @@ interface SortableChannelItemProps {
   isSelected: boolean;
   isChecked: boolean;
   groups: Group[];
+  isSortingDisabled?: boolean;
   onSelectChannel: (ch: Channel) => void;
   onDoubleClickChannel: (ch: Channel) => void;
   onToggleCheckChannel: (chId: string, checked: boolean) => void;
@@ -24,6 +25,7 @@ export const SortableChannelItem: React.FC<SortableChannelItemProps> = ({
   isSelected,
   isChecked,
   groups,
+  isSortingDisabled = false,
   onSelectChannel,
   onDoubleClickChannel,
   onToggleCheckChannel,
@@ -77,11 +79,11 @@ export const SortableChannelItem: React.FC<SortableChannelItemProps> = ({
       <div className="flex items-center gap-2 min-w-0 flex-1">
         {/* Drag handle button */}
         <div
-          {...attributes}
-          {...listeners}
+          {...(!isSortingDisabled ? attributes : {})}
+          {...(!isSortingDisabled ? listeners : {})}
           onClick={(e) => e.stopPropagation()}
-          className="p-0.5 cursor-grab active:cursor-grabbing text-slate-300 hover:text-indigo-600 hover:bg-indigo-50/80 rounded transition shrink-0 touch-none"
-          title="按住拖拽以重新排序"
+          className={`p-0.5 rounded shrink-0 touch-none ${isSortingDisabled ? 'text-slate-200 cursor-not-allowed opacity-50' : 'cursor-grab active:cursor-grabbing text-slate-300 hover:text-indigo-600 hover:bg-indigo-50/80 transition'}`}
+          title={isSortingDisabled ? "请在默认排序下拖拽排序" : "按住拖拽以重新排序"}
         >
           <GripVertical className="w-4 h-4" />
         </div>

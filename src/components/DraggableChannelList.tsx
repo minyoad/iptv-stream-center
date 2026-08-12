@@ -26,6 +26,7 @@ interface DraggableChannelListProps {
   selectedChannel: Channel | null;
   selectedChannelIds: string[];
   groups: Group[];
+  isSortingDisabled?: boolean;
   onSelectChannel: (ch: Channel) => void;
   onDoubleClickChannel: (ch: Channel) => void;
   onToggleCheckChannel: (chId: string, checked: boolean) => void;
@@ -40,6 +41,7 @@ export const DraggableChannelList: React.FC<DraggableChannelListProps> = ({
   selectedChannel,
   selectedChannelIds,
   groups,
+  isSortingDisabled = false,
   onSelectChannel,
   onDoubleClickChannel,
   onToggleCheckChannel,
@@ -108,6 +110,7 @@ export const DraggableChannelList: React.FC<DraggableChannelListProps> = ({
               isSelected={selectedChannel?.id === ch.id}
               isChecked={selectedChannelIds.includes(ch.id)}
               groups={groups}
+              isSortingDisabled={isSortingDisabled}
               onSelectChannel={onSelectChannel}
               onDoubleClickChannel={onDoubleClickChannel}
               onToggleCheckChannel={onToggleCheckChannel}

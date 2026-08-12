@@ -255,6 +255,10 @@ export default function App() {
   const [channelPage, setChannelPage] = useState(1);
   const CHANNELS_PER_PAGE = 80;
 
+  type ChannelSortType = "default" | "name" | "sourceCount";
+  const [channelSortBy, setChannelSortBy] = useState<ChannelSortType>("default");
+  const [channelSortOrder, setChannelSortOrder] = useState<"asc" | "desc">("asc");
+
   const [globalSourcePage, setGlobalSourcePage] = useState(1);
   const SOURCES_PER_PAGE = 200;
 
@@ -2440,9 +2444,37 @@ export default function App() {
     });
   }, [channels, groups, searchQuery, selectedCategory, channelFilterStatus]);
 
+  const sortedChannels = useMemo(() => {
+    if (channelSortBy === "default") {
+      return filteredChannels;
+    }
+    const result = [...filteredChannels];
+    if (channelSortBy === "name") {
+      result.sort((a, b) => {
+        const cmp = a.name.localeCompare(b.name, "zh");
+        return channelSortOrder === "asc" ? cmp : -cmp;
+      });
+    } else if (channelSortBy === "sourceCount") {
+      result.sort((a, b) => {
+        const activeA = a.sources?.filter(s => s.status === "active" && !s.isolated)?.length || 0;
+        const activeB = b.sources?.filter(s => s.status === "active" && !s.isolated)?.length || 0;
+        
+        if (activeA !== activeB) {
+          return channelSortOrder === "asc" ? activeA - activeB : activeB - activeA;
+        }
+        
+        const totalA = a.sources?.filter(s => !s.isolated)?.length || 0;
+        const totalB = b.sources?.filter(s => !s.isolated)?.length || 0;
+        const cmp = totalA - totalB;
+        return channelSortOrder === "asc" ? cmp : -cmp;
+      });
+    }
+    return result;
+  }, [filteredChannels, channelSortBy, channelSortOrder]);
+
   const slicedChannels = useMemo(() => {
-    return filteredChannels.slice(0, channelPage * CHANNELS_PER_PAGE);
-  }, [filteredChannels, channelPage]);
+    return sortedChannels.slice(0, channelPage * CHANNELS_PER_PAGE);
+  }, [sortedChannels, channelPage]);
 
   const getExportQueries = () => {
     const parts = [];
@@ -3152,6 +3184,53 @@ export default function App() {
                         </div>
                       </div>
                     )}
+
+                    {/* Sort Header */}
+                    <div className="flex text-[10px] font-bold text-slate-500 px-3 py-1.5 items-center border-t border-slate-200/60 mt-1 bg-slate-100/30 rounded select-none">
+                      <div className="w-[30px] shrink-0"></div>
+                      <div 
+                        className="flex-1 flex items-center gap-1 cursor-pointer hover:text-slate-800 transition"
+                        onClick={() => {
+                          if (channelSortBy === "name") {
+                            setChannelSortOrder(prev => prev === "asc" ? "desc" : "asc");
+                          } else {
+                            setChannelSortBy("name");
+                            setChannelSortOrder("asc");
+                          }
+                        }}
+                      >
+                        频道名称
+                        {channelSortBy === "name" && (channelSortOrder === "asc" ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />)}
+                      </div>
+                      
+                      <div className="flex items-center gap-4 shrink-0 pr-8">
+                        <div 
+                          className="w-20 text-right flex items-center justify-end gap-1 cursor-pointer hover:text-slate-800 transition"
+                          onClick={() => {
+                            if (channelSortBy === "sourceCount") {
+                              setChannelSortOrder(prev => prev === "asc" ? "desc" : "asc");
+                            } else {
+                              setChannelSortBy("sourceCount");
+                              setChannelSortOrder("desc");
+                            }
+                          }}
+                        >
+                          可用源数量
+                          {channelSortBy === "sourceCount" && (channelSortOrder === "asc" ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />)}
+                        </div>
+                        <div 
+                          className="w-16 text-center flex items-center justify-center gap-1 cursor-pointer hover:text-slate-800 transition"
+                          onClick={() => {
+                            setChannelSortBy("default");
+                            setChannelSortOrder("asc");
+                          }}
+                          title="默认导出顺序（支持拖拽）"
+                        >
+                          默认顺序
+                          {channelSortBy === "default" && <Check className="w-3 h-3 text-emerald-600" />}
+                        </div>
+                      </div>
+                    </div>
                   </div>
                   
                   <div className="flex-1 overflow-y-auto">
@@ -3166,6 +3245,7 @@ export default function App() {
                         selectedChannel={selectedChannel}
                         selectedChannelIds={selectedChannelIds}
                         groups={groups}
+                        isSortingDisabled={channelSortBy !== "default"}
                         onSelectChannel={(ch) => {
                           setSelectedChannel(ch);
                           setEpgGuide(null);
