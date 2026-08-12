@@ -474,7 +474,8 @@ function normalizeChannelName(name: string): string {
   // For other channels, remove hyphens, spaces, and common quality tags to improve match rates
   return clean
     .replace(/[-_.\s]+/g, "")
-    .replace(/(hd|uhd|fhd|ud|4k|8k|高清|超清|标清|sdi|channel|tv)/g, "");
+    .replace(/(hd|uhd|fhd|ud|4k|8k|高清|超清|标清|sdi|channel|tv)/g, "")
+    .replace(/(频道|电视台|台)$/, "");
 }
 
 // Generate default epgId from channel name. CCTV5 and CCTV5+ are distinguished by keeping '+'. If processed epgId is empty, fallback to channel name.
