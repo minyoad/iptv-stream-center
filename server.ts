@@ -5321,14 +5321,17 @@ ${JSON.stringify(scoredList.map(c => ({ epgId: c.epgId, names: c.displayNames, s
           return; // Skip isolating RTSP / Intranet streams
         }
 
-        if (s.status === "inactive" && !s.isolated) {
+        const isInvalid = s.status === "inactive" || (s.latency !== undefined && s.latency >= 9999);
+
+        if (isInvalid && !s.isolated) {
           if (threshold > 0) {
             const failures = (s.testCount || 0) - (s.successCount || 0);
-            if (failures < threshold) {
+            if (failures < threshold && s.latency !== 9999 && s.status !== "inactive") {
               return; // Skip isolating if it hasn't failed enough times
             }
           }
           s.isolated = true;
+          s.status = "inactive";
           affectedCount++;
         }
       });

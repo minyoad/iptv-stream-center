@@ -72,8 +72,8 @@ export default function StatsView({ channels }: StatsViewProps) {
   const channelStats = useMemo(() => {
     return channels.map(ch => {
       const total = ch.sources.length;
-      const active = ch.sources.filter(s => s.status === 'active' && !s.isolated).length;
-      const inactive = ch.sources.filter(s => s.status === 'inactive' && !s.isolated).length;
+      const active = ch.sources.filter(s => s.status === 'active' && (!s.latency || s.latency < 9999) && !s.isolated).length;
+      const inactive = ch.sources.filter(s => (s.status === 'inactive' || (s.latency !== undefined && s.latency >= 9999)) && !s.isolated).length;
       const checking = ch.sources.filter(s => s.status === 'checking' && !s.isolated).length;
       const unknown = ch.sources.filter(s => s.status === 'unknown' && !s.isolated).length;
       const isolated = ch.sources.filter(s => s.isolated).length;

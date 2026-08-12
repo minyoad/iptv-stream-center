@@ -57,8 +57,8 @@ export default function DashboardView({
       totalSources++;
 
       // Status
-      if (s.status === "active") activeSources++;
-      else if (s.status === "inactive") inactiveSources++;
+      if (s.status === "active" && (!s.latency || s.latency < 9999)) activeSources++;
+      else if (s.status === "inactive" || (s.latency && s.latency >= 9999)) inactiveSources++;
       else unknownSources++;
 
       // ISP

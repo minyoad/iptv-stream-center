@@ -468,9 +468,14 @@ export default function App() {
       let matchesStatus = false;
       const isIsolated = item.isolated || item.channelIsolated;
       
+      const isInactive = item.status === "inactive" || (item.latency !== undefined && item.latency >= 9999);
+      const isActive = item.status === "active" && (item.latency === undefined || item.latency < 9999);
+
       if (globalSourceStatus === "all") matchesStatus = !isIsolated;
       else if (globalSourceStatus === "all_with_isolated") matchesStatus = true;
       else if (globalSourceStatus === "isolated") matchesStatus = !!isIsolated;
+      else if (globalSourceStatus === "inactive") matchesStatus = !isIsolated && isInactive;
+      else if (globalSourceStatus === "active") matchesStatus = !isIsolated && isActive;
       else matchesStatus = !isIsolated && item.status === globalSourceStatus;
 
       return matchesText && matchesIsp && matchesProvince && matchesStatus;
@@ -1567,7 +1572,8 @@ export default function App() {
     channels.forEach(channel => {
       if (channel.sources) {
         channel.sources.forEach(source => {
-          if (source.status === "inactive" && !source.isolated) {
+          const isInvalid = source.status === "inactive" || (source.latency !== undefined && source.latency >= 9999);
+          if (isInvalid && !source.isolated) {
             inactiveSourceIds.push(source.id);
           }
         });
@@ -3452,11 +3458,13 @@ export default function App() {
                                 }}
                               />
                               {(() => {
-                                const filteredCount = selectedChannel.sources.filter(src => {
+                                 const filteredCount = selectedChannel.sources.filter(src => {
                                   if (sourceFilterStatus === "all") return !src.isolated;
                                   if (sourceFilterStatus === "all_with_isolated") return true;
                                   if (sourceFilterStatus === "isolated") return src.isolated;
                                   if (src.isolated) return false;
+                                  if (sourceFilterStatus === "inactive") return src.status === "inactive" || (src.latency !== undefined && src.latency >= 9999);
+                                  if (sourceFilterStatus === "active") return src.status === "active" && (src.latency === undefined || src.latency < 9999);
                                   return src.status === sourceFilterStatus || (sourceFilterStatus === "unknown" && src.status === "checking");
                                 }).length;
                                 return (
@@ -3519,6 +3527,8 @@ export default function App() {
                                 if (sourceFilterStatus === "all_with_isolated") return true;
                                 if (sourceFilterStatus === "isolated") return src.isolated;
                                 if (src.isolated) return false;
+                                if (sourceFilterStatus === "inactive") return src.status === "inactive" || (src.latency !== undefined && src.latency >= 9999);
+                                if (sourceFilterStatus === "active") return src.status === "active" && (src.latency === undefined || src.latency < 9999);
                                 return src.status === sourceFilterStatus || (sourceFilterStatus === "unknown" && src.status === "checking");
                               }).map((src, index) => {
                               const isChecked = selectedSourceIds.includes(src.id);
@@ -3696,7 +3706,7 @@ export default function App() {
                       <div>
                         <span className="text-[9px] sm:text-[10px] uppercase font-bold text-slate-400 tracking-wider">有效可用</span>
                         <div className="text-lg sm:text-xl font-black text-emerald-600 mt-0.5 sm:mt-1 font-mono">
-                          {filteredGlobalSources.filter(s => s.status === "active").length} <span className="text-xs text-slate-500 font-sans">条</span>
+                          {filteredGlobalSources.filter(s => s.status === "active" && (s.latency === undefined || s.latency < 9999)).length} <span className="text-xs text-slate-500 font-sans">条</span>
                         </div>
                       </div>
                       <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center border border-emerald-100 shrink-0">
@@ -3707,7 +3717,7 @@ export default function App() {
                       <div>
                         <span className="text-[9px] sm:text-[10px] uppercase font-bold text-slate-400 tracking-wider">失效离线</span>
                         <div className="text-lg sm:text-xl font-black text-rose-600 mt-0.5 sm:mt-1 font-mono">
-                          {filteredGlobalSources.filter(s => s.status === "inactive").length} <span className="text-xs text-slate-500 font-sans">条</span>
+                          {filteredGlobalSources.filter(s => s.status === "inactive" || (s.latency !== undefined && s.latency >= 9999)).length} <span className="text-xs text-slate-500 font-sans">条</span>
                         </div>
                       </div>
                       <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-xl bg-rose-50 text-rose-600 flex items-center justify-center border border-rose-100 shrink-0">
@@ -7137,7 +7147,7 @@ export default function App() {
               <h3 className="text-sm font-black text-slate-800">一键智能隔离失效线路</h3>
             </div>
             <p className="text-xs text-slate-500 font-semibold leading-relaxed">
-              此操作会将测速结果为“失效”的线路进行软隔离。隔离后的线路将不再出现在播放列表或导出文件中。
+              此操作会将测速结果为“失效”或延迟为 9999ms (连接超时) 的线路进行软隔离。隔离后的线路将不再出现在播放列表或导出文件中。
             </p>
             
             <div className="pt-2">
