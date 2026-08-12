@@ -3070,7 +3070,7 @@ export default function App() {
               <div className="grid grid-cols-1 lg:grid-cols-12 gap-6" id="channels_editor_grid">
                 
                 {/* Left side list of channels */}
-                <div className="lg:col-span-5 bg-white rounded-2xl border border-slate-200 flex flex-col h-[520px] overflow-hidden" id="channels_list_card">
+                <div className="lg:col-span-5 bg-white rounded-2xl border border-slate-200 flex flex-col h-[750px] overflow-hidden" id="channels_list_card">
                   <div className="p-4 border-b border-slate-100 bg-slate-50/50 flex flex-col gap-2.5">
                     <div className="flex justify-between items-center">
                       <div className="flex items-center gap-2">
@@ -3201,12 +3201,12 @@ export default function App() {
                 </div>
 
                 {/* Right side playback playline items details view */}
-                <div className="lg:col-span-7 space-y-4" id="stream_lines_control_container">
+                <div className="lg:col-span-7 space-y-4 h-[750px]" id="stream_lines_control_container">
                   {selectedChannel ? (
-                    <div className="bg-white rounded-2xl border border-slate-200 p-6 space-y-5" id="line_manager_main">
+                    <div className="bg-white rounded-2xl border border-slate-200 p-6 flex flex-col h-full gap-5" id="line_manager_main">
                       
                       {/* Sub header for channel detail view */}
-                      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 pb-4 border-b border-slate-100">
+                      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 pb-4 border-b border-slate-100 shrink-0">
                         <div className="flex items-center gap-3">
                           {selectedChannel.logo ? (
                               <img 
@@ -3254,7 +3254,7 @@ export default function App() {
 
                       {/* Dynamic EPG timeline drawer if requested */}
                       {epgGuide && (
-                        <div className="bg-indigo-50/40 p-4 rounded-xl border border-indigo-100 space-y-3" id="epg_preview_box">
+                        <div className="bg-indigo-50/40 p-4 rounded-xl border border-indigo-100 space-y-3 shrink-0" id="epg_preview_box">
                           <div className="flex justify-between items-center text-xs font-bold text-slate-700">
                             <span className="flex items-center gap-1.5 flex-wrap">
                               <Clock className="w-4 h-4 mr-1 text-indigo-600" />
@@ -3353,8 +3353,8 @@ export default function App() {
                       )}
 
                       {/* Display playback source lines */}
-                      <div className="space-y-3" id="sources_panel_list">
-                        <div className="flex flex-col gap-2.5">
+                      <div className="flex-1 min-h-0 flex flex-col gap-3" id="sources_panel_list">
+                        <div className="flex flex-col gap-2.5 shrink-0">
                           <div className="flex justify-between items-center bg-slate-50/50 p-2.5 rounded-xl border border-slate-100">
                             <div className="flex items-center gap-2">
                               <input
@@ -3428,12 +3428,12 @@ export default function App() {
                         </div>
                         
                         {selectedChannel.sources.length === 0 ? (
-                          <div className="flex flex-col items-center justify-center py-16 text-slate-350 border border-dashed rounded-2xl border-slate-200">
+                          <div className="flex flex-col items-center justify-center py-16 text-slate-350 border border-dashed rounded-2xl border-slate-200 shrink-0">
                             <Compass className="w-12 h-12 stroke-[1]" />
                             <p className="text-xs font-medium mt-1">此频道没有任何直播线路，点击上方按钮新增</p>
                           </div>
                         ) : (
-                          <div className="space-y-2.5 max-h-[480px] overflow-y-auto pr-1">
+                          <div className="space-y-2.5 overflow-y-auto pr-1 flex-1 min-h-0 pb-2">
                             {selectedChannel.sources.filter(src => {
                                 if (sourceFilterStatus === "all") return !src.isolated;
                                 if (sourceFilterStatus === "all_with_isolated") return true;
@@ -3570,7 +3570,7 @@ export default function App() {
                       </div>
                     </div>
                   ) : (
-                    <div className="bg-white rounded-2xl border border-slate-200 p-12 text-center text-slate-300 flex flex-col items-center justify-center min-h-[400px]" id="no_channel_selected">
+                    <div className="bg-white rounded-2xl border border-slate-200 p-12 text-center text-slate-300 flex flex-col items-center justify-center h-full" id="no_channel_selected">
                       <Tv className="w-16 h-16 stroke-[1.2] opacity-50 mb-3" />
                       <p className="text-xs font-semibold">请先在左侧频道列表中选定一个频道</p>
                       <p className="text-[11px] text-slate-400 mt-1">选定后，你可以为其增加直播线路、匹配预览 EPG 或批量删除线路。</p>
