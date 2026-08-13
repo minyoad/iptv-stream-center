@@ -125,16 +125,37 @@ async def phase_2_decode_check(ff_engine: dict, url: str) -> tuple:
     rtsp_flags = ["-rtsp_transport", "tcp"] if is_rtsp else []
     ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36"
 
+    # 统一用 ffmpeg 读帧验证，速度更快更可靠：
+    # - ffprobe -show_entries format=duration 对直播流（HLS 无时长、RTSP、rtp 组播）常要等待
+    #   很久甚至拿不到时长返回非零退出码，导致误判和拖慢速度。
+    # - ffmpeg 读 -t 秒的帧，能读出帧即证明可播放，读到规定时长就正常退出（返回码 0），
+    #   速度快且可靠。
+    # 读流时长：能读出帧即证明可播放，不必读满 PHASE_II_DECODE_SEC。
+    # 慢源（RTSP / rtp 组播）读 1 秒即可证明在播；普通 HLS 读 2 秒足够。
+    if is_rtsp or "/rtp/" in url.lower():
+        decode_sec = min(PHASE_II_DECODE_SEC, 1)   # 慢源读 1 秒即可证明可播放
+    else:
+        decode_sec = min(PHASE_II_DECODE_SEC, 2)
+    phase2_timeout = 20.0                            # 连接 + 读流总容限放宽到 20s
+
+    # 若引擎是 ffprobe/ffplay，统一改用 ffmpeg 读帧（更可靠、更快）。
+    if ff_engine["type"] != "ffmpeg":
+        ff_cmd = shutil.which("ffmpeg")
+        if not ff_cmd:
+            logger.warning("系统未找到 ffmpeg，使用原引擎尝试...")
+        else:
+            ff_engine = {"type": "ffmpeg", "cmd": ff_cmd}
+
     if ff_engine["type"] == "ffplay":
         # -nodisp (不弹出 GUI 窗口画面) -autoexit (播放结束后自动结束) -t 限制视频拉流秒数
         cmd = [
             ff_engine["cmd"], "-user_agent", ua, *rtsp_flags, "-nodisp", "-autoexit", "-loglevel", "error", 
-            "-t", str(PHASE_II_DECODE_SEC), url
+            "-t", str(decode_sec), url
         ]
     elif ff_engine["type"] == "ffmpeg":
         # ffmpeg 校验最严密，-f null - 代表空画面输出，专门用于吞吐评估流健康度
         cmd = [
-            ff_engine["cmd"], "-user_agent", ua, *rtsp_flags, "-y", "-loglevel", "error", "-t", str(PHASE_II_DECODE_SEC),
+            ff_engine["cmd"], "-user_agent", ua, *rtsp_flags, "-y", "-loglevel", "error", "-t", str(decode_sec),
             "-i", url, "-f", "null", "-"
         ]
     elif ff_engine["type"] == "ffprobe":
@@ -151,16 +172,21 @@ async def phase_2_decode_check(ff_engine: dict, url: str) -> tuple:
             stderr=asyncio.subprocess.PIPE
         )
         
-        # 给解码器宽限额外的拉流超时时长
+        # 给解码器宽限额外的拉流超时时长（RTSP 源连接慢，使用更宽松的 phase2_timeout）
         try:
             stdout, stderr = await asyncio.wait_for(
                 process.communicate(), 
-                timeout=PHASE_II_DECODE_SEC + 3.0
+                timeout=phase2_timeout
             )
             # 子进程正常退出且退出码为 0 代表媒体解析完全通过，流极度纯净健康!
             if process.returncode == 0:
                 latency = int((time.time() - start_time) * 1000)
                 return True, latency
+            else:
+                # 失败时打印 stderr 尾部，便于定位真实原因
+                err_tail = stderr.decode("utf-8", errors="ignore").strip().splitlines()[-5:]
+                if err_tail:
+                    logger.debug(f"  [ff解码器输出] {' | '.join(err_tail)}")
         except asyncio.TimeoutError:
             try:
                 process.kill()
@@ -410,7 +436,7 @@ async def main():
 
 def parse_tvbox_file(filepath: str) -> list:
     """解析 TVBox 格式的频道列表文件。
-    支持分组标记（如 央视频道,#genre#），保留分组信息。
+    支持分组标记（如 央视频道,#genre# 或 央视频道,#genre），保留分组信息。
     返回 [(channel_name, url, group), ...] 列表，group 为所属分组名（无分组则为 None）
     """
     channels = []
@@ -421,19 +447,19 @@ def parse_tvbox_file(filepath: str) -> list:
                 line = line.strip()
                 if not line or line.startswith("#"):
                     continue
-                # 分组标记:  xxx,#genre# 或  xxx, #genre#
+                # 分组标记:  xxx,#genre# 或  xxx,#genre （兼容有无第二个 #）
                 parts = line.split(",", 1)
                 if len(parts) == 2:
                     name, second = parts[0].strip(), parts[1].strip()
-                    # 分组行: second 部分为 #genre#（不区分大小写）
-                    if second.lower() == "#genre#":
+                    # 分组行: second 部分以 #genre 开头（#genre 或 #genre#，不区分大小写）
+                    if second.lower().startswith("#genre"):
                         current_group = name
                         continue
                     # 普通频道行: name,url
-                    if name and second and not second.lower().startswith("#genre"):
+                    if name and second:
                         channels.append((name, second, current_group))
                     else:
-                        logger.warning(f"第 {line_num} 行格式异常，已跳过: {line[:50]}")
+                        logger.warning(f"第 {line_num} 行格式异常(名/URL为空)，已跳过: {line[:50]}")
                 else:
                     logger.warning(f"第 {line_num} 行无法解析为 '名称,URL' 格式，已跳过: {line[:50]}")
     except FileNotFoundError:
@@ -470,12 +496,26 @@ async def test_tvbox_file(filepath: str, output_file: str = None):
     ssl_context.verify_mode = ssl.CERT_NONE
     connector = aiohttp.TCPConnector(ssl=ssl_context, limit=CONCURRENCY_LIMIT * 2)
 
+    # 不同协议源特性差异大，使用独立信号量，避免互相拖累：
+    # - RTSP 源响应快而稳（实测 2s 左右通过），可较高并发 6
+    # - rtp 组播源连接极慢（实测 14~19s），并发高会触发超时误判，需低并发 2
+    # - 普通 HTTP/HLS 源并发 CONCURRENCY_LIMIT
+    sem_rtsp = asyncio.Semaphore(6)                    # RTSP 源
+    sem_rtp = asyncio.Semaphore(2)                     # rtp 组播源
+    sem_http = asyncio.Semaphore(CONCURRENCY_LIMIT)    # 普通 HTTP/HLS 源
+
     async with aiohttp.ClientSession(connector=connector) as session:
-        semaphore = asyncio.Semaphore(CONCURRENCY_LIMIT)
         tasks = []
         for idx, (name, url, group) in enumerate(channels):
+            lurl = url.lower()
+            if lurl.startswith("rtsp://"):
+                sem = sem_rtsp
+            elif "/rtp/" in lurl:
+                sem = sem_rtp
+            else:
+                sem = sem_http
             tasks.append(
-                process_test_pipeline(session, semaphore, ff_engine, f"tvbox_{idx}", f"ch_{idx}", url, name)
+                process_test_pipeline(session, sem, ff_engine, f"tvbox_{idx}", f"ch_{idx}", url, name)
             )
 
         results = await asyncio.gather(*tasks)
