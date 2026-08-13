@@ -972,13 +972,16 @@ function loadData() {
     channels.forEach((c: any) => {
       (c.sources || []).forEach((s: any) => {
         if (isPrivateOrIntranetUrl(s.url)) {
-          if (s.isolated) {
-            s.isolated = false;
-            updated = true;
-          }
-          if (s.status === "inactive") {
-            s.status = "active";
-            updated = true;
+          const isTimeout = s.latency !== undefined && s.latency >= 9999;
+          if (!isTimeout) {
+            if (s.isolated) {
+              s.isolated = false;
+              updated = true;
+            }
+            if (s.status === "inactive") {
+              s.status = "active";
+              updated = true;
+            }
           }
         }
       });
@@ -5311,14 +5314,19 @@ ${JSON.stringify(scoredList.map(c => ({ epgId: c.epgId, names: c.displayNames, s
         const isRtspOrIntranet = isPrivateOrIntranetUrl(s.url);
 
         if (isRtspOrIntranet) {
-          if (s.isolated) {
-            s.isolated = false;
-            restoredRtspCount++;
+          const isExplicitlyTimeout = s.latency !== undefined && s.latency >= 9999;
+          
+          if (!isExplicitlyTimeout) {
+            if (s.isolated) {
+              s.isolated = false;
+              restoredRtspCount++;
+            }
+            if (s.status === "inactive") {
+              s.status = "active";
+            }
+            return; // Skip isolating RTSP / Intranet streams
           }
-          if (s.status === "inactive") {
-            s.status = "active";
-          }
-          return; // Skip isolating RTSP / Intranet streams
+          // If it is a timeout (9999ms), fall through to normal cleanup/isolation logic
         }
 
         const isInvalid = s.status === "inactive" || (s.latency !== undefined && s.latency >= 9999);
