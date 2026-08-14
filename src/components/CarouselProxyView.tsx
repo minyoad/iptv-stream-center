@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { Plus, Trash2, Edit2, Check, AlertCircle, RefreshCw, X, PlayCircle, Settings, Search } from "lucide-react";
+import { Plus, Trash2, Edit2, Check, AlertCircle, RefreshCw, X, PlayCircle, Settings, Search , Download } from "lucide-react";
 
 export const CarouselProxyView = ({ fetchData }: { fetchData: () => void }) => {
   const [proxies, setProxies] = useState<any[]>([]);
@@ -26,9 +26,10 @@ export const CarouselProxyView = ({ fetchData }: { fetchData: () => void }) => {
     try {
       const res = await fetch("/api/carousel-proxies");
       const data = await res.json();
-      setProxies(data);
+      setProxies(Array.isArray(data) ? data : []);
     } catch (e) {
       console.error(e);
+      setProxies([]);
     } finally {
       setLoading(false);
     }
@@ -118,7 +119,8 @@ export const CarouselProxyView = ({ fetchData }: { fetchData: () => void }) => {
 
   
 
-  return (
+  
+    return (
     <div className="space-y-6">
       <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
         <div className="p-5 border-b border-slate-100 flex justify-between items-center bg-slate-50">
@@ -234,8 +236,10 @@ export const CarouselProxyView = ({ fetchData }: { fetchData: () => void }) => {
                     <option value="urlTemplate">按URL排序</option>
                   </select>
                 </div>
-                <button 
-                  onClick={async () => {
+                
+                
+                <button
+                   onClick={async () => {
                      setTesting(true);
                      try {
                         const res = await fetch("/api/carousel/test-all", { method: "POST" });
@@ -269,9 +273,9 @@ export const CarouselProxyView = ({ fetchData }: { fetchData: () => void }) => {
                    </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                   {proxies
-                       .filter(p => p.urlTemplate.toLowerCase().includes(searchQuery.toLowerCase()) || p.platform.includes(searchQuery))
-                       .sort((a, b) => sortKey === "urlTemplate" ? a.urlTemplate.localeCompare(b.urlTemplate) : a.platform.localeCompare(b.platform))
+                   {(Array.isArray(proxies) ? proxies : [])
+                       .filter(p => (p.urlTemplate || "").toLowerCase().includes(searchQuery.toLowerCase()) || (p.platform || "").includes(searchQuery))
+                       .sort((a, b) => sortKey === "urlTemplate" ? (a.urlTemplate || "").localeCompare(b.urlTemplate || "") : (a.platform || "").localeCompare(b.platform || ""))
                        .map(p => (
                       <tr key={p.id} className="hover:bg-slate-50">
                          <td className="px-4 py-3">

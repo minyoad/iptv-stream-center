@@ -96,7 +96,7 @@ export const DraggableGroupList: React.FC<DraggableGroupListProps> = ({
         >
           {groups.map((g, index) => {
             const countChannels = (channels || []).filter((c) =>
-              c.groupIds.includes(g.id)
+              Array.isArray(c.groupIds) ? c.groupIds.includes(g.id) : false
             ).length;
             return (
               <SortableGroupItem

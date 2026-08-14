@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { Plus, Trash2, Edit2, Search, Link as LinkIcon, Save, RefreshCw, Wand2, CheckSquare, X } from "lucide-react";
+import { Plus, Trash2, Edit2, Search, Link as LinkIcon, Save, RefreshCw, Wand2, CheckSquare, X , Download } from "lucide-react";
 
 export const CarouselChannelView = ({ fetchData, channelsData = [] }: { fetchData: () => void, channelsData?: any[] }) => {
   const [channels, setChannels] = useState<any[]>([]);
@@ -28,9 +28,12 @@ export const CarouselChannelView = ({ fetchData, channelsData = [] }: { fetchDat
           fetch("/api/carousel-channels-unregistered"),
           fetch("/api/carousel-discovery-rules")
         ]);
-        setChannels(await res1.json());
-        setUnregistered(await res2.json());
-        setRules(await res3.json());
+        const d1 = await res1.json();
+        const d2 = await res2.json();
+        const d3 = await res3.json();
+        setChannels(Array.isArray(d1) ? d1 : []);
+        setUnregistered(Array.isArray(d2) ? d2 : []);
+        setRules(Array.isArray(d3) ? d3 : []);
     } catch (e) {
       console.error(e);
     } finally {
@@ -173,6 +176,49 @@ export const CarouselChannelView = ({ fetchData, channelsData = [] }: { fetchDat
 
   
 
+  
+  const handleExportActive = async () => {
+    try {
+      const res = await fetch('/api/carousel-proxies');
+      const proxies = await res.json();
+      
+      const activeProxies = (proxies || []).filter(p => p.status === 'active');
+      const proxyMap = {};
+      activeProxies.forEach(p => {
+        if (!proxyMap[p.platform]) {
+          proxyMap[p.platform] = p.urlTemplate;
+        }
+      });
+
+      const activeChannels = (channels || []).filter(c => proxyMap[c.platform]);
+
+      if (activeChannels.length === 0) {
+        alert("当前没有可用的轮播频道（对应的平台没有任何状态为'可用'的代理源）。");
+        return;
+      }
+      
+      let m3uContent = "#EXTM3U\n";
+      activeChannels.forEach(c => {
+        const template = proxyMap[c.platform];
+        const url = template.replace('{}', c.originalId);
+        m3uContent += `#EXTINF:-1, ${c.name || c.originalId}\n`;
+        m3uContent += `${url}\n`;
+      });
+
+      const blob = new Blob([m3uContent], { type: "audio/x-mpegurl" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `active_carousel_channels_${new Date().getTime()}.m3u`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      alert("导出失败");
+    }
+  };
+
   return (
     <div className="space-y-6">
       <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
@@ -182,6 +228,14 @@ export const CarouselChannelView = ({ fetchData, channelsData = [] }: { fetchDat
             轮播频道映射管理
           </h2>
           <div className="flex gap-2">
+            <button
+                  onClick={handleExportActive}
+                  className="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-bold hover:bg-indigo-700 flex items-center shadow-sm"
+                  title="根据代理源状态，导出当前可用的轮播频道列表为 M3U 文件"
+                >
+                  <Download className="w-4 h-4 mr-1.5" />
+                  输出可用列表
+                </button>
             <button 
               onClick={applyToExisting}
               disabled={applying}
@@ -336,9 +390,9 @@ export const CarouselChannelView = ({ fetchData, channelsData = [] }: { fetchDat
                    </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                   {channels
-                       .filter(p => (p.name || "").toLowerCase().includes(searchQuery.toLowerCase()) || p.originalId.includes(searchQuery) || p.platform.includes(searchQuery))
-                       .sort((a, b) => sortKey === "name" ? (a.name || "").localeCompare(b.name || "") : a.platform.localeCompare(b.platform))
+                   {(Array.isArray(channels) ? channels : [])
+                       .filter(p => (p.name || "").toLowerCase().includes(searchQuery.toLowerCase()) || (p.originalId || "").includes(searchQuery) || (p.platform || "").includes(searchQuery))
+                       .sort((a, b) => sortKey === "name" ? (a.name || "").localeCompare(b.name || "") : (a.platform || "").localeCompare(b.platform || ""))
                        .map(p => (
                       <tr key={p.id} className={`hover:bg-slate-50 transition-colors ${selectedRegistryIds.includes(p.id) ? 'bg-indigo-50/50' : ''}`}>
                          <td className="px-4 py-3">

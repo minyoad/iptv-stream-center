@@ -417,10 +417,10 @@ export default function App() {
   // Unique lists computed from all active live sources
   const allUniqueIspOptions = useMemo(() => {
     const list = new Set<string>();
-    channels.forEach(ch => {
-      if (ch.sources) {
+    (channels || []).forEach(ch => {
+      if (ch && ch.sources) {
         ch.sources.forEach(src => {
-          if (src.isp) list.add(src.isp);
+          if (src && src.isp) list.add(src.isp);
         });
       }
     });
@@ -429,10 +429,10 @@ export default function App() {
 
   const allUniqueProvinceOptions = useMemo(() => {
     const list = new Set<string>();
-    channels.forEach(ch => {
-      if (ch.sources) {
+    (channels || []).forEach(ch => {
+      if (ch && ch.sources) {
         ch.sources.forEach(src => {
-          if (src.province) list.add(src.province);
+          if (src && src.province) list.add(src.province);
         });
       }
     });
@@ -441,17 +441,19 @@ export default function App() {
 
   const filteredGlobalSources = useMemo(() => {
     const list: any[] = [];
-    channels.forEach((ch) => {
-      if (ch.sources) {
+    (channels || []).forEach((ch) => {
+      if (ch && ch.sources) {
         ch.sources.forEach((src) => {
-          list.push({
-            ...src,
-            channelId: ch.id,
-            channelName: ch.name,
-            channelLogo: ch.logo,
-            channelGroupIds: ch.groupIds,
-            channelIsolated: ch.isolated
-          });
+          if (src) {
+            list.push({
+              ...src,
+              channelId: ch.id,
+              channelName: ch.name || "",
+              channelLogo: ch.logo,
+              channelGroupIds: Array.isArray(ch.groupIds) ? ch.groupIds : [],
+              channelIsolated: ch.isolated
+            });
+          }
         });
       }
     });
@@ -459,8 +461,8 @@ export default function App() {
     return (list || []).filter((item) => {
       const query = globalSourceSearch.trim().toLowerCase();
       const matchesText = !query || 
-        item.channelName.toLowerCase().includes(query) || 
-        item.url.toLowerCase().includes(query) || 
+        (item.channelName || "").toLowerCase().includes(query) || 
+        (item.url || "").toLowerCase().includes(query) || 
         (item.isp && item.isp.toLowerCase().includes(query)) || 
         (item.province && item.province.toLowerCase().includes(query));
 
@@ -2415,8 +2417,10 @@ export default function App() {
     groups.forEach(g => groupIdToName.set(g.id, g.name));
 
     // Count channels for each group
-    channels.forEach(c => {
-      c.groupIds.forEach(gId => {
+    (channels || []).forEach(c => {
+      if (!c) return;
+      const groupIds = Array.isArray(c.groupIds) ? c.groupIds : [];
+      groupIds.forEach(gId => {
         const name = groupIdToName.get(gId);
         if (name && map[name] !== undefined) {
           map[name]++;
@@ -2434,11 +2438,15 @@ export default function App() {
     const cleanQuery = searchQuery.toLowerCase().replace(/[-_.\s]+/g, "");
 
     return (channels || []).filter(c => {
-      const groupNames = c.groupIds.map(gId => groupIdToName.get(gId) || "").filter(Boolean);
+      if (!c) return false;
+      const groupIds = Array.isArray(c.groupIds) ? c.groupIds : [];
+      const alias = Array.isArray(c.alias) ? c.alias : [];
+      const name = c.name || "";
+      const groupNames = groupIds.map(gId => groupIdToName.get(gId) || "").filter(Boolean);
       
       const matchesSearch = !cleanQuery ||
-                            c.name.toLowerCase().replace(/[-_.\s]+/g, "").includes(cleanQuery) ||
-                            c.alias.some(a => a.toLowerCase().replace(/[-_.\s]+/g, "").includes(cleanQuery)) ||
+                            name.toLowerCase().replace(/[-_.\s]+/g, "").includes(cleanQuery) ||
+                            alias.some(a => (a || "").toLowerCase().replace(/[-_.\s]+/g, "").includes(cleanQuery)) ||
                             groupNames.some(gn => gn.toLowerCase().replace(/[-_.\s]+/g, "").includes(cleanQuery));
       
       const matchesCategory = selectedCategory === "all" || groupNames.includes(selectedCategory);
@@ -2459,7 +2467,7 @@ export default function App() {
     const result = [...filteredChannels];
     if (channelSortBy === "name") {
       result.sort((a, b) => {
-        const cmp = a.name.localeCompare(b.name, "zh");
+        const cmp = (a.name || "").localeCompare(b.name || "", "zh");
         return channelSortOrder === "asc" ? cmp : -cmp;
       });
     } else if (channelSortBy === "sourceCount") {
@@ -3343,11 +3351,11 @@ export default function App() {
                             <div className="flex items-center gap-2">
                               <h3 className="font-bold text-slate-800 text-sm leading-tight">{selectedChannel.name}</h3>
                               <span className="bg-slate-100 text-[10px] text-slate-600 px-2 py-0.5 rounded">
-                                {selectedChannel.groupIds.map(gId => groups.find(g => g.id === gId)?.name).filter(Boolean).join(", ") || "其它"}
+                                {(Array.isArray(selectedChannel.groupIds) ? selectedChannel.groupIds : []).map(gId => (groups || []).find(g => g.id === gId)?.name).filter(Boolean).join(", ") || "其它"}
                               </span>
                             </div>
                             <p className="text-[11px] text-slate-500 mt-1">
-                              别名(Aliases): <span className="font-mono bg-slate-50 px-1 rounded">{selectedChannel.alias.join(" / ") || "无"}</span>
+                              别名(Aliases): <span className="font-mono bg-slate-50 px-1 rounded">{(Array.isArray(selectedChannel.alias) ? selectedChannel.alias : []).join(" / ") || "无"}</span>
                             </p>
                           </div>
                         </div>
@@ -3479,13 +3487,13 @@ export default function App() {
                               <input
                                 type="checkbox"
                                 className="w-3.5 h-3.5 text-indigo-600 border-slate-300 rounded focus:ring-blue-500 cursor-pointer"
-                                checked={selectedChannel.sources.length > 0 && selectedChannel.sources.every(src => selectedSourceIds.includes(src.id))}
+                                checked={(selectedChannel.sources || []).length > 0 && (selectedChannel.sources || []).every(src => selectedSourceIds.includes(src.id))}
                                 onChange={(e) => {
                                   if (e.target.checked) {
-                                    const idsToSelect = selectedChannel.sources.map(src => src.id);
+                                    const idsToSelect = (selectedChannel.sources || []).map(src => src.id);
                                     setSelectedSourceIds(prev => Array.from(new Set([...prev, ...idsToSelect])));
                                   } else {
-                                    const idsToDeselect = selectedChannel.sources.map(src => src.id);
+                                    const idsToDeselect = (selectedChannel.sources || []).map(src => src.id);
                                     setSelectedSourceIds(prev => prev.filter(id => !idsToDeselect.includes(id)));
                                   }
                                 }}
@@ -3548,7 +3556,7 @@ export default function App() {
                           )}
                         </div>
                         
-                        {selectedChannel.sources.length === 0 ? (
+                        {(!selectedChannel.sources || selectedChannel.sources.length === 0) ? (
                           <div className="flex flex-col items-center justify-center py-16 text-slate-350 border border-dashed rounded-2xl border-slate-200 shrink-0">
                             <Compass className="w-12 h-12 stroke-[1]" />
                             <p className="text-xs font-medium mt-1">此频道没有任何直播线路，点击上方按钮新增</p>
