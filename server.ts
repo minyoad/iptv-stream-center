@@ -482,28 +482,76 @@ const testStatus: TestStatus = {
 // Strip bitrate and resolution details from channel names (e.g. CCTV13 4M1080 -> CCTV13, iHot爱青春 7.5M1080 -> iHot爱青春)
 // Auto-detect and register carousel proxy from URL
   // --- Carousel Discovery Rules API ---
+  const PRESET_KNOWN_RULES = [
+    // YY 直播
+    { platform: 'yy', keyword: '/yy/' },
+    { platform: 'yy', keyword: 'yy.php' },
+    { platform: 'yy', keyword: '/yy.php' },
+    { platform: 'yy', keyword: 'yy.flv' },
+    { platform: 'yy', keyword: 'yy.m3u8' },
+
+    // 斗鱼直播
+    { platform: 'douyu', keyword: '/douyu/' },
+    { platform: 'douyu', keyword: 'douyu.php' },
+    { platform: 'douyu', keyword: 'dy.php' },
+    { platform: 'douyu', keyword: '/dy/' },
+
+    // 虎牙直播
+    { platform: 'huya', keyword: '/huya/' },
+    { platform: 'huya', keyword: 'huya.php' },
+    { platform: 'huya', keyword: '/huya.php' },
+    { platform: 'huya', keyword: 'hy.php' },
+
+    // B站 (Bilibili)
+    { platform: 'bilibili', keyword: '/bilibili/' },
+    { platform: 'bilibili', keyword: 'bilibili.php' },
+    { platform: 'bilibili', keyword: '/bili/' },
+    { platform: 'bilibili', keyword: 'bili.php' },
+
+    // 快手直播
+    { platform: 'kuaishou', keyword: '/kuaishou/' },
+    { platform: 'kuaishou', keyword: 'kuaishou.php' },
+    { platform: 'kuaishou', keyword: 'ks.php' },
+
+    // 抖音直播
+    { platform: 'douyin', keyword: '/douyin/' },
+    { platform: 'douyin', keyword: 'douyin.php' },
+    { platform: 'douyin', keyword: 'dyin.php' },
+
+    // 央视/CNTV/咪咕/IPTV
+    { platform: 'cntv', keyword: '/cntv/' },
+    { platform: 'cntv', keyword: 'cntv.php' },
+    { platform: 'migu', keyword: '/migu/' },
+    { platform: 'migu', keyword: 'migu.php' },
+    { platform: 'iptv', keyword: '/iptv/' },
+    { platform: 'iptv', keyword: 'iptv.php' }
+  ];
+
   let discoveryRulesCache = null;
+
+  function seedKnownRules(overwrite = false) {
+    if (overwrite) {
+      db.prepare('DELETE FROM carousel_discovery_rules').run();
+    }
+    const insertStmt = db.prepare('INSERT OR IGNORE INTO carousel_discovery_rules (id, platform, keyword) VALUES (?, ?, ?)');
+    const insertMany = db.transaction((rules) => {
+      let count = 0;
+      for (const rule of rules) {
+        const info = insertStmt.run(crypto.randomUUID(), rule.platform, rule.keyword);
+        if (info.changes > 0) count++;
+      }
+      return count;
+    });
+    const addedCount = insertMany(PRESET_KNOWN_RULES);
+    discoveryRulesCache = null;
+    return addedCount;
+  }
+
   function getDiscoveryRules() {
     if (!discoveryRulesCache) {
       discoveryRulesCache = db.prepare('SELECT * FROM carousel_discovery_rules').all();
       if (discoveryRulesCache.length === 0) {
-        // Seed default rules
-        const defaultRules = [
-          { platform: 'yy', keyword: '/yy/' },
-          { platform: 'yy', keyword: 'yy.php' },
-          { platform: 'douyu', keyword: '/douyu/' },
-          { platform: 'douyu', keyword: 'douyu.php' },
-          { platform: 'douyu', keyword: 'dy.php' },
-          { platform: 'huya', keyword: '/huya/' },
-          { platform: 'huya', keyword: 'huya.php' }
-        ];
-        const insertStmt = db.prepare('INSERT INTO carousel_discovery_rules (id, platform, keyword) VALUES (?, ?, ?)');
-        const insertMany = db.transaction((rules) => {
-          for (const rule of rules) {
-             insertStmt.run(crypto.randomUUID(), rule.platform, rule.keyword);
-          }
-        });
-        insertMany(defaultRules);
+        seedKnownRules();
         discoveryRulesCache = db.prepare('SELECT * FROM carousel_discovery_rules').all();
       }
     }
@@ -2998,7 +3046,7 @@ function preGenerateIspPlaylists() {
 
 async function startServer() {
   const app = express();
-  const PORT = process.env.PORT || 3000;
+  const PORT = Number(process.env.PORT) || 3000;
 
   app.use(compression());
   app.use(express.json({ limit: "50mb" }));
@@ -4814,7 +4862,27 @@ app.get("/api/channels", async (req, res) => {
   app.get("/api/carousel-discovery-rules", (req, res) => {
     try {
       res.json(getDiscoveryRules());
-    } catch (e) {
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/carousel-discovery-rules/preset", (req, res) => {
+    try {
+      const { mode } = req.body || {};
+      const overwrite = mode === "reset";
+      const added = seedKnownRules(overwrite);
+      const totalRules = getDiscoveryRules();
+      res.json({
+        success: true,
+        addedCount: added,
+        total: totalRules.length,
+        rules: totalRules,
+        message: overwrite
+          ? `重置并预置已知规则成功！共加载 ${totalRules.length} 条常见平台特征规则。`
+          : `已知特征规则增量补充成功！补充新增 ${added} 条规则，当前共 ${totalRules.length} 条规则。`
+      });
+    } catch (e: any) {
       res.status(500).json({ error: e.message });
     }
   });
@@ -4846,9 +4914,9 @@ app.get("/api/channels", async (req, res) => {
 
   app.get("/api/carousel-channels", (req, res) => {
     try {
-      const rows = db.prepare('SELECT c.id, c.channelId, ch.name, c.platform, c.originalId FROM carousel_channels c LEFT JOIN channels ch ON c.channelId = ch.id').all();
+      const rows = db.prepare("SELECT c.id, c.channelId, COALESCE(NULLIF(c.name, ''), NULLIF(ch.name, ''), '未知频道') as name, c.platform, c.originalId FROM carousel_channels c LEFT JOIN channels ch ON c.channelId = ch.id").all();
       res.json(rows);
-    } catch (e) {
+    } catch (e: any) {
       res.status(500).json({ error: e.message });
     }
   });
@@ -4861,7 +4929,7 @@ app.get("/api/channels", async (req, res) => {
       let ch = db.prepare('SELECT id FROM channels WHERE id = ?').get(req.body.channelId); if(!ch && name) { const nid = crypto.randomUUID(); db.prepare('INSERT INTO channels (id, name, logo, groupIds, alias, epgId) VALUES (?, ?, ?, ?, ?, ?)').run(nid, name, '', '[]', '[]', ''); req.body.channelId = nid; }
 db.prepare('INSERT INTO carousel_channels (id, channelId, name, platform, originalId) VALUES (?, ?, ?, ?, ?)').run(id, req.body.channelId || '', name || '', platform, originalId);
       res.json({ id, name, platform, originalId });
-    } catch (e) {
+    } catch (e: any) {
       res.status(500).json({ error: e.message });
     }
   });
@@ -4870,9 +4938,9 @@ db.prepare('INSERT INTO carousel_channels (id, channelId, name, platform, origin
     const { id } = req.params;
     const { name, platform, originalId } = req.body;
     try {
-      db.prepare('UPDATE carousel_channels SET channelId = ?, platform = ?, originalId = ? WHERE id = ?').run(req.body.channelId || '', platform, originalId, id);
+      db.prepare('UPDATE carousel_channels SET name = ?, channelId = ?, platform = ?, originalId = ? WHERE id = ?').run(name || '', req.body.channelId || '', platform, originalId, id);
       res.json({ success: true });
-    } catch (e) {
+    } catch (e: any) {
       res.status(500).json({ error: e.message });
     }
   });
@@ -4890,13 +4958,15 @@ db.prepare('INSERT INTO carousel_channels (id, channelId, name, platform, origin
   app.get("/api/carousel-channels-unregistered", (req, res) => {
     try {
       const allSources = db.prepare('SELECT s.url, c.name as channelName FROM sources s JOIN channels c ON s.channelId = c.id').all() as any[];
+      const existingChannels = db.prepare('SELECT platform, originalId FROM carousel_channels').all() as any[];
+      const existingSet = new Set(existingChannels.map((c: any) => `${c.platform}_${c.originalId}`));
+
       const map = new Map();
       for (const row of allSources) {
         const parsed = parseCarouselUrl(row.url);
         if (parsed.platform && parsed.originalId) {
-          const exists = db.prepare('SELECT id FROM carousel_channels WHERE platform = ? AND originalId = ?').get(parsed.platform, parsed.originalId);
-          if (!exists) {
-            const key = `${parsed.platform}_${parsed.originalId}`;
+          const key = `${parsed.platform}_${parsed.originalId}`;
+          if (!existingSet.has(key)) {
             if (!map.has(key)) {
               map.set(key, { platform: parsed.platform, originalId: parsed.originalId, sampleNames: new Set() });
             }
@@ -4904,12 +4974,12 @@ db.prepare('INSERT INTO carousel_channels (id, channelId, name, platform, origin
           }
         }
       }
-      const results = Array.from(map.values()).map(v => ({
+      const results = Array.from(map.values()).map((v: any) => ({
         ...v,
         sampleNames: Array.from(v.sampleNames)
       }));
       res.json(results);
-    } catch (e) {
+    } catch (e: any) {
       res.status(500).json({ error: e.message });
     }
   });
@@ -5964,6 +6034,178 @@ ${JSON.stringify(scoredList.map(c => ({ epgId: c.epgId, names: c.displayNames, s
     res.json({ success: true, message: msg });
   });
 
+  // Backup Parsing & Normalization Helper Functions
+  function parseM3uToBackup(text: string) {
+    const lines = text.split(/\r?\n/);
+    const channelsMap = new Map<string, any>();
+    const groupsMap = new Map<string, any>();
+    
+    let currentTitle = "";
+    let currentGroup = "未分类";
+    let currentLogo = "";
+    let currentEpgId = "";
+
+    lines.forEach((line) => {
+      const trimmed = line.trim();
+      if (!trimmed) return;
+
+      if (trimmed.startsWith("#EXTINF:")) {
+        const groupMatch = trimmed.match(/group-title="([^"]+)"/i);
+        const logoMatch = trimmed.match(/tvg-logo="([^"]+)"/i);
+        const epgMatch = trimmed.match(/tvg-id="([^"]+)"/i);
+        const commaIdx = trimmed.indexOf(",");
+        
+        currentGroup = groupMatch ? groupMatch[1] : "未分类";
+        currentLogo = logoMatch ? logoMatch[1] : "";
+        currentEpgId = epgMatch ? epgMatch[1] : "";
+        currentTitle = commaIdx !== -1 ? trimmed.substring(commaIdx + 1).trim() : "";
+      } else if (trimmed.includes(",#genre")) {
+        const parts = trimmed.split(",");
+        currentGroup = parts[0].trim() || "未分类";
+      } else if (trimmed.includes("http://") || trimmed.includes("https://") || trimmed.includes("rtsp://") || trimmed.includes("rtmp://")) {
+        let url = trimmed;
+        let name = currentTitle;
+        if (!name && trimmed.includes(",")) {
+          const parts = trimmed.split(",");
+          name = parts[0].trim();
+          url = parts[1].trim();
+        }
+        if (!name) name = "未知频道";
+
+        const groupKey = currentGroup || "未分类";
+        if (!groupsMap.has(groupKey)) {
+          groupsMap.set(groupKey, { id: `g_m3u_${groupsMap.size + 1}`, name: groupKey, isolated: false });
+        }
+        const grp = groupsMap.get(groupKey)!;
+
+        if (!channelsMap.has(name)) {
+          channelsMap.set(name, {
+            id: `ch_m3u_${channelsMap.size + 1}_${Date.now()}`,
+            name,
+            logo: currentLogo,
+            groupIds: [grp.id],
+            alias: [],
+            epgId: currentEpgId,
+            isolated: false,
+            sources: []
+          });
+        }
+        const ch = channelsMap.get(name)!;
+        ch.sources.push({
+          id: `src_m3u_${ch.sources.length + 1}_${Date.now()}`,
+          url,
+          status: "active",
+          isolated: false
+        });
+
+        currentTitle = "";
+      }
+    });
+
+    return {
+      channels: Array.from(channelsMap.values()),
+      groups: Array.from(groupsMap.values()),
+      syncConfigs: [],
+      epgSources: []
+    };
+  }
+
+  function parseAndNormalizeBackup(rawInput: any): any {
+    let parsed: any = null;
+
+    if (Buffer.isBuffer(rawInput) || rawInput instanceof Uint8Array) {
+      if (rawInput.length >= 2 && rawInput[0] === 0x1f && rawInput[1] === 0x8b) {
+        try {
+          const uncompressed = zlib.gunzipSync(rawInput);
+          return parseAndNormalizeBackup(uncompressed.toString("utf-8"));
+        } catch (e) {
+          return parseAndNormalizeBackup(rawInput.toString("utf-8"));
+        }
+      } else {
+        return parseAndNormalizeBackup(rawInput.toString("utf-8"));
+      }
+    }
+
+    if (typeof rawInput === "string") {
+      const trimmed = rawInput.trim();
+      if (!trimmed.startsWith("{") && !trimmed.startsWith("[") && !trimmed.startsWith("#") && trimmed.length > 20) {
+        try {
+          const decoded = Buffer.from(trimmed, "base64");
+          if (decoded.length >= 2 && decoded[0] === 0x1f && decoded[1] === 0x8b) {
+            const uncompressed = zlib.gunzipSync(decoded);
+            return parseAndNormalizeBackup(uncompressed.toString("utf-8"));
+          }
+        } catch (e) {}
+      }
+
+      try {
+        parsed = JSON.parse(trimmed);
+      } catch (e) {
+        if (trimmed.includes("#EXTM3U") || trimmed.includes("#EXTINF") || trimmed.includes(",http")) {
+          return parseM3uToBackup(trimmed);
+        }
+        throw new Error("备份文件解析失败：既不是有效的 JSON 格式，也不是可解析的 M3U/TXT 播放列表");
+      }
+    } else if (typeof rawInput === "object" && rawInput !== null) {
+      parsed = rawInput;
+    }
+
+    if (!parsed) {
+      throw new Error("无效的备份文件内容");
+    }
+
+    if (parsed.data && typeof parsed.data === "object") parsed = parsed.data;
+    else if (parsed.backup && typeof parsed.backup === "object") parsed = parsed.backup;
+    else if (parsed.result && typeof parsed.result === "object") parsed = parsed.result;
+    else if (parsed.content && typeof parsed.content === "object") parsed = parsed.content;
+
+    if (Array.isArray(parsed)) {
+      const channels: any[] = [];
+      const groups: any[] = [{ id: "g_imported", name: "导入备份", isolated: false }];
+      parsed.forEach((item, idx) => {
+        if (item && typeof item === "object") {
+          const chId = item.id || `ch_imp_${idx}_${Date.now()}`;
+          const chName = item.name || item.title || `频道 ${idx + 1}`;
+          let sources: any[] = [];
+          if (Array.isArray(item.sources)) {
+            sources = item.sources;
+          } else if (item.url) {
+            sources = [{ id: `src_imp_${idx}_1`, url: item.url, status: "active", isolated: false }];
+          }
+          channels.push({
+            id: chId,
+            name: chName,
+            logo: item.logo || "",
+            groupIds: item.groupIds || ["g_imported"],
+            alias: item.alias || [],
+            epgId: item.epgId || "",
+            isolated: !!item.isolated,
+            sources
+          });
+        }
+      });
+      return { channels, groups, syncConfigs: [], epgSources: [] };
+    }
+
+    const resultObj: any = {
+      channels: Array.isArray(parsed.channels) ? parsed.channels : [],
+      groups: Array.isArray(parsed.groups) ? parsed.groups : [],
+      syncConfigs: Array.isArray(parsed.syncConfigs) ? parsed.syncConfigs : [],
+      epgSources: Array.isArray(parsed.epgSources) ? parsed.epgSources : [],
+    };
+
+    if (parsed.adminPassword !== undefined) resultObj.adminPassword = parsed.adminPassword;
+    if (parsed.githubProxy !== undefined) resultObj.githubProxy = parsed.githubProxy;
+    if (parsed.autoCreateChannel !== undefined) resultObj.autoCreateChannel = parsed.autoCreateChannel;
+    if (parsed.cronJobs && Array.isArray(parsed.cronJobs)) resultObj.cronJobs = parsed.cronJobs;
+
+    if (resultObj.channels.length === 0 && resultObj.groups.length === 0 && resultObj.syncConfigs.length === 0 && resultObj.epgSources.length === 0) {
+      throw new Error("备份文件中未包含任何可识别的频道、分组、订阅源或 EPG 数据节点");
+    }
+
+    return resultObj;
+  }
+
   // DB Manual Backup & Restore APIs
   app.get("/api/backups", (req, res) => {
     try {
@@ -6081,49 +6323,49 @@ ${JSON.stringify(scoredList.map(c => ({ epgId: c.epgId, names: c.displayNames, s
         console.error("[Restore Backup] Failed to write safety prior backup:", backupErr);
       }
 
-      if (content) {
-        let parsed: any;
-        try {
-          parsed = JSON.parse(content);
-        } catch (e) {
-          return res.status(400).json({ error: "备份文件JSON解析失败，请检查文件内容" });
-        }
-
-        if (!parsed.channels && !parsed.groups) {
-          return res.status(400).json({ error: "备份文件格式不正确 (未检测到 channels 或 groups 根节点)" });
-        }
-        
-        fs.writeFileSync(DATA_FILE, JSON.stringify(parsed, null, 2), "utf-8");
-        loadData();
-        return res.json({ success: true, message: "手动导入备份恢复成功！原有数据已备份为备份文件：" + autoBackupName });
-      }
-      
-      if (!filename) {
-        return res.status(400).json({ error: "参数错误: filename 或者是 JSON 备份内容 (content) 不能为空" });
-      }
-      
-      const safeFilename = path.basename(filename);
-      const filePath = path.join(DATA_DIR, safeFilename);
-      if (!fs.existsSync(filePath)) {
-        return res.status(404).json({ error: "未找到指定的备份文件: " + safeFilename });
-      }
-      
       let parsedBackupData: any = null;
-      try {
-         let rawData = "";
-         if (filePath.endsWith(".json.gz")) {
-             rawData = zlib.gunzipSync(fs.readFileSync(filePath)).toString("utf-8");
-         } else {
-             rawData = fs.readFileSync(filePath, "utf-8");
-         }
-         parsedBackupData = JSON.parse(rawData);
-      } catch (e) {
-         return res.status(500).json({ error: "解析备份文件失败: " + e.message });
+
+      if (content) {
+        try {
+          parsedBackupData = parseAndNormalizeBackup(content);
+        } catch (e: any) {
+          return res.status(400).json({ error: "备份文件解析失败: " + e.message });
+        }
+      } else if (filename) {
+        const safeFilename = path.basename(filename);
+        const filePath = path.join(DATA_DIR, safeFilename);
+        if (!fs.existsSync(filePath)) {
+          return res.status(404).json({ error: "未找到指定的备份文件: " + safeFilename });
+        }
+        try {
+          let rawData: Buffer | string = "";
+          if (filePath.endsWith(".json.gz")) {
+            rawData = zlib.gunzipSync(fs.readFileSync(filePath));
+          } else {
+            rawData = fs.readFileSync(filePath, "utf-8");
+          }
+          parsedBackupData = parseAndNormalizeBackup(rawData);
+        } catch (e: any) {
+          return res.status(500).json({ error: "解析本地备份文件失败: " + e.message });
+        }
+      } else {
+        return res.status(400).json({ error: "参数错误: filename 或者是备份内容 (content) 不能为空" });
       }
 
       fs.writeFileSync(DATA_FILE, JSON.stringify(parsedBackupData, null, 2), "utf-8");
       loadData();
-      res.json({ success: true, message: "成功恢复到指定备份，数据已实时刷新！先前版本已自动备份为 " + autoBackupName });
+      saveDataSync(); // Force immediate persistence to SQLite
+
+      const chCount = parsedBackupData.channels ? parsedBackupData.channels.length : 0;
+      const grpCount = parsedBackupData.groups ? parsedBackupData.groups.length : 0;
+
+      return res.json({
+        success: true,
+        message: `成功完成恢复！共载入 ${chCount} 个频道和 ${grpCount} 个分组。原有数据已自动为您归档为：${autoBackupName}`,
+        autoBackupName,
+        channelCount: chCount,
+        groupCount: grpCount
+      });
     } catch (err: any) {
       res.status(500).json({ error: "恢复备份失败: " + err.message });
     }

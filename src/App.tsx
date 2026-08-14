@@ -350,6 +350,7 @@ export default function App() {
   const [clientTestOnlyActive, setClientTestOnlyActive] = useState(false); // only test currently active sources
   const [isDetectingIp, setIsDetectingIp] = useState(false);
   const [detectedIp, setDetectedIp] = useState("");
+  const [isRestoring, setIsRestoring] = useState(false);
 
   // Custom iframe-safe Confirmation Modal state
   const [confirmModal, setConfirmModal] = useState<{
@@ -582,31 +583,72 @@ export default function App() {
     );
   };
 
-  const handleUploadBackupLocal = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    
+  const processBackupFile = async (file: File) => {
+    setIsRestoring(true);
+    showFeedback("info", `正在读取并解析备份文件 [${file.name}]...`);
+
     try {
+      const buffer = await file.arrayBuffer();
+      const bytes = new Uint8Array(buffer);
+      
       let textTask = "";
-      if (file.name.endsWith(".gz")) {
-        const ds = new DecompressionStream("gzip");
-        const decompressedStream = file.stream().pipeThrough(ds);
-        textTask = await new Response(decompressedStream).text();
+      const isGzip = (bytes.length >= 2 && bytes[0] === 0x1f && bytes[1] === 0x8b) || file.name.endsWith(".gz");
+
+      if (isGzip) {
+        try {
+          if (typeof DecompressionStream !== "undefined") {
+            const stream = new Blob([buffer]).stream().pipeThrough(new DecompressionStream("gzip"));
+            textTask = await new Response(stream).text();
+          } else {
+            textTask = new TextDecoder("utf-8").decode(buffer);
+          }
+        } catch (decompErr) {
+          console.warn("Gzip client decompression warning, fallback to text:", decompErr);
+          textTask = new TextDecoder("utf-8").decode(buffer);
+        }
       } else {
-        textTask = await file.text();
+        textTask = new TextDecoder("utf-8").decode(buffer);
       }
 
-      // Verify JSON parseable
-      const parsed = JSON.parse(textTask);
-      if (!parsed.channels && !parsed.groups) {
-        showFeedback("error", "上传失败：检测到文件内不包含合法的 channels 或 groups IPTV 数据节点");
+      let summaryInfo = "";
+      let isParseable = false;
+
+      try {
+        const parsed = JSON.parse(textTask);
+        const norm = parsed.data || parsed.backup || parsed.result || parsed;
+        if (Array.isArray(norm)) {
+          summaryInfo = `包含 ${norm.length} 个频道的完整列表`;
+          isParseable = true;
+        } else if (typeof norm === "object" && norm !== null) {
+          const chLen = Array.isArray(norm.channels) ? norm.channels.length : 0;
+          const grpLen = Array.isArray(norm.groups) ? norm.groups.length : 0;
+          const syncLen = Array.isArray(norm.syncConfigs) ? norm.syncConfigs.length : 0;
+          summaryInfo = `包含 ${chLen} 个频道，${grpLen} 个分组，${syncLen} 个订阅任务`;
+          if (chLen > 0 || grpLen > 0 || syncLen > 0 || norm.epgSources) {
+            isParseable = true;
+          }
+        }
+      } catch (jsonErr) {
+        if (textTask.includes("#EXTM3U") || textTask.includes("#EXTINF") || textTask.includes(",http")) {
+          summaryInfo = "检测到 M3U / TXT 播放列表格式，将自动解析转换并恢复数据";
+          isParseable = true;
+        }
+      }
+
+      if (!isParseable) {
+        showFeedback("error", "未能识别合法的备份数据格式，请确保上传的是系统 JSON 备份文件或 M3U/TXT 播放列表");
+        setIsRestoring(false);
         return;
       }
 
+      setIsRestoring(false);
+
       triggerConfirm(
-        "上传并还原本地备份？",
-        `您上传了本地外部备份 [${file.name}]。您确定要应用此备份覆盖当前系统数据库吗？当前数据将被完全覆写。系统在恢复前依然会为您暂存一份紧急恢复包。`,
+        "确认上传并还原系统备份？",
+        `您选择了本地备份 [${file.name}] (${summaryInfo})。还原后当前数据库将被完全覆盖，系统在恢复前会自动留存一份紧急防丢失快照。`,
         async () => {
+          setIsRestoring(true);
+          showFeedback("info", "正在传输数据并执行恢复，请稍候...");
           try {
             const res = await fetch("/api/backups/restore", {
               method: "POST",
@@ -615,22 +657,29 @@ export default function App() {
             });
             const data = await res.json();
             if (res.ok && data.success) {
-              showFeedback("success", data.message || "本地备份文件还原成功！");
+              showFeedback("success", data.message || "本地备份文件还原成功！系统数据已更新。");
               await fetchData();
               fetchBackups();
             } else {
-              showFeedback("error", data.error || "加载本地备份失败");
+              showFeedback("error", data.error || "还原本地备份失败");
             }
           } catch (err) {
-            showFeedback("error", "服务器还原本地文件通信异常");
+            showFeedback("error", "与服务器通信中断，还原失败");
+          } finally {
+            setIsRestoring(false);
           }
         }
       );
-    } catch (err) {
-      showFeedback("error", "解析格式失败，请确保上传的是合法的 JSON 备份文件");
+    } catch (err: any) {
+      showFeedback("error", "读取文件失败: " + (err.message || "文件解析错误"));
+      setIsRestoring(false);
     }
-    
-    // Clear input so same file can be chosen again
+  };
+
+  const handleUploadBackupLocal = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    await processBackupFile(file);
     e.target.value = "";
   };
 
@@ -6200,21 +6249,40 @@ export default function App() {
                     </div>
                     
                     <div className="text-xs text-slate-500 leading-relaxed font-semibold font-sans">
-                      如果您曾在其他服务器下载了本系统的 JSON 备份镜像，在此处选择上传即可秒级恢复完整的电视频道设置与全量数据线。
+                      如果您曾在其他服务器或本地下载了本系统的 JSON 备份镜像或 M3U/TXT 播放列表，在此处选择或拖拽上传即可秒级恢复完整的电视频道设置与全量数据。
                     </div>
 
-                    <div className="relative border-2 border-dashed border-slate-200 rounded-2xl p-4 text-center hover:bg-slate-50/50 transition cursor-pointer">
+                    <div 
+                      onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); }}
+                      onDrop={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        const file = e.dataTransfer.files?.[0];
+                        if (file) processBackupFile(file);
+                      }}
+                      className="relative border-2 border-dashed border-indigo-200 hover:border-indigo-400 rounded-2xl p-6 text-center hover:bg-indigo-50/40 transition cursor-pointer group"
+                    >
                       <input 
                         type="file"
-                        accept=".json,.gz"
+                        accept=".json,.gz,.m3u,.txt,.bak,*"
                         onChange={handleUploadBackupLocal}
-                        className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                        className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
                         id="backup_file_upload_input"
+                        disabled={isRestoring}
                       />
-                      <div className="space-y-1 text-slate-500">
-                        <Database className="w-6 h-6 mx-auto text-slate-400" />
-                        <div className="text-xs font-bold text-indigo-700">点击此处选择备份文件</div>
-                        <div className="text-[10px] text-slate-400">仅支持 .json 快照容器格式</div>
+                      <div className="space-y-2 text-slate-500 pointer-events-none">
+                        {isRestoring ? (
+                          <div className="flex flex-col items-center gap-2 py-2 text-indigo-600">
+                            <RefreshCw className="w-7 h-7 animate-spin" />
+                            <div className="text-xs font-bold">正在解析并恢复数据中...</div>
+                          </div>
+                        ) : (
+                          <>
+                            <Database className="w-7 h-7 mx-auto text-indigo-500 group-hover:scale-110 transition-transform" />
+                            <div className="text-xs font-bold text-indigo-700">点击此处选择或拖拽备份文件到这里</div>
+                            <div className="text-[10px] text-slate-400">支持 .json / .json.gz 快照容器及 .m3u / .txt 列表</div>
+                          </>
+                        )}
                       </div>
                     </div>
                   </div>

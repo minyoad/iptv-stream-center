@@ -2,6 +2,7 @@ import React, { useState, useMemo, useEffect } from 'react';
 import { History, Eye, Trash2, MapPin } from 'lucide-react';
 import { Channel } from '../types';
 import { Activity, Copy, AlertCircle, CheckCircle, XCircle } from 'lucide-react';
+import { authFetch as fetch } from "../utils/api";
 
 interface StatsViewProps {
   channels: Channel[];

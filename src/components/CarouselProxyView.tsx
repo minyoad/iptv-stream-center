@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { Plus, Trash2, Edit2, Check, AlertCircle, RefreshCw, X, PlayCircle, Settings, Search , Download } from "lucide-react";
+import { authFetch as fetch } from "../utils/api";
 
 export const CarouselProxyView = ({ fetchData }: { fetchData: () => void }) => {
   const [proxies, setProxies] = useState<any[]>([]);
