@@ -1,3 +1,10 @@
+export interface CarouselProxy {
+  id: string;
+  platform: string; // 'yy' | 'douyu' | 'huya' | 'other'
+  urlTemplate: string; // e.g. http://11.xmyxc.cn/api/php/yy.php?id={}
+  status: "active" | "inactive" | "unknown";
+}
+
 export interface IpGeoApi {
   id: string;
   name: string;

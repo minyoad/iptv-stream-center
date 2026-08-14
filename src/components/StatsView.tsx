@@ -72,11 +72,11 @@ export default function StatsView({ channels }: StatsViewProps) {
   const channelStats = useMemo(() => {
     return channels.map(ch => {
       const total = ch.sources.length;
-      const active = ch.sources.filter(s => s.status === 'active' && (!s.latency || s.latency < 9999) && !s.isolated).length;
-      const inactive = ch.sources.filter(s => (s.status === 'inactive' || (s.latency !== undefined && s.latency >= 9999)) && !s.isolated).length;
-      const checking = ch.sources.filter(s => s.status === 'checking' && !s.isolated).length;
-      const unknown = ch.sources.filter(s => s.status === 'unknown' && !s.isolated).length;
-      const isolated = ch.sources.filter(s => s.isolated).length;
+      const active = (ch.sources || []).filter(s => s.status === 'active' && (!s.latency || s.latency < 9999) && !s.isolated).length;
+      const inactive = (ch.sources || []).filter(s => (s.status === 'inactive' || (s.latency !== undefined && s.latency >= 9999)) && !s.isolated).length;
+      const checking = (ch.sources || []).filter(s => s.status === 'checking' && !s.isolated).length;
+      const unknown = (ch.sources || []).filter(s => s.status === 'unknown' && !s.isolated).length;
+      const isolated = (ch.sources || []).filter(s => s.isolated).length;
       
       const isUnstable = active < 2;
 
@@ -92,7 +92,7 @@ export default function StatsView({ channels }: StatsViewProps) {
   }, [channels]);
 
   const filteredStats = useMemo(() => {
-    return channelStats.filter(ch => {
+    return (channelStats || []).filter(ch => {
       if (filterType === "unstable" && !ch.stats.isUnstable) return false;
       if (search && !ch.name.toLowerCase().includes(search.toLowerCase())) return false;
       return true;
@@ -100,7 +100,7 @@ export default function StatsView({ channels }: StatsViewProps) {
   }, [channelStats, filterType, search]);
 
   const totalChannels = channels.length;
-  const unstableChannelsCount = channelStats.filter(c => c.stats.isUnstable).length;
+  const unstableChannelsCount = (channelStats || []).filter(c => c.stats.isUnstable).length;
 
   return (
     <div className="space-y-6 animate-fade-in" id="tab_stats_view">

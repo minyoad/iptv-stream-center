@@ -106,6 +106,7 @@ let adminPassword = process.env.ADMIN_PASSWORD || "";
 let githubProxy = "";
 let autoCreateChannel = true;
 let m3uLogoVersion = "";
+let carouselProxyPresets = {"yy":[{"name":"YY 官方","id":"12345"},{"name":"YY 跳舞","id":"76"}],"douyu":[{"name":"英雄联盟","id":"9999"},{"name":"Dota2","id":"1126960"}],"huya":[{"name":"LPL赛事","id":"lpl"},{"name":"楚河","id":"116361"}],"bilibili":[{"name":"散人","id":"1129"}]};
 export interface IpGeoApi {
   id: string;
   name: string;
@@ -209,6 +210,13 @@ function initSqlite() {
       details TEXT
     );
     
+    CREATE TABLE IF NOT EXISTS carousel_proxies (
+      id TEXT PRIMARY KEY,
+      platform TEXT NOT NULL,
+      urlTemplate TEXT NOT NULL,
+      status TEXT DEFAULT 'active'
+    );
+    
     CREATE TABLE IF NOT EXISTS settings (
       key TEXT PRIMARY KEY,
       value TEXT
@@ -221,7 +229,40 @@ function initSqlite() {
     CREATE INDEX IF NOT EXISTS idx_sources_channelId ON sources(channelId);
     CREATE INDEX IF NOT EXISTS idx_sources_status ON sources(status);
     CREATE INDEX IF NOT EXISTS idx_test_reports_createdAt ON test_reports(createdAt DESC);
+    CREATE INDEX IF NOT EXISTS idx_carousel_proxies_platform ON carousel_proxies(platform);
+    CREATE TABLE IF NOT EXISTS carousel_channels (
+      id TEXT PRIMARY KEY,
+      channelId TEXT NOT NULL,
+      name TEXT NOT NULL,
+      platform TEXT NOT NULL,
+      originalId TEXT NOT NULL
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_carousel_channels_pid ON carousel_channels(platform, originalId);
+    CREATE TABLE IF NOT EXISTS carousel_discovery_rules (
+      id TEXT PRIMARY KEY,
+      platform TEXT NOT NULL,
+      keyword TEXT NOT NULL
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_carousel_discovery_rules_keyword ON carousel_discovery_rules(keyword);
   `);
+
+  // Seed default carousel proxies
+  const proxyCount = (db.prepare('SELECT COUNT(*) as count FROM carousel_proxies').get() as any).count;
+  if (proxyCount === 0) {
+    const seedProxies = [
+      { id: crypto.randomUUID(), platform: 'yy', urlTemplate: 'http://11.xmyxc.cn/api/php/yy.php?id={}', status: 'active' },
+      { id: crypto.randomUUID(), platform: 'yy', urlTemplate: 'https://lunbo.freetv.top/yy/{}', status: 'active' },
+      { id: crypto.randomUUID(), platform: 'yy', urlTemplate: 'http://cfss.cc/cdn/yy/{}.flv', status: 'active' },
+      { id: crypto.randomUUID(), platform: 'douyu', urlTemplate: 'https://diyp.zxyxndc.top/douyu/{}', status: 'active' },
+      { id: crypto.randomUUID(), platform: 'douyu', urlTemplate: 'http://live.iill.top/douyu.php?id={}', status: 'active' },
+      { id: crypto.randomUUID(), platform: 'huya', urlTemplate: 'http://8.155.43.98:35455/huya/{}', status: 'active' }
+    ];
+    const stmt = db.prepare('INSERT INTO carousel_proxies (id, platform, urlTemplate, status) VALUES (@id, @platform, @urlTemplate, @status)');
+    const insertMany = db.transaction((proxies) => {
+      for (const p of proxies) stmt.run(p);
+    });
+    insertMany(seedProxies);
+  }
 
   // Add new columns if they don't exist
   try {
@@ -261,6 +302,12 @@ function initSqlite() {
     INSERT OR IGNORE INTO cron_jobs (id, name, startTime, intervalMinutes, active)
     VALUES (?, ?, ?, ?, ?)
   `).run("job_server_test", "全网并发测速", "04:00", 1440, 0);
+
+  // Ensure job_carousel_test exists
+  db.prepare(`
+    INSERT OR IGNORE INTO cron_jobs (id, name, startTime, intervalMinutes, active)
+    VALUES (?, ?, ?, ?, ?)
+  `).run("job_carousel_test", "轮播代理全网检测", "05:00", 1440, 0);
 }
 
 const EPG_CACHE_DIR = path.join(DATA_DIR, "epg_cache_sources");
@@ -433,6 +480,141 @@ const testStatus: TestStatus = {
 };
 
 // Strip bitrate and resolution details from channel names (e.g. CCTV13 4M1080 -> CCTV13, iHot爱青春 7.5M1080 -> iHot爱青春)
+// Auto-detect and register carousel proxy from URL
+  // --- Carousel Discovery Rules API ---
+  let discoveryRulesCache = null;
+  function getDiscoveryRules() {
+    if (!discoveryRulesCache) {
+      discoveryRulesCache = db.prepare('SELECT * FROM carousel_discovery_rules').all();
+      if (discoveryRulesCache.length === 0) {
+        // Seed default rules
+        const defaultRules = [
+          { platform: 'yy', keyword: '/yy/' },
+          { platform: 'yy', keyword: 'yy.php' },
+          { platform: 'douyu', keyword: '/douyu/' },
+          { platform: 'douyu', keyword: 'douyu.php' },
+          { platform: 'douyu', keyword: 'dy.php' },
+          { platform: 'huya', keyword: '/huya/' },
+          { platform: 'huya', keyword: 'huya.php' }
+        ];
+        const insertStmt = db.prepare('INSERT INTO carousel_discovery_rules (id, platform, keyword) VALUES (?, ?, ?)');
+        const insertMany = db.transaction((rules) => {
+          for (const rule of rules) {
+             insertStmt.run(crypto.randomUUID(), rule.platform, rule.keyword);
+          }
+        });
+        insertMany(defaultRules);
+        discoveryRulesCache = db.prepare('SELECT * FROM carousel_discovery_rules').all();
+      }
+    }
+    return discoveryRulesCache;
+  }
+
+// Helper to parse carousel platform and ID
+
+function syncCarouselSources() {
+  const allProxies = db.prepare("SELECT * FROM carousel_proxies").all() as any[];
+  const carouselChannels = db.prepare("SELECT * FROM carousel_channels").all() as any[];
+  
+  for (const cc of carouselChannels) {
+    let mainChannel = db.prepare("SELECT * FROM channels WHERE id = ?").get(cc.channelId) as any;
+    if (!mainChannel && cc.name) {
+      mainChannel = db.prepare("SELECT * FROM channels WHERE name = ?").get(cc.name) as any;
+      if (mainChannel) { db.prepare("UPDATE carousel_channels SET channelId = ? WHERE id = ?").run(mainChannel.id, cc.id); }
+    }
+    if (!mainChannel) {
+       mainChannel = { id: crypto.randomUUID(), name: cc.name, groupIds: '[]', alias: '[]', logo: '', epgId: '' };
+       db.prepare("INSERT INTO channels (id, name, logo, groupIds, alias, epgId) VALUES (?, ?, ?, ?, ?, ?)").run(
+         mainChannel.id, mainChannel.name, mainChannel.logo, mainChannel.groupIds, mainChannel.alias, mainChannel.epgId
+       );
+       db.prepare("UPDATE carousel_channels SET channelId = ? WHERE id = ?").run(mainChannel.id, cc.id);
+    }
+    
+    for (const proxy of allProxies.filter(p => p.platform === cc.platform)) {
+      const targetUrl = proxy.urlTemplate.replace('{}', cc.originalId);
+      if (proxy.status === 'active') {
+         const exists = db.prepare("SELECT id FROM sources WHERE channelId = ? AND url = ?").get(mainChannel.id, targetUrl);
+         if (!exists) {
+            db.prepare("INSERT INTO sources (id, channelId, url, province, isp) VALUES (?, ?, ?, ?, ?)").run(
+              crypto.randomUUID(), mainChannel.id, targetUrl, '', ''
+            );
+         }
+      } else {
+         db.prepare("DELETE FROM sources WHERE channelId = ? AND url = ?").run(mainChannel.id, targetUrl);
+      }
+    }
+  }
+}
+
+function parseCarouselUrl(url) {
+  let platform = null;
+  let originalId = null;
+  
+  const rules = typeof getDiscoveryRules === 'function' ? getDiscoveryRules() : [];
+  for (const rule of rules) {
+    if (url.includes(rule.keyword)) {
+      platform = rule.platform;
+      break;
+    }
+  }
+
+  if (platform) {
+    const match1 = url.match(/[?&]id=([a-zA-Z0-9_]+)/i);
+    const match2 = url.match(/\/([a-zA-Z0-9_]+)(?:\.flv|\.m3u8)?(?:\?.*)?\/?$/i);
+    if (match1) originalId = match1[1];
+    else if (match2) originalId = match2[1];
+  }
+  return { platform, originalId };
+}
+
+function detectAndRegisterCarouselProxy(url) {
+  try {
+    // Basic heuristic to detect YY, Douyu, Huya proxies
+    // Matches patterns like:
+    // .../yy/12345
+    // .../yy/12345.flv
+    // .../yy.php?id=12345
+    // .../douyu/12345
+    // .../douyu.php?id=12345
+    // .../huya/12345
+    let platform = null;
+    let channelId = null;
+    let template = null;
+
+    const rules = typeof getDiscoveryRules === 'function' ? getDiscoveryRules() : [];
+    for (const rule of rules) {
+      if (url.includes(rule.keyword)) {
+        platform = rule.platform;
+        break;
+      }
+    }
+
+    if (platform) {
+      // Try to extract ID
+    const match1 = url.match(/[?&]id=([a-zA-Z0-9_]+)/i);
+    const match2 = url.match(/\/([a-zA-Z0-9_]+)(?:\.flv|\.m3u8)?(?:\?.*)?\/?$/i);
+      
+      if (match1) {
+        channelId = match1[1];
+        template = url.replace('id=' + channelId, 'id={}');
+      } else if (match2) {
+        channelId = match2[1];
+        template = url.replace('/' + channelId, '/{}');
+      }
+
+      if (template && channelId && channelId.length > 2) {
+        // Check if template exists
+        const exists = db.prepare('SELECT id FROM carousel_proxies WHERE urlTemplate = ?').get(template);
+        if (!exists) {
+          db.prepare('INSERT INTO carousel_proxies (id, platform, urlTemplate, status) VALUES (?, ?, ?, ?)').run(crypto.randomUUID(), platform, template, 'active');
+        }
+      }
+    }
+  } catch (e) {
+    console.error('Error detecting carousel proxy:', e);
+  }
+}
+
 function stripBitrateAndResolution(name: string): string {
   if (!name) return "";
   let clean = name.trim();
@@ -773,6 +955,7 @@ function loadData() {
         if (row.key === "adminPassword") adminPassword = row.value;
         if (row.key === "githubProxy") githubProxy = row.value;
         if (row.key === "m3uLogoVersion") m3uLogoVersion = row.value;
+        if (row.key === "carouselProxyPresets") { try { carouselProxyPresets = JSON.parse(row.value); } catch(e) {} }
         if (row.key === "autoCreateChannel") autoCreateChannel = (row.value === "true" || row.value === "1");
         if (row.key === "ipGeoApis") {
           try { ipGeoApis = JSON.parse(row.value); } catch(e) {}
@@ -1113,6 +1296,7 @@ function saveDataSync() {
       insertSetting.run("githubProxy", githubProxy);
       insertSetting.run("autoCreateChannel", autoCreateChannel ? "true" : "false");
       insertSetting.run("m3uLogoVersion", m3uLogoVersion);
+      insertSetting.run("carouselProxyPresets", JSON.stringify(carouselProxyPresets));
       insertSetting.run("ipGeoApis", JSON.stringify(ipGeoApis));
       insertSetting.run("autoSwitchGeoApi", autoSwitchGeoApi ? "true" : "false");
 
@@ -2318,8 +2502,21 @@ async function performSync(config: SyncConfig, force = false) {
           const { province, isp: parsedIsp } = parseIspAndProvince(currentInfo.name + " " + currentInfo.category);
           const isp = config.isp ? config.isp : parsedIsp;
 
+          let isCarouselM3u = false;
+          let carouselKeyM3u = null;
+          const parsedCarouselM3u = parseCarouselUrl(url);
+          if (parsedCarouselM3u.platform && parsedCarouselM3u.originalId) {
+             isCarouselM3u = true;
+             carouselKeyM3u = `@carousel:${parsedCarouselM3u.platform}_${parsedCarouselM3u.originalId}`;
+             const registry = db.prepare("SELECT name FROM carousel_channels WHERE platform = ? AND originalId = ?").get(parsedCarouselM3u.platform, parsedCarouselM3u.originalId) as any;
+             if (registry) {
+               currentInfo.name = registry.name;
+             }
+             detectAndRegisterCarouselProxy(url);
+          }
+
           // Find or create correct Group entities for this category (comma/semicolon split for many-to-many relationship)
-          const catNames = currentInfo.category.split(/[,;，；]/).map(s => s.trim()).filter(Boolean);
+          const catNames = (isCarouselM3u ? ["轮播频道"] : currentInfo.category.split(/[,;，；]/)).map(s => s.trim()).filter(Boolean);
           if (catNames.length === 0) catNames.push("其它频道");
           
           const matchedGroupIds: string[] = [];
@@ -2345,10 +2542,12 @@ async function performSync(config: SyncConfig, force = false) {
 
           // Find existing channel by name, standard template name, or any associated alias
           let channel = channels.find(
-            (c) =>
-              normalizeChannelName(c.name) === normalizeChannelName(lookupName) ||
+            (c) => {
+              if (typeof carouselKeyM3u !== 'undefined' && carouselKeyM3u) return c.alias.includes(carouselKeyM3u);
+              return normalizeChannelName(c.name) === normalizeChannelName(lookupName) ||
               c.alias.some((a) => normalizeChannelName(a) === normalizeChannelName(lookupName)) ||
               (stdInfo && stdInfo.aliases.some(a => normalizeChannelName(c.name) === normalizeChannelName(a) || c.alias.some(ca => normalizeChannelName(ca) === normalizeChannelName(a))))
+            }
           );
 
           if (!channel) {
@@ -2633,6 +2832,38 @@ async function runCronJob(job: any) {
         if (success) successCount++;
       }
       insertLog.run(logId, job.id, nowStr, "success", `成功同步 ${successCount}/${activeConfigs.length} 个 GitHub 订阅源`);
+    } else if (job.id === "job_carousel_test") {
+      let testedCount = 0;
+      const proxies = db.prepare('SELECT * FROM carousel_proxies').all() as any[];
+      if (proxies.length > 0) {
+         const fallbacks = { "yy": "12345", "douyu": "9999", "huya": "lpl" };
+         const channels = db.prepare('SELECT platform, originalId FROM carousel_channels GROUP BY platform').all() as any[];
+         for (const c of channels) {
+            fallbacks[c.platform] = c.originalId;
+         }
+         
+         for (const proxy of proxies) {
+            const originalId = fallbacks[proxy.platform];
+            if (!originalId) continue;
+            
+            const url = proxy.urlTemplate.replace('{}', originalId);
+            let isOk = false;
+            try {
+               const controller = new AbortController();
+               const timeoutId = setTimeout(() => controller.abort(), 5000);
+               const res = await fetch(url, { method: 'GET', signal: controller.signal, headers: { 'User-Agent': 'Mozilla/5.0' } });
+               clearTimeout(timeoutId);
+               if (res.ok) isOk = true;
+            } catch(e) {
+               isOk = false;
+            }
+            
+            db.prepare('UPDATE carousel_proxies SET status = ? WHERE id = ?').run(isOk ? 'active' : 'inactive', proxy.id);
+            testedCount++;
+         }
+      }
+      syncCarouselSources();
+      insertLog.run(logId, job.id, nowStr, "success", `成功检测了 ${testedCount} 个轮播代理，并自动同步了对应频道的直播源列表`);
     } else if (job.id === "job_server_test") {
       if (testStatus.status === "running") {
         insertLog.run(logId, job.id, nowStr, "failed", "当前已有测速任务在运行，跳过定时测速");
@@ -2907,11 +3138,11 @@ async function startServer() {
   // API Endpoints
   // Settings Endpoints
   app.get("/api/settings", (req, res) => {
-    res.json({ githubProxy, autoCreateChannel, ipGeoApis, autoSwitchGeoApi, m3uLogoVersion });
+    res.json({ githubProxy, autoCreateChannel, ipGeoApis, autoSwitchGeoApi, m3uLogoVersion, carouselProxyPresets });
   });
 
   app.post("/api/settings", (req, res) => {
-    const { githubProxy: proxy, autoCreateChannel: autoCreate, ipGeoApis: newIpGeoApis, autoSwitchGeoApi: newAutoSwitchGeoApi, m3uLogoVersion: newM3uLogoVersion } = req.body;
+    const { githubProxy: proxy, autoCreateChannel: autoCreate, ipGeoApis: newIpGeoApis, autoSwitchGeoApi: newAutoSwitchGeoApi, m3uLogoVersion: newM3uLogoVersion, carouselProxyPresets: newCarouselProxyPresets } = req.body;
     if (proxy !== undefined) {
       githubProxy = (proxy || "").trim();
     }
@@ -2927,9 +3158,12 @@ async function startServer() {
     if (newM3uLogoVersion !== undefined) {
       m3uLogoVersion = (newM3uLogoVersion || "").trim();
     }
+    if (newCarouselProxyPresets !== undefined) {
+      carouselProxyPresets = newCarouselProxyPresets;
+    }
 
     saveData();
-    res.json({ success: true, githubProxy, autoCreateChannel, ipGeoApis, autoSwitchGeoApi, m3uLogoVersion });
+    res.json({ success: true, githubProxy, autoCreateChannel, ipGeoApis, autoSwitchGeoApi, m3uLogoVersion, carouselProxyPresets });
   });
 
   // EPG Sources REST Endpoints
@@ -3127,7 +3361,7 @@ async function startServer() {
       syncConfigs,
       groups,
       epgSources,
-      settings: { githubProxy, autoCreateChannel, ipGeoApis, autoSwitchGeoApi, m3uLogoVersion }
+      settings: { githubProxy, autoCreateChannel, ipGeoApis, autoSwitchGeoApi, m3uLogoVersion, carouselProxyPresets }
     });
   });
 
@@ -3910,9 +4144,22 @@ app.get("/api/channels", async (req, res) => {
           } else if (line && !line.startsWith("#") && currentInfo) {
             let url = line.split("$")[0].trim();
             const { province, isp } = parseIspAndProvince(currentInfo.name + " " + currentInfo.category);
+            
+            let isCarouselM3u = false;
+            let carouselKeyM3u = null;
+            const parsedCarouselM3u = parseCarouselUrl(url);
+            if (parsedCarouselM3u.platform && parsedCarouselM3u.originalId) {
+               isCarouselM3u = true;
+               carouselKeyM3u = `@carousel:${parsedCarouselM3u.platform}_${parsedCarouselM3u.originalId}`;
+               const registry = db.prepare("SELECT name FROM carousel_channels WHERE platform = ? AND originalId = ?").get(parsedCarouselM3u.platform, parsedCarouselM3u.originalId) as any;
+               if (registry) {
+                 currentInfo.name = registry.name;
+               }
+               detectAndRegisterCarouselProxy(url);
+            }
 
-            // Resolve categories
-            const catNames = currentInfo.category.split(/[,;，；]/).map((s: string) => s.trim()).filter(Boolean);
+            const catNames = (isCarouselM3u ? ["轮播频道"] : currentInfo.category.split(/[,;，；]/)).map((s: string) => s.trim()).filter(Boolean);
+
             if (catNames.length === 0) catNames.push("手动导入");
 
             const matchedGroupIds: string[] = [];
@@ -3936,10 +4183,12 @@ app.get("/api/channels", async (req, res) => {
             const lookupName = stdInfo ? stdInfo.templateName : currentInfo.name;
 
             let channel = channels.find(
-              (c) =>
-                normalizeChannelName(c.name) === normalizeChannelName(lookupName) ||
-                c.alias.some((a: string) => normalizeChannelName(a) === normalizeChannelName(lookupName)) ||
-                (stdInfo && stdInfo.aliases.some(a => normalizeChannelName(c.name) === normalizeChannelName(a) || c.alias.some(ca => normalizeChannelName(ca) === normalizeChannelName(a))))
+              (c) => {
+                 if (carouselKeyM3u) return c.alias.includes(carouselKeyM3u);
+                 return normalizeChannelName(c.name) === normalizeChannelName(lookupName) ||
+                 c.alias.some((a: string) => normalizeChannelName(a) === normalizeChannelName(lookupName)) ||
+                 (stdInfo && stdInfo.aliases.some(a => normalizeChannelName(c.name) === normalizeChannelName(a) || c.alias.some(ca => normalizeChannelName(ca) === normalizeChannelName(a))));
+              }
             );
 
             if (!channel) {
@@ -3948,9 +4197,10 @@ app.get("/api/channels", async (req, res) => {
                 continue;
               }
               const cleanName = stdInfo ? stdInfo.templateName : currentInfo.name;
-              const cleanAliases = stdInfo
+              let cleanAliases = stdInfo
                 ? Array.from(new Set([cleanName, currentInfo.name, ...stdInfo.aliases]))
                 : currentInfo.alias;
+              if (carouselKeyM3u) cleanAliases.push(carouselKeyM3u);
 
               channel = {
                 id: "ch_" + Math.random().toString(36).substring(2, 10),
@@ -4033,8 +4283,19 @@ app.get("/api/channels", async (req, res) => {
               name = nameParts[0];
             }
 
-            // Resolve categories
-            const catNames = currentCategory.split(/[,;，；]/).map((s: string) => s.trim()).filter(Boolean);
+            let isCarouselTxt = false;
+            for (const u of urls) {
+               const parsedCarouselTxt = parseCarouselUrl(u);
+               if (parsedCarouselTxt.platform && parsedCarouselTxt.originalId) {
+                 isCarouselTxt = true;
+                 const registry = db.prepare("SELECT name FROM carousel_channels WHERE platform = ? AND originalId = ?").get(parsedCarouselTxt.platform, parsedCarouselTxt.originalId) as any;
+                 if (registry) {
+                   name = registry.name;
+                 }
+                 detectAndRegisterCarouselProxy(u);
+               }
+            }
+            const catNames = (isCarouselTxt ? ["轮播频道"] : currentCategory.split(/[,;，；]/)).map((s: string) => s.trim()).filter(Boolean);
             if (catNames.length === 0) catNames.push("手动导入");
 
             const matchedGroupIds: string[] = [];
@@ -4548,6 +4809,356 @@ app.get("/api/channels", async (req, res) => {
   });
 
   // REST API for test reports
+
+  
+  app.get("/api/carousel-discovery-rules", (req, res) => {
+    try {
+      res.json(getDiscoveryRules());
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/carousel-discovery-rules", (req, res) => {
+    const { platform, keyword } = req.body;
+    if (!platform || !keyword) return res.status(400).json({ error: "Missing fields" });
+    try {
+      const id = crypto.randomUUID();
+      db.prepare('INSERT INTO carousel_discovery_rules (id, platform, keyword) VALUES (?, ?, ?)').run(id, platform, keyword);
+      discoveryRulesCache = null; // Invalidate cache
+      res.json({ id, platform, keyword });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.delete("/api/carousel-discovery-rules/:id", (req, res) => {
+    try {
+      db.prepare('DELETE FROM carousel_discovery_rules WHERE id = ?').run(req.params.id);
+      discoveryRulesCache = null; // Invalidate cache
+      res.json({ success: true });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // --- Carousel Channels Management API ---
+
+  app.get("/api/carousel-channels", (req, res) => {
+    try {
+      const rows = db.prepare('SELECT c.id, c.channelId, ch.name, c.platform, c.originalId FROM carousel_channels c LEFT JOIN channels ch ON c.channelId = ch.id').all();
+      res.json(rows);
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/carousel-channels", (req, res) => {
+    const { name, platform, originalId } = req.body;
+    if (!name || !platform || !originalId) return res.status(400).json({ error: "Missing required fields" });
+    const id = crypto.randomUUID();
+    try {
+      let ch = db.prepare('SELECT id FROM channels WHERE id = ?').get(req.body.channelId); if(!ch && name) { const nid = crypto.randomUUID(); db.prepare('INSERT INTO channels (id, name, logo, groupIds, alias, epgId) VALUES (?, ?, ?, ?, ?, ?)').run(nid, name, '', '[]', '[]', ''); req.body.channelId = nid; }
+db.prepare('INSERT INTO carousel_channels (id, channelId, name, platform, originalId) VALUES (?, ?, ?, ?, ?)').run(id, req.body.channelId || '', name || '', platform, originalId);
+      res.json({ id, name, platform, originalId });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.put("/api/carousel-channels/:id", (req, res) => {
+    const { id } = req.params;
+    const { name, platform, originalId } = req.body;
+    try {
+      db.prepare('UPDATE carousel_channels SET channelId = ?, platform = ?, originalId = ? WHERE id = ?').run(req.body.channelId || '', platform, originalId, id);
+      res.json({ success: true });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.delete("/api/carousel-channels/:id", (req, res) => {
+    const { id } = req.params;
+    try {
+      db.prepare('DELETE FROM carousel_channels WHERE id = ?').run(id);
+      res.json({ success: true });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.get("/api/carousel-channels-unregistered", (req, res) => {
+    try {
+      const allSources = db.prepare('SELECT s.url, c.name as channelName FROM sources s JOIN channels c ON s.channelId = c.id').all() as any[];
+      const map = new Map();
+      for (const row of allSources) {
+        const parsed = parseCarouselUrl(row.url);
+        if (parsed.platform && parsed.originalId) {
+          const exists = db.prepare('SELECT id FROM carousel_channels WHERE platform = ? AND originalId = ?').get(parsed.platform, parsed.originalId);
+          if (!exists) {
+            const key = `${parsed.platform}_${parsed.originalId}`;
+            if (!map.has(key)) {
+              map.set(key, { platform: parsed.platform, originalId: parsed.originalId, sampleNames: new Set() });
+            }
+            map.get(key).sampleNames.add(row.channelName);
+          }
+        }
+      }
+      const results = Array.from(map.values()).map(v => ({
+        ...v,
+        sampleNames: Array.from(v.sampleNames)
+      }));
+      res.json(results);
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/carousel-channels/batch", (req, res) => {
+    const { items } = req.body;
+    if (!Array.isArray(items)) return res.status(400).json({ error: "Invalid payload" });
+    try {
+      const stmt = db.prepare('INSERT INTO carousel_channels (id, channelId, name, platform, originalId) VALUES (?, ?, ?, ?, ?)');
+      const insertMany = db.transaction((itemsToInsert) => {
+        for (const item of itemsToInsert) {
+           const exists = db.prepare('SELECT id FROM carousel_channels WHERE platform = ? AND originalId = ?').get(item.platform, item.originalId);
+           if (!exists) {
+             let ch = db.prepare('SELECT id FROM channels WHERE name = ?').get(item.name) as any; if(!ch) { const nid = crypto.randomUUID(); db.prepare('INSERT INTO channels (id, name, logo, groupIds, alias, epgId) VALUES (?, ?, ?, ?, ?, ?)').run(nid, item.name, '', '[]', '[]', ''); ch = { id: nid }; }
+stmt.run(crypto.randomUUID(), ch.id, item.name, item.platform, item.originalId);
+           }
+        }
+      });
+      insertMany(items);
+      res.json({ success: true });
+    } catch(e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/carousel-channels/batch-delete", (req, res) => {
+    const { ids } = req.body;
+    if (!Array.isArray(ids)) return res.status(400).json({ error: "Invalid payload" });
+    try {
+      const stmt = db.prepare('DELETE FROM carousel_channels WHERE id = ?');
+      const deleteMany = db.transaction((idsToDelete) => {
+        for (const id of idsToDelete) stmt.run(id);
+      });
+      deleteMany(ids);
+      res.json({ success: true });
+    } catch(e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/carousel-channels-apply", (req, res) => {
+    try {
+      const registries = db.prepare('SELECT * FROM carousel_channels').all() as any[];
+      const allSources = db.prepare('SELECT * FROM sources').all() as any[];
+      let updatedCount = 0;
+      
+      const regMap = new Map();
+      for (const r of registries) regMap.set(`${r.platform}_${r.originalId}`, r);
+
+      for (const source of allSources) {
+        const parsed = parseCarouselUrl(source.url);
+        if (parsed.platform && parsed.originalId) {
+          const key = `${parsed.platform}_${parsed.originalId}`;
+          const registry = regMap.get(key);
+          if (registry) {
+            let targetChannel = db.prepare('SELECT * FROM channels WHERE name = ?').get(registry.name) as any;
+            if (!targetChannel) {
+              targetChannel = { id: crypto.randomUUID(), name: registry.name, groupIds: '[]', alias: '[]', logo: '', epgId: '' };
+              db.prepare('INSERT INTO channels (id, name, logo, groupIds, alias, epgId) VALUES (?, ?, ?, ?, ?, ?)').run(
+                targetChannel.id, targetChannel.name, targetChannel.logo, targetChannel.groupIds, targetChannel.alias, targetChannel.epgId
+              );
+            }
+            if (source.channelId !== targetChannel.id) {
+              db.prepare('UPDATE sources SET channelId = ? WHERE id = ?').run(targetChannel.id, source.id);
+              updatedCount++;
+            }
+          }
+        }
+      }
+
+      // Cleanup empty channels
+      db.exec('DELETE FROM channels WHERE id NOT IN (SELECT DISTINCT channelId FROM sources)');
+
+      res.json({ success: true, updatedCount });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // --- Carousel Proxy Management API ---
+  
+  app.get("/api/carousel-proxies", (req, res) => {
+    try {
+      const proxies = db.prepare('SELECT * FROM carousel_proxies').all();
+      res.json(proxies);
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/carousel-proxies", (req, res) => {
+    const { platform, urlTemplate, status = 'active' } = req.body;
+    if (!platform || !urlTemplate) {
+      return res.status(400).json({ error: "Missing required fields" });
+    }
+    const id = crypto.randomUUID();
+    try {
+      db.prepare('INSERT INTO carousel_proxies (id, platform, urlTemplate, status) VALUES (?, ?, ?, ?)').run(id, platform, urlTemplate, status);
+      res.json({ id, platform, urlTemplate, status });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.put("/api/carousel-proxies/:id", (req, res) => {
+    const { id } = req.params;
+    const { platform, urlTemplate, status } = req.body;
+    try {
+      db.prepare('UPDATE carousel_proxies SET platform = ?, urlTemplate = ?, status = ? WHERE id = ?').run(platform, urlTemplate, status, id);
+      res.json({ success: true });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.delete("/api/carousel-proxies/:id", (req, res) => {
+    const { id } = req.params;
+    try {
+      db.prepare('DELETE FROM carousel_proxies WHERE id = ?').run(id);
+      res.json({ success: true });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+  
+  app.post("/api/carousel/test-all", async (req, res) => {
+    try {
+      const proxies = db.prepare('SELECT * FROM carousel_proxies').all() as any[];
+      if (proxies.length === 0) {
+         return res.json({ success: true, count: 0 });
+      }
+      
+      const fallbacks: Record<string, string> = { "yy": "12345", "douyu": "9999", "huya": "lpl" };
+      const channels = db.prepare('SELECT platform, originalId FROM carousel_channels GROUP BY platform').all() as any[];
+      for (const c of channels) {
+         fallbacks[c.platform] = c.originalId;
+      }
+      
+      const results = [];
+      const fetchPromises = proxies.map(async (proxy) => {
+         const originalId = fallbacks[proxy.platform];
+         if (!originalId) return;
+         
+         const url = proxy.urlTemplate.replace('{}', originalId);
+         try {
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 4000);
+            const start = Date.now();
+            const response = await fetch(url, { method: 'GET', signal: controller.signal, headers: { 'User-Agent': 'Mozilla/5.0' } });
+            clearTimeout(timeoutId);
+            const latency = Date.now() - start;
+            
+            if (response.ok) {
+               results.push({ templateId: proxy.id, url, status: 'active', latency });
+               db.prepare('UPDATE carousel_proxies SET status = ? WHERE id = ?').run('active', proxy.id);
+            } else {
+               results.push({ templateId: proxy.id, url, status: 'inactive', latency: null });
+               db.prepare('UPDATE carousel_proxies SET status = ? WHERE id = ?').run('inactive', proxy.id);
+            }
+         } catch(e) {
+            results.push({ templateId: proxy.id, url, status: 'inactive', latency: null });
+            db.prepare('UPDATE carousel_proxies SET status = ? WHERE id = ?').run('inactive', proxy.id);
+         }
+      });
+      
+      await Promise.all(fetchPromises);
+      syncCarouselSources();
+      res.json({ success: true, count: proxies.length, results });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // Test carousel proxies for a specific channel
+  app.post("/api/carousel/test", async (req, res) => {
+    const { channelId, platform, originalId } = req.body;
+    if (!channelId || !platform || !originalId) {
+       return res.status(400).json({ error: "Missing required fields" });
+    }
+    
+    try {
+      // 1. Get ALL templates for this platform
+      const templates = db.prepare('SELECT * FROM carousel_proxies WHERE platform = ?').all(platform) as any[];
+      if (templates.length === 0) {
+         return res.json({ success: true, count: 0, tested: 0, results: [] });
+      }
+      
+      // 2. Generate URLs
+      const urlsToTest = templates.map(t => ({
+         templateId: t.id,
+         url: t.urlTemplate.replace('{}', originalId)
+      }));
+      
+      // 3. Test URLs
+      const results = [];
+      const fetchPromises = urlsToTest.map(async (item) => {
+         try {
+           const controller = new AbortController();
+           const timeoutId = setTimeout(() => controller.abort(), 3000);
+           const start = Date.now();
+           const response = await fetch(item.url, { 
+             method: 'GET',
+             signal: controller.signal,
+             headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+             }
+           });
+           clearTimeout(timeoutId);
+           const latency = Date.now() - start;
+           
+           if (response.ok) {
+              results.push({ ...item, status: 'active', latency });
+              db.prepare('UPDATE carousel_proxies SET status = ? WHERE id = ?').run('active', item.templateId);
+           } else {
+              results.push({ ...item, status: 'inactive', latency: null });
+              db.prepare('UPDATE carousel_proxies SET status = ? WHERE id = ?').run('inactive', item.templateId);
+           }
+         } catch (e) {
+            results.push({ ...item, status: 'inactive', latency: null });
+         }
+      });
+      
+      await Promise.allSettled(fetchPromises);
+      
+      // 4. Save active results as new sources for the channel
+      const activeResults = results.filter(r => r.status === 'active');
+      const now = new Date().toISOString();
+      const insertStmt = db.prepare('INSERT INTO sources (id, channelId, url, status, latency, lastChecked) VALUES (?, ?, ?, ?, ?, ?)');
+      
+      const insertMany = db.transaction((activeRes) => {
+         for (const res of activeRes) {
+            // Check if exists
+            const exists = db.prepare('SELECT id FROM sources WHERE channelId = ? AND url = ?').get(channelId, res.url);
+            if (!exists) {
+               insertStmt.run(crypto.randomUUID(), channelId, res.url, 'active', res.latency, now);
+            }
+         }
+      });
+      
+      insertMany(activeResults);
+      
+      res.json({ success: true, count: activeResults.length, tested: templates.length, results });
+    } catch (e) {
+      console.error('Carousel test error:', e);
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   app.get("/api/test-reports", (req, res) => {
     try {
       const reports = db.prepare("SELECT id, createdAt, totalTested, activeCount, inactiveCount, clientIsp, clientProvince FROM test_reports ORDER BY createdAt DESC LIMIT 50").all();

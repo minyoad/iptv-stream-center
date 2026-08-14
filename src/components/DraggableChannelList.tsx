@@ -161,8 +161,8 @@ export const DraggableChannelList: React.FC<DraggableChannelListProps> = ({
               </div>
             </div>
             <span className="text-[10px] font-bold bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded-full shrink-0 ml-2">
-              {activeChannel.sources.filter((s) => s.status === "active" && !s.isolated).length}{" "}
-              / {activeChannel.sources.filter((s) => !s.isolated).length} 有效线路
+              {(activeChannel.sources || []).filter((s) => s.status === "active" && !s.isolated).length}{" "}
+              / {(activeChannel.sources || []).filter((s) => !s.isolated).length} 有效线路
             </span>
           </div>
         ) : null}

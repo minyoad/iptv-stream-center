@@ -41,6 +41,8 @@ import { Channel, LiveSource, SyncConfig, TestStatus, EpgGuide, Group, EpgSource
 import { arrayMove } from "@dnd-kit/sortable";
 import DashboardView from "./components/DashboardView";
 import { DraggableChannelList } from "./components/DraggableChannelList";
+import { CarouselProxyView } from "./components/CarouselProxyView";
+import { CarouselChannelView } from "./components/CarouselChannelView";
 import { DraggableGroupList } from "./components/DraggableGroupList";
 import { SortableIpGeoApiList } from "./components/SortableIpGeoApiList";
 import { IpGeoApi } from "./types";
@@ -200,7 +202,7 @@ export default function App() {
     }
   }, [selectedCronJob]);
 
-  const [channelSubTab, setChannelSubTab] = useState<"channels" | "groups" | "sources">("channels");
+  const [channelSubTab, setChannelSubTab] = useState<"channels" | "groups" | "sources" | "carousel">("channels");
   
   // States for interactive actions
   const [searchQuery, setSearchQuery] = useState("");
@@ -454,7 +456,7 @@ export default function App() {
       }
     });
 
-    return list.filter((item) => {
+    return (list || []).filter((item) => {
       const query = globalSourceSearch.trim().toLowerCase();
       const matchesText = !query || 
         item.channelName.toLowerCase().includes(query) || 
@@ -1352,7 +1354,7 @@ export default function App() {
       const targetGroup = groups.find((g) => g.name === selectedCategory);
       if (!targetGroup) return;
 
-      const groupChannels = channels.filter((c) => c.groupIds.includes(targetGroup.id));
+      const groupChannels = (channels || []).filter((c) => c.groupIds.includes(targetGroup.id));
       const oldGroupIdx = groupChannels.findIndex((c) => c.id === activeId);
       const newGroupIdx = groupChannels.findIndex((c) => c.id === overId);
 
@@ -1845,7 +1847,7 @@ export default function App() {
     await Promise.all(pool);
 
     setIsClientTesting(false);
-    showFeedback("success", `[${clientTestIsp} + BGP/多线] 探针测速完成！评估出 ${resultsTemp.filter(r => r.status === "active").length} 条可用源，正在自动同步至服务器...`);
+    showFeedback("success", `[${clientTestIsp} + BGP/多线] 探针测速完成！评估出 ${(resultsTemp || []).filter(r => r.status === "active").length} 条可用源，正在自动同步至服务器...`);
     
     // Automatically submit results
     if (resultsTemp.length > 0) {
@@ -2431,7 +2433,7 @@ export default function App() {
 
     const cleanQuery = searchQuery.toLowerCase().replace(/[-_.\s]+/g, "");
 
-    return channels.filter(c => {
+    return (channels || []).filter(c => {
       const groupNames = c.groupIds.map(gId => groupIdToName.get(gId) || "").filter(Boolean);
       
       const matchesSearch = !cleanQuery ||
@@ -2819,9 +2821,7 @@ export default function App() {
           
           {/* VIEW: DASHBOARD */}
           {activeTab === "dashboard" && (
-            <DashboardView 
-              channels={channels}
-              syncConfigs={syncConfigs}
+            <DashboardView channels={channels} syncConfigs={syncConfigs}
               onNavigate={(view) => setActiveTab(view)}
               onTriggerTest={triggerConcurrentBulkTest}
               testingStatus={testingStatus.status}
@@ -2867,6 +2867,39 @@ export default function App() {
                   <Compass className="w-3.5 h-3.5" />
                   全局线路与批量管理
                 </button>
+                <button
+                  onClick={() => setChannelSubTab("carousel")}
+                  className={`px-3.5 sm:px-4 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 shrink-0 cursor-pointer ${
+                    channelSubTab === "carousel"
+                    ? "bg-slate-800 text-white shadow-md shadow-slate-900/10"
+                    : "bg-white text-slate-500 hover:text-slate-800 hover:bg-slate-50 border border-slate-200"
+                  }`}
+                >
+                  <RefreshCw className="w-3.5 h-3.5" />
+                  轮播代理配置
+                </button>
+                <button
+                  onClick={() => setChannelSubTab("carousel_channels" as any)}
+                  className={`px-3.5 sm:px-4 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 shrink-0 cursor-pointer ${
+                    channelSubTab === ("carousel_channels" as any)
+                    ? "bg-slate-800 text-white shadow-md shadow-slate-900/10"
+                    : "bg-white text-slate-500 hover:text-slate-800 hover:bg-slate-50 border border-slate-200"
+                  }`}
+                >
+                  <RefreshCw className="w-3.5 h-3.5" />
+                  轮播频道管理
+                </button>
+              </div>
+
+              <div className={channelSubTab === "carousel" ? "block animate-fade-in" : "hidden"}>
+                    <CarouselProxyView 
+                       
+                       fetchData={fetchData}
+                    />
+              </div>
+              
+              <div className={channelSubTab === ("carousel_channels" as any) ? "block animate-fade-in" : "hidden"}>
+                    <CarouselChannelView fetchData={fetchData} channelsData={channels} />
               </div>
 
               {channelSubTab === "groups" && (
@@ -2929,9 +2962,9 @@ export default function App() {
                       </p>
                     </div>
 
-                    <DraggableGroupList
+                    <DraggableGroupList channels={channels}
                       groups={groups}
-                      channels={channels}
+                      
                       onRenameGroup={async (id, val) => {
                         try {
                           const res = await fetch(`/api/groups/${id}`, {
@@ -3012,9 +3045,9 @@ export default function App() {
                             onChange={(e) => setChannelFilterStatus(e.target.value as any)}
                             className="pl-3 pr-8 py-2 bg-amber-50/60 border border-amber-200/80 text-amber-900 font-bold text-xs rounded-xl appearance-none focus:outline-none focus:ring-2 focus:ring-amber-500/20 cursor-pointer shadow-2xs"
                           >
-                            <option value="active">正常频道 ({channels.filter(c => !c.isolated).length})</option>
+                            <option value="active">正常频道 ({(channels || []).filter(c => !c.isolated).length})</option>
                             <option value="all_with_isolated">包含已隔离 ({channels.length})</option>
-                            <option value="isolated">仅已隔离 ({channels.filter(c => c.isolated).length})</option>
+                            <option value="isolated">仅已隔离 ({(channels || []).filter(c => c.isolated).length})</option>
                           </select>
                           <ChevronDown className="w-3.5 h-3.5 text-amber-600 absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
                         </div>
@@ -3458,7 +3491,7 @@ export default function App() {
                                 }}
                               />
                               {(() => {
-                                 const filteredCount = selectedChannel.sources.filter(src => {
+                                 const filteredCount = (selectedChannel.sources || []).filter(src => {
                                   if (sourceFilterStatus === "all") return !src.isolated;
                                   if (sourceFilterStatus === "all_with_isolated") return true;
                                   if (sourceFilterStatus === "isolated") return src.isolated;
@@ -3522,7 +3555,7 @@ export default function App() {
                           </div>
                         ) : (
                           <div className="space-y-2.5 overflow-y-auto pr-1 flex-1 min-h-0 pb-2">
-                            {selectedChannel.sources.filter(src => {
+                            {(selectedChannel.sources || []).filter(src => {
                                 if (sourceFilterStatus === "all") return !src.isolated;
                                 if (sourceFilterStatus === "all_with_isolated") return true;
                                 if (sourceFilterStatus === "isolated") return src.isolated;
@@ -3706,7 +3739,7 @@ export default function App() {
                       <div>
                         <span className="text-[9px] sm:text-[10px] uppercase font-bold text-slate-400 tracking-wider">有效可用</span>
                         <div className="text-lg sm:text-xl font-black text-emerald-600 mt-0.5 sm:mt-1 font-mono">
-                          {filteredGlobalSources.filter(s => s.status === "active" && (s.latency === undefined || s.latency < 9999)).length} <span className="text-xs text-slate-500 font-sans">条</span>
+                          {(filteredGlobalSources || []).filter(s => s.status === "active" && (s.latency === undefined || s.latency < 9999)).length} <span className="text-xs text-slate-500 font-sans">条</span>
                         </div>
                       </div>
                       <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center border border-emerald-100 shrink-0">
@@ -3717,7 +3750,7 @@ export default function App() {
                       <div>
                         <span className="text-[9px] sm:text-[10px] uppercase font-bold text-slate-400 tracking-wider">失效离线</span>
                         <div className="text-lg sm:text-xl font-black text-rose-600 mt-0.5 sm:mt-1 font-mono">
-                          {filteredGlobalSources.filter(s => s.status === "inactive" || (s.latency !== undefined && s.latency >= 9999)).length} <span className="text-xs text-slate-500 font-sans">条</span>
+                          {(filteredGlobalSources || []).filter(s => s.status === "inactive" || (s.latency !== undefined && s.latency >= 9999)).length} <span className="text-xs text-slate-500 font-sans">条</span>
                         </div>
                       </div>
                       <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-xl bg-rose-50 text-rose-600 flex items-center justify-center border border-rose-100 shrink-0">
@@ -3728,7 +3761,7 @@ export default function App() {
                       <div>
                         <span className="text-[9px] sm:text-[10px] uppercase font-bold text-slate-400 tracking-wider">未测/测试中</span>
                         <div className="text-lg sm:text-xl font-black text-amber-600 mt-0.5 sm:mt-1 font-mono">
-                          {filteredGlobalSources.filter(s => s.status === "checking" || s.status === "unknown").length} <span className="text-xs text-slate-500 font-sans">条</span>
+                          {(filteredGlobalSources || []).filter(s => s.status === "checking" || s.status === "unknown").length} <span className="text-xs text-slate-500 font-sans">条</span>
                         </div>
                       </div>
                       <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-xl bg-amber-50 text-amber-600 flex items-center justify-center border border-amber-100 shrink-0">
@@ -3935,7 +3968,7 @@ export default function App() {
                             <span className="font-bold text-slate-700 text-[10.5px]">仅加载可用与未测试线路</span>
                           </label>
                           <span className="text-[10px] bg-sky-100 text-sky-800 px-1.5 py-0.5 rounded shrink-0 font-extrabold font-mono">
-                            {filteredGlobalSources.filter(s => !s.isolated && (s.status === "active" || s.status === "unknown" || s.status === "checking")).length} 条
+                            {(filteredGlobalSources || []).filter(s => !s.isolated && (s.status === "active" || s.status === "unknown" || s.status === "checking")).length} 条
                           </span>
                         </div>
 
@@ -4013,7 +4046,7 @@ export default function App() {
                             <div className="flex justify-between items-center pt-1 leading-snug">
                               <span className="text-[10px] text-slate-400 font-bold truncate max-w-[150px]">
                                 {clientTestResults.length > 0 
-                                  ? `已采集: ${clientTestResults.filter(k => k.status === 'active').length} 条健康` 
+                                  ? `已采集: ${(clientTestResults || []).filter(k => k.status === 'active').length} 条健康` 
                                   : "等待触发检测"}
                               </span>
                               
@@ -4144,7 +4177,7 @@ export default function App() {
                           <option value="移动">🔵 中国移动 (Mobile)</option>
                           <option value="广电">🟣 中国广电 (Broadcast)</option>
                           <option value="BGP">🌐 多线 BGP 专网</option>
-                          {allUniqueIspOptions.filter(x => !["电信", "联通", "移动", "广电", "BGP"].includes(x)).map(x => (
+                          {(allUniqueIspOptions || []).filter(x => !["电信", "联通", "移动", "广电", "BGP"].includes(x)).map(x => (
                             <option key={x} value={x}>{x}</option>
                           ))}
                         </select>
@@ -4158,7 +4191,7 @@ export default function App() {
                         >
                           <option value="all">所有省份地区 (不限)</option>
                           <option value="全国">⭐ 全国通用</option>
-                          {allUniqueProvinceOptions.filter(x => x !== "全国" && x !== "全国通用").map(x => (
+                          {(allUniqueProvinceOptions || []).filter(x => x !== "全国" && x !== "全国通用").map(x => (
                             <option key={x} value={x}>{x}</option>
                           ))}
                         </select>

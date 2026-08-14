@@ -95,7 +95,7 @@ export const DraggableGroupList: React.FC<DraggableGroupListProps> = ({
           id="groups_cards_grid"
         >
           {groups.map((g, index) => {
-            const countChannels = channels.filter((c) =>
+            const countChannels = (channels || []).filter((c) =>
               c.groupIds.includes(g.id)
             ).length;
             return (

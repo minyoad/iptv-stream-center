@@ -52,8 +52,8 @@ export const SortableChannelItem: React.FC<SortableChannelItemProps> = ({
     zIndex: isDragging ? 20 : 1,
   };
 
-  const activeCount = channel.sources.filter((s) => s.status === "active" && !s.isolated).length;
-  const totalCount = channel.sources.filter((s) => !s.isolated).length;
+  const activeCount = (channel.sources || []).filter((s) => s.status === "active" && !s.isolated).length;
+  const totalCount = (channel.sources || []).filter((s) => !s.isolated).length;
   const groupNames = channel.groupIds
     .map((gId) => groups.find((g) => g.id === gId)?.name)
     .filter(Boolean)

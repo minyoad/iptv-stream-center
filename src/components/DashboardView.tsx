@@ -31,7 +31,7 @@ export default function DashboardView({
   testingStatus,
 }: DashboardProps) {
   // Stats calculations
-  const totalChannels = channels.filter(c => !c.isolated).length;
+  const totalChannels = (channels || []).filter(c => !c.isolated).length;
   
   let totalSources = 0;
   let activeSources = 0;
