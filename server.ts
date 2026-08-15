@@ -106,7 +106,17 @@ let adminPassword = process.env.ADMIN_PASSWORD || "";
 let githubProxy = "";
 let autoCreateChannel = true;
 let m3uLogoVersion = "";
-let carouselProxyPresets = {"yy":[{"name":"YY 官方","id":"12345"},{"name":"YY 跳舞","id":"76"}],"douyu":[{"name":"英雄联盟","id":"9999"},{"name":"Dota2","id":"1126960"}],"huya":[{"name":"LPL赛事","id":"lpl"},{"name":"楚河","id":"116361"}],"bilibili":[{"name":"散人","id":"1129"}]};
+let carouselProxyPresets = {
+  "yy": [{"name":"YY 官方","id":"12345"},{"name":"YY 跳舞","id":"76"}],
+  "douyu": [{"name":"英雄联盟","id":"9999"},{"name":"Dota2","id":"1126960"}],
+  "huya": [{"name":"LPL赛事","id":"lpl"},{"name":"楚河","id":"116361"}],
+  "bilibili": [{"name":"散人","id":"1129"},{"name":"官方赛事","id":"6"}],
+  "kuaishou": [{"name":"王者荣耀","id":"kpl"},{"name":"快手精选","id":"3x876g5g6f7"}],
+  "douyin": [{"name":"抖音直播精选","id":"123456"}],
+  "cntv": [{"name":"CCTV-1 综合","id":"cctv1"},{"name":"CCTV-5 体育","id":"cctv5"}],
+  "migu": [{"name":"咪咕赛事","id":"608807420"}],
+  "iptv": [{"name":"IPTV 直播","id":"live"}]
+};
 export interface IpGeoApi {
   id: string;
   name: string;
@@ -5113,7 +5123,17 @@ stmt.run(crypto.randomUUID(), ch.id, item.name, item.platform, item.originalId);
          return res.json({ success: true, count: 0 });
       }
       
-      const fallbacks: Record<string, string> = { "yy": "12345", "douyu": "9999", "huya": "lpl" };
+      const fallbacks: Record<string, string> = {
+        "yy": "12345",
+        "douyu": "9999",
+        "huya": "lpl",
+        "bilibili": "1129",
+        "kuaishou": "3x876g5g6f7",
+        "douyin": "123456",
+        "cntv": "cctv1",
+        "migu": "608807420",
+        "iptv": "live"
+      };
       const channels = db.prepare('SELECT platform, originalId FROM carousel_channels GROUP BY platform').all() as any[];
       for (const c of channels) {
          fallbacks[c.platform] = c.originalId;

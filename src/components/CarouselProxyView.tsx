@@ -1,14 +1,15 @@
 import React, { useState, useEffect } from "react";
-import { Plus, Trash2, Edit2, Check, AlertCircle, RefreshCw, X, PlayCircle, Settings, Search , Download } from "lucide-react";
+import { Plus, Trash2, Edit2, Check, AlertCircle, RefreshCw, X, PlayCircle, Settings, Search } from "lucide-react";
 import { authFetch as fetch } from "../utils/api";
+import { PRESET_CAROUSEL_PLATFORMS, getPlatformBadge, getPlatformInfo } from "../utils/carouselPlatforms";
 
 export const CarouselProxyView = ({ fetchData }: { fetchData: () => void }) => {
   const [proxies, setProxies] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [form, setForm] = useState({ platform: "yy", urlTemplate: "", status: "active" });
+  const [form, setForm] = useState({ platform: "yy", customPlatform: "", urlTemplate: "", status: "active" });
   const [testMode, setTestMode] = useState(false);
-  const [testForm, setTestForm] = useState({ platform: "yy", originalId: "" });
+  const [testForm, setTestForm] = useState({ platform: "yy", customPlatform: "", originalId: "" });
   const [testResults, setTestResults] = useState<any[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
   const [sortKey, setSortKey] = useState<"platform" | "urlTemplate">("platform");
@@ -61,29 +62,37 @@ export const CarouselProxyView = ({ fetchData }: { fetchData: () => void }) => {
         setPresets(data.carouselProxyPresets);
       }
       setIsPresetModalOpen(false);
-    } catch(e) {
-      alert("JSON 格式错误，请检查！\n" + e.message);
+    } catch(e: any) {
+      alert("JSON 格式错误，请检查！\n" + (e?.message || ""));
     }
   };
 
+  const effectiveFormPlatform = form.platform === "custom" ? (form.customPlatform.trim().toLowerCase() || "custom") : form.platform;
+
   const saveProxy = async () => {
-    if (!form.urlTemplate) return alert("Please enter a URL template");
+    if (!form.urlTemplate) return alert("请输入代理模板 URL");
+    if (!effectiveFormPlatform) return alert("请选择或输入平台代码");
     try {
+      const payload = {
+        platform: effectiveFormPlatform,
+        urlTemplate: form.urlTemplate.trim(),
+        status: form.status
+      };
       if (editingId) {
         await fetch(`/api/carousel-proxies/${editingId}`, {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(form)
+          body: JSON.stringify(payload)
         });
       } else {
         await fetch("/api/carousel-proxies", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(form)
+          body: JSON.stringify(payload)
         });
       }
       setEditingId(null);
-      setForm({ platform: "yy", urlTemplate: "", status: "active" });
+      setForm({ platform: "yy", customPlatform: "", urlTemplate: "", status: "active" });
       loadData();
     } catch (e) {
       console.error(e);
@@ -99,6 +108,8 @@ export const CarouselProxyView = ({ fetchData }: { fetchData: () => void }) => {
     }
   };
 
+  const effectiveTestPlatform = testForm.platform === "custom" ? (testForm.customPlatform.trim().toLowerCase() || "custom") : testForm.platform;
+
   const handleTest = async () => {
     if (!testForm.originalId) return alert("请输入测试用的直播间 ID");
     setTesting(true);
@@ -107,7 +118,11 @@ export const CarouselProxyView = ({ fetchData }: { fetchData: () => void }) => {
       const res = await fetch("/api/carousel/test", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(testForm)
+        body: JSON.stringify({
+          platform: effectiveTestPlatform,
+          originalId: testForm.originalId.trim(),
+          channelId: "test_probe"
+        })
       });
       const data = await res.json();
       setTestResults(data.results || []);
@@ -118,17 +133,21 @@ export const CarouselProxyView = ({ fetchData }: { fetchData: () => void }) => {
     }
   };
 
-  
+  // Collect all known platform values (presets + proxies)
+  const existingProxyPlatforms: string[] = Array.from(new Set(proxies.map(p => String(p.platform || "").toLowerCase()))).filter(Boolean) as string[];
+  const extraCustomPlatforms: string[] = existingProxyPlatforms.filter((p: string) => !PRESET_CAROUSEL_PLATFORMS.some(pre => pre.value === p));
 
-  
-    return (
+  return (
     <div className="space-y-6">
       <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
         <div className="p-5 border-b border-slate-100 flex justify-between items-center bg-slate-50">
-          <h2 className="text-base font-bold text-slate-800 flex items-center">
-            <RefreshCw className="w-5 h-5 mr-2 text-indigo-500" />
-            轮播直播源代理管理
-          </h2>
+          <div>
+            <h2 className="text-base font-bold text-slate-800 flex items-center">
+              <RefreshCw className="w-5 h-5 mr-2 text-indigo-500" />
+              轮播直播源代理管理
+            </h2>
+            <p className="text-xs text-slate-500 mt-1">统一配置各类平台 (YY、斗鱼、虎牙、B站、快手、抖音、央视、咪咕、IPTV等) 的轮播源重定向代理模板</p>
+          </div>
           <button 
              onClick={() => setTestMode(!testMode)}
              className={`px-4 py-2 rounded-lg text-sm font-bold transition ${testMode ? 'bg-slate-200 text-slate-700' : 'bg-indigo-50 text-indigo-600 hover:bg-indigo-100'}`}
@@ -139,45 +158,72 @@ export const CarouselProxyView = ({ fetchData }: { fetchData: () => void }) => {
 
         {testMode ? (
           <div className="p-6">
-             <div className="flex gap-4 mb-6">
-                <div className="w-48">
+             <div className="flex flex-wrap gap-4 mb-6">
+                <div className="w-60">
                   <label className="block text-xs font-bold text-slate-500 mb-1">所属平台</label>
                   <select 
                     value={testForm.platform} 
                     onChange={e => setTestForm({...testForm, platform: e.target.value})}
-                    className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm"
+                    className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm font-bold text-slate-800"
                   >
-                    <option value="yy">YY 直播</option>
-                    <option value="douyu">斗鱼 直播</option>
-                    <option value="huya">虎牙 直播</option>
-                    <option value="bilibili">B站</option>
+                    {PRESET_CAROUSEL_PLATFORMS.map(p => (
+                      <option key={p.value} value={p.value}>{p.label}</option>
+                    ))}
+                    {extraCustomPlatforms.map(p => (
+                      <option key={p} value={p}>{p.toUpperCase()} (已存在平台)</option>
+                    ))}
+                    <option value="custom">+ 自定义平台标识...</option>
                   </select>
                 </div>
-                <div className="flex-1">
+
+                {testForm.platform === "custom" && (
+                  <div className="w-44">
+                    <label className="block text-xs font-bold text-slate-500 mb-1">自定义平台代码</label>
+                    <input 
+                      type="text" 
+                      value={testForm.customPlatform}
+                      onChange={e => setTestForm({...testForm, customPlatform: e.target.value})}
+                      placeholder="例如: zhibo8"
+                      className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-sm font-mono font-bold"
+                    />
+                  </div>
+                )}
+
+                <div className="flex-1 min-w-[200px]">
                   <label className="block text-xs font-bold text-slate-500 mb-1">直播间 ID</label>
                   <input 
                     type="text" 
                     value={testForm.originalId}
                     onChange={e => setTestForm({...testForm, originalId: e.target.value})}
-                    className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm"
-                    placeholder="例如: 12345"
+                    className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm font-mono"
+                    placeholder="例如: 12345, 9999, cctv1, lpl"
                   />
                 </div>
              </div>
 
              <div className="flex gap-2 items-center mb-6 overflow-x-auto pb-2">
-                <span className="text-xs font-bold text-slate-400 whitespace-nowrap">快速填入预设 ID进行测试：</span>
-                {(presets[testForm.platform] || []).map((preset: any, idx: number) => (
-                  <button key={idx} onClick={() => setTestForm({...testForm, originalId: preset.id})} className="px-2 py-1 bg-slate-100 hover:bg-indigo-50 hover:text-indigo-600 rounded text-xs font-bold transition whitespace-nowrap">
-                    {preset.name}({preset.id})
+                <span className="text-xs font-bold text-slate-400 whitespace-nowrap">快速填入预设 ID 进行测试：</span>
+                {(presets[effectiveTestPlatform] || []).map((preset: any, idx: number) => (
+                  <button 
+                    key={idx} 
+                    onClick={() => setTestForm(prev => ({ ...prev, originalId: preset.id }))} 
+                    className="px-2.5 py-1 bg-slate-100 hover:bg-indigo-50 hover:text-indigo-600 rounded text-xs font-bold transition whitespace-nowrap border border-slate-200"
+                  >
+                    {preset.name} ({preset.id})
                   </button>
                 ))}
-                {(presets[testForm.platform] || []).length === 0 && <span className="text-xs text-slate-400">暂无预设</span>}
+                {(presets[effectiveTestPlatform] || []).length === 0 && (
+                  <span className="text-xs text-slate-400">该平台暂无预设 ID，可手动输入 ID 测试</span>
+                )}
                 
-                <button onClick={() => {
-                   setPresetForm(JSON.stringify(presets, null, 2));
-                   setIsPresetModalOpen(true);
-                }} className="ml-auto p-1.5 text-slate-400 hover:text-indigo-600 transition shrink-0" title="配置预设ID">
+                <button 
+                  onClick={() => {
+                     setPresetForm(JSON.stringify(presets, null, 2));
+                     setIsPresetModalOpen(true);
+                  }} 
+                  className="ml-auto p-1.5 text-slate-400 hover:text-indigo-600 transition shrink-0" 
+                  title="配置预设ID"
+                >
                    <Settings className="w-4 h-4" />
                 </button>
              </div>
@@ -185,7 +231,7 @@ export const CarouselProxyView = ({ fetchData }: { fetchData: () => void }) => {
              <button 
                onClick={handleTest}
                disabled={testing}
-               className="px-6 py-2.5 bg-indigo-600 text-white rounded-lg font-bold hover:bg-indigo-700 flex items-center shadow-sm disabled:opacity-50"
+               className="px-6 py-2.5 bg-indigo-600 text-white rounded-lg font-bold hover:bg-indigo-700 flex items-center shadow-sm disabled:opacity-50 transition"
              >
                {testing ? <RefreshCw className="w-4 h-4 mr-2 animate-spin" /> : <PlayCircle className="w-4 h-4 mr-2" />}
                {testing ? "正在逐个检测代理..." : "开始批量检测"}
@@ -193,7 +239,7 @@ export const CarouselProxyView = ({ fetchData }: { fetchData: () => void }) => {
 
              {testResults.length > 0 && (
                <div className="mt-8">
-                  <h3 className="font-bold text-slate-800 mb-4 border-b border-slate-100 pb-2">检测报告</h3>
+                  <h3 className="font-bold text-slate-800 mb-4 border-b border-slate-100 pb-2">检测报告 ({testResults.length} 个模板)</h3>
                   <div className="bg-slate-50 rounded-xl overflow-hidden border border-slate-200">
                      <table className="w-full text-left text-sm">
                         <thead className="bg-slate-100 text-slate-500 font-bold text-xs">
@@ -238,7 +284,6 @@ export const CarouselProxyView = ({ fetchData }: { fetchData: () => void }) => {
                   </select>
                 </div>
                 
-                
                 <button
                    onClick={async () => {
                      setTesting(true);
@@ -248,6 +293,7 @@ export const CarouselProxyView = ({ fetchData }: { fetchData: () => void }) => {
                         if (data.success) {
                            alert(`检测完成，共检测了 ${data.count} 个代理。`);
                            fetchData();
+                           loadData();
                         } else {
                            alert(data.error || "检测失败");
                         }
@@ -258,7 +304,7 @@ export const CarouselProxyView = ({ fetchData }: { fetchData: () => void }) => {
                      }
                   }}
                   disabled={testing}
-                  className="px-4 py-2 bg-indigo-600 text-white rounded-lg font-bold text-sm hover:bg-indigo-700 flex items-center shadow-sm disabled:opacity-50"
+                  className="px-4 py-2 bg-indigo-600 text-white rounded-lg font-bold text-sm hover:bg-indigo-700 flex items-center shadow-sm disabled:opacity-50 transition"
                 >
                   {testing ? <RefreshCw className="w-4 h-4 mr-2 animate-spin" /> : <PlayCircle className="w-4 h-4 mr-2" />}
                   {testing ? "正在自动检测..." : "一键批量测活"}
@@ -268,21 +314,19 @@ export const CarouselProxyView = ({ fetchData }: { fetchData: () => void }) => {
                 <thead className="bg-slate-50 border-b border-slate-100 text-slate-500 font-bold text-xs uppercase">
                    <tr>
                       <th className="px-4 py-3">平台</th>
-                      <th className="px-4 py-3">代理模板 ({}为频道ID)</th>
+                      <th className="px-4 py-3">代理模板 ({} 为频道直播间 ID)</th>
                       <th className="px-4 py-3">状态</th>
                       <th className="px-4 py-3 text-right">操作</th>
                    </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
                    {(Array.isArray(proxies) ? proxies : [])
-                       .filter(p => (p.urlTemplate || "").toLowerCase().includes(searchQuery.toLowerCase()) || (p.platform || "").includes(searchQuery))
+                       .filter(p => (p.urlTemplate || "").toLowerCase().includes(searchQuery.toLowerCase()) || (p.platform || "").toLowerCase().includes(searchQuery.toLowerCase()))
                        .sort((a, b) => sortKey === "urlTemplate" ? (a.urlTemplate || "").localeCompare(b.urlTemplate || "") : (a.platform || "").localeCompare(b.platform || ""))
                        .map(p => (
-                      <tr key={p.id} className="hover:bg-slate-50">
+                      <tr key={p.id} className="hover:bg-slate-50 transition">
                          <td className="px-4 py-3">
-                            <span className="font-bold text-slate-700 bg-slate-100 px-2 py-1 rounded uppercase text-xs">
-                               {p.platform}
-                            </span>
+                            {getPlatformBadge(p.platform)}
                          </td>
                          <td className="px-4 py-3 text-xs font-mono text-slate-600 break-all max-w-sm">
                             {p.urlTemplate}
@@ -296,7 +340,12 @@ export const CarouselProxyView = ({ fetchData }: { fetchData: () => void }) => {
                          <td className="px-4 py-3 text-right">
                             <button onClick={() => {
                                setEditingId(p.id);
-                               setForm({ platform: p.platform, urlTemplate: p.urlTemplate, status: p.status });
+                               const isPreset = PRESET_CAROUSEL_PLATFORMS.some(pre => pre.value === p.platform);
+                               if (isPreset) {
+                                 setForm({ platform: p.platform, customPlatform: "", urlTemplate: p.urlTemplate, status: p.status });
+                               } else {
+                                 setForm({ platform: "custom", customPlatform: p.platform, urlTemplate: p.urlTemplate, status: p.status });
+                               }
                             }} className="p-1.5 text-slate-400 hover:text-indigo-600 transition">
                                <Edit2 className="w-4 h-4" />
                             </button>
@@ -312,21 +361,38 @@ export const CarouselProxyView = ({ fetchData }: { fetchData: () => void }) => {
                 </tbody>
              </table>
              <div className="p-4 bg-slate-50/50 border-t border-slate-100 flex flex-wrap items-end gap-3">
-                <div className="w-32">
-                  <label className="block text-xs font-bold text-slate-500 mb-1">平台</label>
+                <div className="w-56">
+                  <label className="block text-xs font-bold text-slate-500 mb-1">平台标识</label>
                   <select 
                     value={form.platform} 
                     onChange={e => setForm({...form, platform: e.target.value})}
-                    className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-sm"
+                    className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-sm font-bold text-slate-800"
                   >
-                    <option value="yy">YY</option>
-                    <option value="douyu">斗鱼</option>
-                    <option value="huya">虎牙</option>
-                    <option value="bilibili">B站</option>
+                    {PRESET_CAROUSEL_PLATFORMS.map(p => (
+                      <option key={p.value} value={p.value}>{p.label}</option>
+                    ))}
+                    {extraCustomPlatforms.map(p => (
+                      <option key={p} value={p}>{p.toUpperCase()} (已存在平台)</option>
+                    ))}
+                    <option value="custom">+ 自定义平台标识...</option>
                   </select>
                 </div>
-                <div className="flex-1 min-w-[200px]">
-                  <label className="block text-xs font-bold text-slate-500 mb-1">代理模板 URL (使用 {'{}'} 代替 ID)</label>
+
+                {form.platform === "custom" && (
+                  <div className="w-40">
+                    <label className="block text-xs font-bold text-slate-500 mb-1">自定义平台代码</label>
+                    <input 
+                      type="text" 
+                      value={form.customPlatform}
+                      onChange={e => setForm({...form, customPlatform: e.target.value})}
+                      placeholder="例如: zhibo8"
+                      className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-sm font-mono font-bold"
+                    />
+                  </div>
+                )}
+
+                <div className="flex-1 min-w-[240px]">
+                  <label className="block text-xs font-bold text-slate-500 mb-1">代理模板 URL (使用 {'{}'} 代表频道 ID)</label>
                   <input 
                     type="text" 
                     value={form.urlTemplate}
@@ -337,7 +403,7 @@ export const CarouselProxyView = ({ fetchData }: { fetchData: () => void }) => {
                 </div>
                 <button 
                   onClick={saveProxy}
-                  className="px-4 py-2 bg-indigo-600 text-white rounded-lg font-bold text-sm hover:bg-indigo-700 flex items-center shrink-0"
+                  className="px-4 py-2 bg-indigo-600 text-white rounded-lg font-bold text-sm hover:bg-indigo-700 flex items-center shrink-0 transition"
                 >
                   <Plus className="w-4 h-4 mr-1.5" />
                   {editingId ? "保存修改" : "添加代理模板"}
@@ -345,8 +411,8 @@ export const CarouselProxyView = ({ fetchData }: { fetchData: () => void }) => {
                 {editingId && (
                   <button onClick={() => {
                      setEditingId(null);
-                     setForm({ platform: "yy", urlTemplate: "", status: "active" });
-                  }} className="px-4 py-2 bg-slate-200 text-slate-600 rounded-lg font-bold text-sm hover:bg-slate-300 shrink-0">
+                     setForm({ platform: "yy", customPlatform: "", urlTemplate: "", status: "active" });
+                  }} className="px-4 py-2 bg-slate-200 text-slate-600 rounded-lg font-bold text-sm hover:bg-slate-300 shrink-0 transition">
                     取消
                   </button>
                 )}
@@ -371,7 +437,7 @@ export const CarouselProxyView = ({ fetchData }: { fetchData: () => void }) => {
                  className="w-full h-64 bg-slate-50 border border-slate-200 rounded-lg p-3 text-sm font-mono focus:bg-white focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
                  spellCheck={false}
                />
-               <p className="text-xs text-slate-500 mt-2">请按照严格的 JSON 格式填写预设，键为平台标识 (yy, douyu, huya, bilibili 等)。</p>
+               <p className="text-xs text-slate-500 mt-2">请按照严格的 JSON 格式填写预设，键为平台标识 (yy, douyu, huya, bilibili, kuaishou, douyin, cntv, migu, iptv 等)。</p>
             </div>
             <div className="p-4 border-t border-slate-100 bg-slate-50 flex justify-end gap-2">
                <button onClick={() => setIsPresetModalOpen(false)} className="px-4 py-2 bg-slate-200 text-slate-700 rounded-lg font-bold text-sm hover:bg-slate-300 transition">

@@ -1,13 +1,14 @@
 import React, { useState, useEffect } from "react";
 import { Plus, Trash2, Edit2, Search, Link as LinkIcon, Save, RefreshCw, Wand2, CheckSquare, X , Download, Eye, EyeOff, Filter, RotateCcw } from "lucide-react";
 import { authFetch as fetch } from "../utils/api";
+import { PRESET_CAROUSEL_PLATFORMS, getPlatformBadge, getPlatformInfo } from "../utils/carouselPlatforms";
 
 export const CarouselChannelView = ({ fetchData, channelsData = [] }: { fetchData: () => void, channelsData?: any[] }) => {
   const [channels, setChannels] = useState<any[]>([]);
   const [unregistered, setUnregistered] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [form, setForm] = useState({ name: "", channelId: "", platform: "yy", originalId: "" });
+  const [form, setForm] = useState({ name: "", channelId: "", platform: "yy", customPlatform: "", originalId: "" });
   const [activeTab, setActiveTab] = useState<"registry" | "unregistered" | "rules">("registry");
   const [searchQuery, setSearchQuery] = useState("");
   const [sortKey, setSortKey] = useState<"name" | "platform">("platform");
@@ -116,32 +117,6 @@ export const CarouselChannelView = ({ fetchData, channelsData = [] }: { fetchDat
     }
   };
 
-  const getPlatformBadge = (platform: string) => {
-    const map: Record<string, { label: string; color: string }> = {
-      yy: { label: "YY 直播", color: "bg-amber-100 text-amber-800 border-amber-200" },
-      douyu: { label: "斗鱼", color: "bg-orange-100 text-orange-800 border-orange-200" },
-      huya: { label: "虎牙", color: "bg-yellow-100 text-yellow-800 border-yellow-200" },
-      bilibili: { label: "B站", color: "bg-sky-100 text-sky-800 border-sky-200" },
-      kuaishou: { label: "快手", color: "bg-rose-100 text-rose-800 border-rose-200" },
-      douyin: { label: "抖音", color: "bg-slate-800 text-white border-slate-700" },
-      cntv: { label: "央视", color: "bg-red-100 text-red-800 border-red-200" },
-      migu: { label: "咪咕", color: "bg-blue-100 text-blue-800 border-blue-200" },
-      iptv: { label: "IPTV", color: "bg-emerald-100 text-emerald-800 border-emerald-200" },
-    };
-    const item = map[(platform || "").toLowerCase()];
-    if (item) {
-      return (
-        <span className={`font-bold px-2.5 py-1 rounded-md text-xs border ${item.color}`}>
-          {item.label} ({platform})
-        </span>
-      );
-    }
-    return (
-      <span className="font-bold text-slate-700 bg-slate-100 border border-slate-200 px-2.5 py-1 rounded-md uppercase text-xs">
-        {platform}
-      </span>
-    );
-  };
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [selectedRegistryIds, setSelectedRegistryIds] = useState<string[]>([]);
   const [selectedUnregIds, setSelectedUnregIds] = useState<string[]>([]);
@@ -170,10 +145,17 @@ export const CarouselChannelView = ({ fetchData, channelsData = [] }: { fetchDat
     }
   };
 
+  const effectiveFormPlatform = form.platform === "custom" ? (form.customPlatform.trim().toLowerCase() || "custom") : form.platform;
+
   const saveChannel = async () => {
-    if (!form.name || !form.platform || !form.originalId) return alert("Please fill all fields");
+    if (!form.name || !effectiveFormPlatform || !form.originalId) return alert("请填写完整的频道名称、平台和直播间 ID");
     const existing = channelsData?.find(c => c.name === form.name);
-    const payload = { ...form, channelId: existing ? existing.id : "" };
+    const payload = {
+      name: form.name.trim(),
+      platform: effectiveFormPlatform,
+      originalId: form.originalId.trim(),
+      channelId: existing ? existing.id : ""
+    };
     try {
       if (editingId) {
         await fetch(`/api/carousel-channels/${editingId}`, {
@@ -189,7 +171,7 @@ export const CarouselChannelView = ({ fetchData, channelsData = [] }: { fetchDat
         });
       }
       setEditingId(null);
-      setForm({ name: "", channelId: "", platform: "yy", originalId: "" });
+      setForm({ name: "", channelId: "", platform: "yy", customPlatform: "", originalId: "" });
       setIsModalOpen(false);
       loadData();
     } catch (e) {
@@ -207,7 +189,7 @@ export const CarouselChannelView = ({ fetchData, channelsData = [] }: { fetchDat
   };
 
   const saveRule = async () => {
-    const finalPlatform = ruleForm.platform === "custom" ? customPlatform.trim() : ruleForm.platform;
+    const finalPlatform = ruleForm.platform === "custom" ? customPlatform.trim().toLowerCase() : ruleForm.platform;
     if (!finalPlatform || !ruleForm.keyword.trim()) return showToast("请填写完整的平台标识和 URL 特征关键词", "error");
     try {
       await fetch("/api/carousel-discovery-rules", {
@@ -236,6 +218,7 @@ export const CarouselChannelView = ({ fetchData, channelsData = [] }: { fetchDat
 
   const handleBatchDeleteRegistry = async () => {
     if (selectedRegistryIds.length === 0) return;
+    if (!confirm(`确定要批量删除选中的 ${selectedRegistryIds.length} 个轮播映射吗？`)) return;
     try {
       await fetch('/api/carousel-channels/batch-delete', {
         method: 'POST',
@@ -244,43 +227,50 @@ export const CarouselChannelView = ({ fetchData, channelsData = [] }: { fetchDat
       });
       setSelectedRegistryIds([]);
       loadData();
-    } catch (e) {
+    } catch(e) {
       console.error(e);
     }
   };
 
   const handleBatchCreateUnregistered = async () => {
     if (selectedUnregIds.length === 0) return;
-    const itemsToCreate = unregistered
-      .filter(u => selectedUnregIds.includes(`${u.platform}_${u.originalId}`))
-      .map(u => ({
-         name: u.sampleNames[0] || `${u.platform}_${u.originalId}`,
-         platform: u.platform,
-         originalId: u.originalId
-      }));
+    const itemsToCreate = unregistered.filter(u => selectedUnregIds.includes(`${u.platform}_${u.originalId}`));
+    if (itemsToCreate.length === 0) return;
+    
+    const payload = itemsToCreate.map(u => ({
+      name: u.sampleNames[0] || `${u.platform.toUpperCase()} ${u.originalId}`,
+      platform: u.platform,
+      originalId: u.originalId
+    }));
+
     try {
       await fetch('/api/carousel-channels/batch', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ items: itemsToCreate })
+        body: JSON.stringify({ items: payload })
       });
       setSelectedUnregIds([]);
+      setActiveTab("registry");
       loadData();
-    } catch (e) {
+    } catch(e) {
       console.error(e);
     }
   };
 
-  const applyToExisting = async () => {
+  const handleApply = async () => {
     setApplying(true);
     try {
       const res = await fetch("/api/carousel-channels-apply", { method: "POST", headers: { "Content-Type": "application/json" }});
       const data = await res.json();
-      showToast(`成功整理了 ${data.updatedCount} 个直播源！`, "success");
-      fetchData();
-    } catch (e) {
+      if (data.success) {
+        showToast(`已成功同步生成 ${data.createdSourcesCount || 0} 个轮播频道直播源！`, "success");
+        fetchData();
+      } else {
+        showToast(data.error || "应用失败", "error");
+      }
+    } catch(e) {
       console.error(e);
-      showToast("整理直播源操作失败", "error");
+      showToast("请求失败", "error");
     } finally {
       setApplying(false);
     }
@@ -289,30 +279,39 @@ export const CarouselChannelView = ({ fetchData, channelsData = [] }: { fetchDat
   const toggleSelectRegistry = (id: string) => {
     setSelectedRegistryIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
   };
+
   const toggleSelectAllRegistry = () => {
-    if (selectedRegistryIds.length === channels.length && channels.length > 0) {
+    if (selectedRegistryIds.length === channels.length) {
       setSelectedRegistryIds([]);
     } else {
       setSelectedRegistryIds(channels.map(c => c.id));
     }
   };
 
-  const visibleUnregistered = unregistered.filter(item => {
-    const key = `${item.platform}_${item.originalId}`;
+  // Filter and search unregistered items
+  const visibleUnregistered = unregistered.filter(u => {
+    const key = `${u.platform}_${u.originalId}`;
     const isIgnored = ignoredKeys.includes(key);
-    if (!showIgnored && isIgnored) return false;
-    if (showIgnored && !isIgnored) return false;
+    
+    // Check ignored mode toggle
+    if (showIgnored) {
+      if (!isIgnored) return false;
+    } else {
+      if (isIgnored) return false;
+    }
 
-    if (unregPlatformFilter !== "all" && item.platform !== unregPlatformFilter) {
+    // Check platform filter
+    if (unregPlatformFilter !== "all" && u.platform.toLowerCase() !== unregPlatformFilter.toLowerCase()) {
       return false;
     }
 
+    // Check search query
     if (unregSearchQuery.trim()) {
-      const q = unregSearchQuery.toLowerCase().trim();
-      const matchPlatform = (item.platform || "").toLowerCase().includes(q);
-      const matchId = (item.originalId || "").toLowerCase().includes(q);
-      const matchName = (item.sampleNames || []).some((n: string) => (n || "").toLowerCase().includes(q));
-      if (!matchPlatform && !matchId && !matchName) return false;
+      const query = unregSearchQuery.toLowerCase().trim();
+      const matchPlatform = (u.platform || "").toLowerCase().includes(query);
+      const matchId = (u.originalId || "").toLowerCase().includes(query);
+      const matchName = (u.sampleNames || []).some((n: string) => n.toLowerCase().includes(query));
+      return matchPlatform || matchId || matchName;
     }
 
     return true;
@@ -323,48 +322,41 @@ export const CarouselChannelView = ({ fetchData, channelsData = [] }: { fetchDat
   const toggleSelectUnreg = (key: string) => {
     setSelectedUnregIds(prev => prev.includes(key) ? prev.filter(x => x !== key) : [...prev, key]);
   };
+
   const toggleSelectAllUnreg = () => {
-    const visibleKeys = visibleUnregistered.map(u => `${u.platform}_${u.originalId}`);
-    const isAllVisibleSelected = visibleKeys.length > 0 && visibleKeys.every(k => selectedUnregIds.includes(k));
-    if (isAllVisibleSelected) {
-      setSelectedUnregIds(prev => prev.filter(id => !visibleKeys.includes(id)));
+    const allVisibleKeys = visibleUnregistered.map(u => `${u.platform}_${u.originalId}`);
+    const allSelected = allVisibleKeys.length > 0 && allVisibleKeys.every(k => selectedUnregIds.includes(k));
+    if (allSelected) {
+      setSelectedUnregIds(prev => prev.filter(k => !allVisibleKeys.includes(k)));
     } else {
-      setSelectedUnregIds(prev => Array.from(new Set([...prev, ...visibleKeys])));
+      setSelectedUnregIds(prev => Array.from(new Set([...prev, ...allVisibleKeys])));
     }
   };
 
-  
-
-  
-  const handleExportActive = async () => {
+  const handleDownloadActiveM3u = async () => {
     try {
       const res = await fetch('/api/carousel-proxies');
       const proxies = await res.json();
+      const activeProxies = (Array.isArray(proxies) ? proxies : []).filter((p: any) => p.status === 'active');
       
-      const activeProxies = (proxies || []).filter(p => p.status === 'active');
-      const proxyMap = {};
-      activeProxies.forEach(p => {
-        if (!proxyMap[p.platform]) {
-          proxyMap[p.platform] = p.urlTemplate;
-        }
-      });
-
-      const activeChannels = (channels || []).filter(c => proxyMap[c.platform]);
-
-      if (activeChannels.length === 0) {
-        showToast("当前没有可用的轮播频道（对应的平台没有任何状态为'可用'的代理源）。", "error");
-        return;
+      if (activeProxies.length === 0) {
+        return alert("当前没有可用的轮播代理模板，请先到「代理管理」中配置或测活！");
       }
-      
-      let m3uContent = "#EXTM3U\n";
-      activeChannels.forEach(c => {
-        const template = proxyMap[c.platform];
-        const url = template.replace('{}', c.originalId);
-        m3uContent += `#EXTINF:-1, ${c.name || c.originalId}\n`;
-        m3uContent += `${url}\n`;
-      });
 
-      const blob = new Blob([m3uContent], { type: "audio/x-mpegurl" });
+      if (channels.length === 0) {
+        return alert("当前没有已配置的轮播频道映射！");
+      }
+
+      let m3uContent = "#EXTM3U\n";
+      for (const channel of channels) {
+        const matchingProxies = activeProxies.filter((p: any) => p.platform === channel.platform);
+        for (const proxy of matchingProxies) {
+          const streamUrl = proxy.urlTemplate.replace('{}', channel.originalId);
+          m3uContent += `#EXTINF:-1 group-title="轮播频道",${channel.name}\n${streamUrl}\n`;
+        }
+      }
+
+      const blob = new Blob([m3uContent], { type: "text/plain;charset=utf-8" });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
@@ -373,47 +365,61 @@ export const CarouselChannelView = ({ fetchData, channelsData = [] }: { fetchDat
       a.click();
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
-    } catch (error) {
-      alert("导出失败");
+    } catch(e) {
+      console.error(e);
+      alert("导出失败，请检查网络");
     }
   };
+
+  // Collect all known platforms from rules, channels, presets
+  const knownPlatformValues = Array.from(new Set([
+    ...PRESET_CAROUSEL_PLATFORMS.map(p => p.value),
+    ...channels.map(c => String(c.platform || "").toLowerCase()),
+    ...rules.map(r => String(r.platform || "").toLowerCase()),
+    ...unregistered.map(u => String(u.platform || "").toLowerCase())
+  ])).filter(Boolean);
+
+  const extraCustomPlatforms = knownPlatformValues.filter(p => !PRESET_CAROUSEL_PLATFORMS.some(pre => pre.value === p));
 
   return (
     <div className="space-y-6">
       {toast && (
-        <div className={`p-3.5 px-4 rounded-xl text-xs font-bold flex items-center justify-between border shadow-sm animate-fade-in ${
+        <div className={`fixed top-4 right-4 z-50 px-4 py-3 rounded-xl shadow-lg border text-sm font-bold flex items-center gap-2 animate-fade-in ${
           toast.type === "success" ? "bg-emerald-50 text-emerald-800 border-emerald-200" :
           toast.type === "error" ? "bg-rose-50 text-rose-800 border-rose-200" :
           "bg-indigo-50 text-indigo-800 border-indigo-200"
         }`}>
           <span>{toast.message}</span>
-          <button onClick={() => setToast(null)} className="ml-3 text-slate-400 hover:text-slate-600 transition">
+          <button onClick={() => setToast(null)} className="ml-2 hover:opacity-70">
             <X className="w-4 h-4" />
           </button>
         </div>
       )}
 
+      {/* Reset Confirmation Modal */}
       {showResetConfirmModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 backdrop-blur-sm p-4">
-          <div className="bg-white rounded-xl shadow-xl border border-slate-200 p-6 max-w-sm w-full animate-in fade-in zoom-in-95">
-            <h3 className="font-bold text-base text-slate-800 mb-2">重置规则确认</h3>
-            <p className="text-xs text-slate-600 mb-5 leading-relaxed">
-              确定要清空当前的特征发现规则，并恢复为系统默认预置规则库吗？此操作将替换自定义同名规则。
-            </p>
-            <div className="flex items-center justify-end gap-2.5">
+        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md overflow-hidden animate-fade-in">
+            <div className="p-5 border-b border-slate-100 bg-rose-50/50">
+              <h3 className="font-bold text-rose-800 text-base">重置特征规则库确认</h3>
+              <p className="text-xs text-rose-600 mt-1">此操作将清空当前所有规则，并完整重新装载系统内置的标准特征规则库。</p>
+            </div>
+            <div className="p-5 text-sm text-slate-600 space-y-2">
+              <p>如果您添加过自定义特征规则，重置后需要重新添加。</p>
+              <p className="font-bold text-slate-800">确定要继续重置为官方预置规则库吗？</p>
+            </div>
+            <div className="p-4 border-t border-slate-100 bg-slate-50 flex justify-end gap-2">
               <button
                 onClick={() => setShowResetConfirmModal(false)}
-                className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-lg transition"
+                className="px-4 py-2 bg-slate-200 text-slate-700 rounded-lg font-bold text-sm hover:bg-slate-300 transition"
               >
                 取消
               </button>
               <button
                 onClick={() => handleLoadPresetRules('reset')}
-                disabled={presetLoading}
-                className="px-4 py-2 bg-rose-600 hover:bg-rose-700 disabled:opacity-60 text-white font-bold text-xs rounded-lg shadow-sm transition flex items-center"
+                className="px-4 py-2 bg-rose-600 text-white rounded-lg font-bold text-sm hover:bg-rose-700 transition"
               >
-                {presetLoading ? <RefreshCw className="w-3.5 h-3.5 mr-1.5 animate-spin" /> : null}
-                确定重置
+                确认重置
               </button>
             </div>
           </div>
@@ -421,47 +427,55 @@ export const CarouselChannelView = ({ fetchData, channelsData = [] }: { fetchDat
       )}
 
       <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
-        <div className="p-5 border-b border-slate-100 flex justify-between items-center bg-slate-50">
-          <h2 className="text-base font-bold text-slate-800 flex items-center">
-            <LinkIcon className="w-5 h-5 mr-2 text-indigo-500" />
-            轮播频道映射管理
-          </h2>
-          <div className="flex gap-2">
-            <button
-                  onClick={handleExportActive}
-                  className="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-bold hover:bg-indigo-700 flex items-center shadow-sm"
-                  title="根据代理源状态，导出当前可用的轮播频道列表为 M3U 文件"
-                >
-                  <Download className="w-4 h-4 mr-1.5" />
-                  输出可用列表
-                </button>
-            <button 
-              onClick={applyToExisting}
-              disabled={applying}
-              className="px-4 py-2 bg-emerald-50 text-emerald-600 rounded-lg text-sm font-bold hover:bg-emerald-100 flex items-center"
-            >
-              {applying ? <RefreshCw className="w-4 h-4 mr-1.5 animate-spin" /> : <Wand2 className="w-4 h-4 mr-1.5" />}
-              根据映射自动整理所有频道
-            </button>
-            <div className="flex bg-slate-200 p-1 rounded-lg">
-              <button 
-                 onClick={() => setActiveTab("registry")}
-                 className={`px-4 py-1.5 rounded-md text-sm font-bold transition ${activeTab === "registry" ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-600 hover:text-slate-800'}`}
-              >
-                 映射列表
-              </button>
-              <button 
-                 onClick={() => setActiveTab("unregistered")}
-                 className={`px-4 py-1.5 rounded-md text-sm font-bold transition ${activeTab === "unregistered" ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-600 hover:text-slate-800'}`}
-              >
-                 未识别项发现 ({unregistered.filter(u => !ignoredKeys.includes(`${u.platform}_${u.originalId}`)).length})
-              </button>
-              <button 
-                 onClick={() => setActiveTab("rules")}
-                 className={`px-4 py-1.5 rounded-md text-sm font-bold transition ${activeTab === "rules" ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-600 hover:text-slate-800'}`}
-              >
-                 特征发现规则
-              </button>
+        <div className="p-5 border-b border-slate-100 flex flex-wrap justify-between items-center bg-slate-50 gap-4">
+          <div>
+            <h2 className="text-base font-bold text-slate-800 flex items-center">
+              <LinkIcon className="w-5 h-5 mr-2 text-indigo-500" />
+              轮播映射与特征发现
+            </h2>
+            <p className="text-xs text-slate-500 mt-1">统一管理网络直播间与系统频道的映射，并根据自定义特征规则自动识别提取同类直播源</p>
+          </div>
+          <div className="flex flex-wrap items-center gap-3">
+             <button
+               onClick={handleDownloadActiveM3u}
+               className="px-3.5 py-2 bg-white text-slate-700 border border-slate-200 rounded-lg text-sm font-bold hover:bg-slate-100 flex items-center shadow-sm transition"
+               title="将目前已配置且测活通过的轮播源一键导出为 M3U 文件"
+             >
+               <Download className="w-4 h-4 mr-1.5 text-indigo-600" />
+               导出可用 M3U
+             </button>
+             <button 
+               onClick={handleApply}
+               disabled={applying}
+               className="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-bold hover:bg-indigo-700 flex items-center shadow-sm disabled:opacity-50 transition"
+             >
+               {applying ? <RefreshCw className="w-4 h-4 mr-1.5 animate-spin" /> : <Save className="w-4 h-4 mr-1.5" />}
+               {applying ? "正在批量应用..." : "一键应用生成频道源"}
+             </button>
+          </div>
+        </div>
+
+        <div className="px-5 pt-3 border-b border-slate-100 bg-slate-50/50">
+          <div className="flex justify-between items-center">
+            <div className="flex space-x-1 bg-slate-200/60 p-1 rounded-lg">
+               <button 
+                  onClick={() => setActiveTab("registry")}
+                  className={`px-4 py-1.5 rounded-md text-sm font-bold transition ${activeTab === "registry" ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-600 hover:text-slate-800'}`}
+               >
+                  映射列表 ({channels.length})
+               </button>
+               <button 
+                  onClick={() => setActiveTab("unregistered")}
+                  className={`px-4 py-1.5 rounded-md text-sm font-bold transition ${activeTab === "unregistered" ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-600 hover:text-slate-800'}`}
+               >
+                  未识别项发现 ({unregistered.filter(u => !ignoredKeys.includes(`${u.platform}_${u.originalId}`)).length})
+               </button>
+               <button 
+                  onClick={() => setActiveTab("rules")}
+                  className={`px-4 py-1.5 rounded-md text-sm font-bold transition ${activeTab === "rules" ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-600 hover:text-slate-800'}`}
+               >
+                  特征发现规则 ({rules.length})
+               </button>
             </div>
           </div>
         </div>
@@ -469,46 +483,43 @@ export const CarouselChannelView = ({ fetchData, channelsData = [] }: { fetchDat
         {activeTab === "rules" ? (
           <div className="p-0 animate-fade-in">
              <div className="p-4 bg-indigo-50/50 border-b border-indigo-100 flex flex-wrap items-center justify-between gap-3">
-               <div className="text-xs text-indigo-900 leading-relaxed font-sans">
-                 <span className="font-bold">特征发现机制：</span> 系统下载订阅或解析 M3U 时，会根据以下关键词规则自动捕获对应的第三方或网络直播间 URL，将其归类并自动提取为通用轮播映射。
-               </div>
-               <div className="flex items-center gap-2">
-                 <button 
-                   onClick={() => handleLoadPresetRules('seed')}
-                   disabled={presetLoading}
-                   className="px-3.5 py-1.5 bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-60 rounded-lg font-bold text-xs flex items-center shadow-sm transition"
-                   title="自动补全常见已知平台（YY, 斗鱼, 虎牙, B站, 快手, 抖音, 央视, 咪咕, IPTV等）识别特征"
-                 >
-                   {presetLoading ? <RefreshCw className="w-3.5 h-3.5 mr-1.5 animate-spin" /> : <Wand2 className="w-3.5 h-3.5 mr-1.5" />}
-                   预置已知规则库
-                 </button>
-                 <button 
-                   onClick={() => setShowResetConfirmModal(true)}
-                   disabled={presetLoading}
-                   className="px-3 py-1.5 bg-white text-slate-700 hover:bg-slate-100 disabled:opacity-60 border border-slate-200 rounded-lg font-bold text-xs transition"
-                 >
-                   重置默认
-                 </button>
-               </div>
+                <div className="text-xs text-indigo-900 leading-relaxed font-sans">
+                  <span className="font-bold">特征发现机制：</span> 系统下载订阅或解析 M3U 时，会根据以下关键词规则自动捕获对应的第三方或网络直播间 URL，将其归类并自动提取为通用轮播映射。
+                </div>
+                <div className="flex items-center gap-2">
+                  <button 
+                    onClick={() => handleLoadPresetRules('seed')}
+                    disabled={presetLoading}
+                    className="px-3.5 py-1.5 bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-60 rounded-lg font-bold text-xs flex items-center shadow-sm transition"
+                    title="自动补全常见已知平台（YY, 斗鱼, 虎牙, B站, 快手, 抖音, 央视, 咪咕, IPTV等）识别特征"
+                  >
+                    {presetLoading ? <RefreshCw className="w-3.5 h-3.5 mr-1.5 animate-spin" /> : <Wand2 className="w-3.5 h-3.5 mr-1.5" />}
+                    预置已知规则库
+                  </button>
+                  <button 
+                    onClick={() => setShowResetConfirmModal(true)}
+                    disabled={presetLoading}
+                    className="px-3 py-1.5 bg-white text-slate-700 hover:bg-slate-100 disabled:opacity-60 border border-slate-200 rounded-lg font-bold text-xs transition"
+                  >
+                    重置默认
+                  </button>
+                </div>
              </div>
 
              <div className="p-4 bg-slate-50/50 border-b border-slate-100 flex flex-wrap items-end gap-3">
-                <div className="w-48">
+                <div className="w-56">
                   <label className="block text-xs font-bold text-slate-500 mb-1">平台标识</label>
                   <select 
                     value={ruleForm.platform} 
                     onChange={e => setRuleForm({...ruleForm, platform: e.target.value})}
                     className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-sm font-bold text-slate-800"
                   >
-                    <option value="yy">YY 直播 (yy)</option>
-                    <option value="douyu">斗鱼直播 (douyu)</option>
-                    <option value="huya">虎牙直播 (huya)</option>
-                    <option value="bilibili">B站直播 (bilibili)</option>
-                    <option value="kuaishou">快手直播 (kuaishou)</option>
-                    <option value="douyin">抖音直播 (douyin)</option>
-                    <option value="cntv">央视/CNTV (cntv)</option>
-                    <option value="migu">咪咕直播 (migu)</option>
-                    <option value="iptv">IPTV通用 (iptv)</option>
+                    {PRESET_CAROUSEL_PLATFORMS.map(p => (
+                      <option key={p.value} value={p.value}>{p.label}</option>
+                    ))}
+                    {extraCustomPlatforms.map(p => (
+                      <option key={p} value={p}>{p.toUpperCase()} (已存在平台)</option>
+                    ))}
                     <option value="custom">+ 自定义平台标识...</option>
                   </select>
                 </div>
@@ -538,7 +549,7 @@ export const CarouselChannelView = ({ fetchData, channelsData = [] }: { fetchDat
                 </div>
                 <button 
                   onClick={saveRule}
-                  className="px-4 py-2 bg-indigo-600 text-white rounded-lg font-bold text-sm hover:bg-indigo-700 flex items-center shadow-sm"
+                  className="px-4 py-2 bg-indigo-600 text-white rounded-lg font-bold text-sm hover:bg-indigo-700 flex items-center shadow-sm transition"
                 >
                   <Plus className="w-4 h-4 mr-1.5" />
                   添加发现规则
@@ -579,7 +590,7 @@ export const CarouselChannelView = ({ fetchData, channelsData = [] }: { fetchDat
                           <div>暂无特征发现规则</div>
                           <button 
                             onClick={() => handleLoadPresetRules('seed')}
-                            className="px-4 py-2 bg-indigo-50 text-indigo-600 hover:bg-indigo-100 rounded-lg text-xs font-bold inline-flex items-center"
+                            className="px-4 py-2 bg-indigo-50 text-indigo-600 hover:bg-indigo-100 rounded-lg text-xs font-bold inline-flex items-center transition"
                           >
                             <Wand2 className="w-4 h-4 mr-1.5" />
                             一键预置常见已知规则库
@@ -606,7 +617,7 @@ export const CarouselChannelView = ({ fetchData, channelsData = [] }: { fetchDat
                 <button 
                   onClick={() => {
                     setEditingId(null);
-                    setForm({ name: "", channelId: "", platform: "yy", originalId: "" });
+                    setForm({ name: "", channelId: "", platform: "yy", customPlatform: "", originalId: "" });
                     setIsModalOpen(true);
                   }}
                   className="px-4 py-2 bg-indigo-600 text-white rounded-lg font-bold text-sm hover:bg-indigo-700 flex items-center shadow-sm transition"
@@ -617,16 +628,16 @@ export const CarouselChannelView = ({ fetchData, channelsData = [] }: { fetchDat
              </div>
              
              {selectedRegistryIds.length > 0 && (
-               <div className="bg-indigo-50 border-b border-indigo-100 p-3 px-4 flex justify-between items-center">
-                 <span className="text-sm font-bold text-indigo-700">已选择 {selectedRegistryIds.length} 个映射</span>
-                 <button 
-                   onClick={handleBatchDeleteRegistry}
-                   className="px-3 py-1.5 bg-rose-100 text-rose-600 hover:bg-rose-200 rounded text-xs font-bold transition flex items-center"
-                 >
-                   <Trash2 className="w-3.5 h-3.5 mr-1.5" />
-                   批量删除
-                 </button>
-               </div>
+                <div className="bg-indigo-50 border-b border-indigo-100 p-3 px-4 flex justify-between items-center">
+                  <span className="text-sm font-bold text-indigo-700">已选择 {selectedRegistryIds.length} 个映射</span>
+                  <button 
+                    onClick={handleBatchDeleteRegistry}
+                    className="px-3 py-1.5 bg-rose-100 text-rose-600 hover:bg-rose-200 rounded text-xs font-bold transition flex items-center"
+                  >
+                    <Trash2 className="w-3.5 h-3.5 mr-1.5" />
+                    批量删除
+                  </button>
+                </div>
              )}
              
              <table className="w-full text-left text-sm">
@@ -648,7 +659,7 @@ export const CarouselChannelView = ({ fetchData, channelsData = [] }: { fetchDat
                 </thead>
                 <tbody className="divide-y divide-slate-100">
                    {(Array.isArray(channels) ? channels : [])
-                       .filter(p => (p.name || "").toLowerCase().includes(searchQuery.toLowerCase()) || (p.originalId || "").includes(searchQuery) || (p.platform || "").includes(searchQuery))
+                       .filter(p => (p.name || "").toLowerCase().includes(searchQuery.toLowerCase()) || (p.originalId || "").includes(searchQuery) || (p.platform || "").toLowerCase().includes(searchQuery.toLowerCase()))
                        .sort((a, b) => sortKey === "name" ? (a.name || "").localeCompare(b.name || "") : (a.platform || "").localeCompare(b.platform || ""))
                        .map(p => (
                       <tr key={p.id} className={`hover:bg-slate-50 transition-colors ${selectedRegistryIds.includes(p.id) ? 'bg-indigo-50/50' : ''}`}>
@@ -664,17 +675,22 @@ export const CarouselChannelView = ({ fetchData, channelsData = [] }: { fetchDat
                             {p.name}
                          </td>
                          <td className="px-4 py-3">
-                            <span className="font-bold text-slate-700 bg-slate-100 px-2 py-1 rounded uppercase text-xs">
-                               {p.platform}
-                            </span>
+                            {getPlatformBadge(p.platform)}
                          </td>
-                         <td className="px-4 py-3 text-xs font-mono text-slate-600">
+                         <td className="px-4 py-3 text-xs font-mono text-slate-600 font-bold">
                             {p.originalId}
                          </td>
                          <td className="px-4 py-3 text-right">
                             <button onClick={() => {
                                setEditingId(p.id);
-                               setForm({ name: p.name || "", channelId: p.channelId || "", platform: p.platform, originalId: p.originalId });
+                               const isPreset = PRESET_CAROUSEL_PLATFORMS.some(pre => pre.value === p.platform);
+                               setForm({
+                                 name: p.name || "",
+                                 channelId: p.channelId || "",
+                                 platform: isPreset ? p.platform : "custom",
+                                 customPlatform: isPreset ? "" : p.platform,
+                                 originalId: p.originalId
+                               });
                                setIsModalOpen(true);
                             }} className="p-1.5 text-slate-400 hover:text-indigo-600 transition">
                                <Edit2 className="w-4 h-4" />
@@ -757,9 +773,12 @@ export const CarouselChannelView = ({ fetchData, channelsData = [] }: { fetchDat
                      className="bg-white border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs text-slate-700 font-bold focus:outline-none focus:border-indigo-500"
                    >
                      <option value="all">全部平台</option>
-                     {unregPlatforms.map(p => (
-                       <option key={p} value={p}>{p.toUpperCase()}</option>
-                     ))}
+                     {unregPlatforms.map(p => {
+                       const info = getPlatformInfo(p);
+                       return (
+                         <option key={p} value={p}>{info.label}</option>
+                       );
+                     })}
                    </select>
                  </div>
                </div>
@@ -832,10 +851,12 @@ export const CarouselChannelView = ({ fetchData, channelsData = [] }: { fetchDat
                               </span>
                             </div>
                          </td>
-                         <td className="px-4 py-3 text-xs text-slate-500">
-                            <div className="flex flex-wrap gap-1.5">
-                              {item.sampleNames.map((n: string) => (
-                                 <span key={n} className="bg-slate-100 px-2 py-1 rounded-md">{n}</span>
+                         <td className="px-4 py-3 text-slate-600">
+                            <div className="flex flex-wrap gap-1">
+                              {item.sampleNames.map((n: string, idx: number) => (
+                                <span key={idx} className="bg-slate-100 px-2 py-0.5 rounded text-xs">
+                                  {n}
+                                </span>
                               ))}
                             </div>
                          </td>
@@ -844,7 +865,14 @@ export const CarouselChannelView = ({ fetchData, channelsData = [] }: { fetchDat
                               <button 
                                  onClick={() => {
                                     setActiveTab("registry");
-                                    setForm({ name: item.sampleNames[0] || "", channelId: "", platform: item.platform, originalId: item.originalId });
+                                    const isPreset = PRESET_CAROUSEL_PLATFORMS.some(pre => pre.value === item.platform);
+                                    setForm({
+                                      name: item.sampleNames[0] || "",
+                                      channelId: "",
+                                      platform: isPreset ? item.platform : "custom",
+                                      customPlatform: isPreset ? "" : item.platform,
+                                      originalId: item.originalId
+                                    });
                                     setIsModalOpen(true);
                                  }}
                                  className="px-3 py-1.5 bg-indigo-50 text-indigo-600 rounded text-xs font-bold hover:bg-indigo-100 transition"
@@ -887,8 +915,8 @@ export const CarouselChannelView = ({ fetchData, channelsData = [] }: { fetchDat
              </table>
           </div>
         )}
-        
-              </div>
+      </div>
+
       {isModalOpen && (
         <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-xl shadow-xl w-full max-w-md overflow-hidden animate-fade-in">
@@ -898,7 +926,7 @@ export const CarouselChannelView = ({ fetchData, channelsData = [] }: { fetchDat
                  onClick={() => {
                    setIsModalOpen(false);
                    setEditingId(null);
-                   setForm({ name: "", channelId: "", platform: "yy", originalId: "" });
+                   setForm({ name: "", channelId: "", platform: "yy", customPlatform: "", originalId: "" });
                  }} 
                  className="text-slate-400 hover:text-slate-600 transition"
                >
@@ -923,25 +951,42 @@ export const CarouselChannelView = ({ fetchData, channelsData = [] }: { fetchDat
                 </datalist>
               </div>
               <div>
-                <label className="block text-xs font-bold text-slate-500 mb-1.5">平台</label>
+                <label className="block text-xs font-bold text-slate-500 mb-1.5">所属平台</label>
                 <select 
                   value={form.platform} 
                   onChange={e => setForm({...form, platform: e.target.value})}
-                  className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2.5 text-sm focus:bg-white focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
+                  className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2.5 text-sm font-bold text-slate-800 focus:bg-white focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
                 >
-                  <option value="yy">YY 直播</option>
-                  <option value="douyu">斗鱼</option>
-                  <option value="huya">虎牙</option>
-                  <option value="bilibili">B站</option>
+                  {PRESET_CAROUSEL_PLATFORMS.map(p => (
+                    <option key={p.value} value={p.value}>{p.label}</option>
+                  ))}
+                  {extraCustomPlatforms.map(p => (
+                    <option key={p} value={p}>{p.toUpperCase()} (已存在平台)</option>
+                  ))}
+                  <option value="custom">+ 自定义平台标识...</option>
                 </select>
               </div>
+
+              {form.platform === "custom" && (
+                <div>
+                  <label className="block text-xs font-bold text-slate-500 mb-1.5">自定义平台代码</label>
+                  <input 
+                    type="text" 
+                    value={form.customPlatform}
+                    onChange={e => setForm({...form, customPlatform: e.target.value})}
+                    placeholder="例如: zhibo8"
+                    className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2.5 text-sm font-mono font-bold focus:bg-white focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
+                  />
+                </div>
+              )}
+
               <div>
                 <label className="block text-xs font-bold text-slate-500 mb-1.5">直播间 ID</label>
                 <input 
                   type="text" 
                   value={form.originalId}
                   onChange={e => setForm({...form, originalId: e.target.value})}
-                  placeholder="例如: 12345"
+                  placeholder="例如: 12345, 9999, cctv1, lpl"
                   className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2.5 text-sm font-mono focus:bg-white focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
                 />
               </div>
@@ -951,7 +996,7 @@ export const CarouselChannelView = ({ fetchData, channelsData = [] }: { fetchDat
                  onClick={() => {
                    setIsModalOpen(false);
                    setEditingId(null);
-                   setForm({ name: "", channelId: "", platform: "yy", originalId: "" });
+                   setForm({ name: "", channelId: "", platform: "yy", customPlatform: "", originalId: "" });
                  }} 
                  className="px-4 py-2 bg-slate-200 text-slate-700 rounded-lg font-bold text-sm hover:bg-slate-300 transition"
                >
