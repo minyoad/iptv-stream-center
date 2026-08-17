@@ -3818,24 +3818,33 @@ async function runCronJob(job: any) {
       insertLog.run(logId, job.id, nowStr, "success", `成功同步 ${successCount}/${activeConfigs.length} 个 GitHub 订阅源`);
     } else if (job.id === "job_carousel_test") {
       let testedCount = 0;
+      let activeCount = 0;
       const proxies = db.prepare('SELECT * FROM carousel_proxies').all() as any[];
       if (proxies.length > 0) {
-         const fallbacks = { "yy": "12345", "douyu": "9999", "huya": "lpl" };
+         const fallbacks: Record<string, string> = { "yy": "12345", "douyu": "9999", "huya": "lpl", "migu": "631780532", "bilibili": "6", "cntv": "cctv1" };
          const channels = db.prepare('SELECT platform, originalId FROM carousel_channels GROUP BY platform').all() as any[];
          for (const c of channels) {
-            fallbacks[c.platform] = c.originalId;
+            if (c.platform && c.originalId) {
+               fallbacks[c.platform.toLowerCase()] = c.originalId;
+            }
          }
          
          for (const proxy of proxies) {
-            const originalId = fallbacks[proxy.platform];
+            const plat = (proxy.platform || '').toLowerCase();
+            if (isUrlBlockedByDisabledRules(proxy.urlTemplate, plat)) {
+               db.prepare('UPDATE carousel_proxies SET status = ? WHERE id = ?').run('inactive', proxy.id);
+               continue;
+            }
+
+            const originalId = fallbacks[plat];
             if (!originalId) continue;
             
-            const url = proxy.urlTemplate.replace('{}', originalId);
+            const url = proxy.urlTemplate.replace(/\{\s*(?:id|roomid|channelid|cid|originalid)?\s*\}/gi, originalId);
             let isOk = false;
             try {
                const controller = new AbortController();
-               const timeoutId = setTimeout(() => controller.abort(), 5000);
-               const res = await fetch(url, { method: 'GET', signal: controller.signal, headers: { 'User-Agent': 'Mozilla/5.0' } });
+               const timeoutId = setTimeout(() => controller.abort(), 6000);
+               const res = await fetch(url, { method: 'GET', signal: controller.signal, headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' } });
                clearTimeout(timeoutId);
                if (res.ok) isOk = true;
             } catch(e) {
@@ -3843,11 +3852,12 @@ async function runCronJob(job: any) {
             }
             
             db.prepare('UPDATE carousel_proxies SET status = ? WHERE id = ?').run(isOk ? 'active' : 'inactive', proxy.id);
+            if (isOk) activeCount++;
             testedCount++;
          }
       }
-      syncCarouselSources();
-      insertLog.run(logId, job.id, nowStr, "success", `成功检测了 ${testedCount} 个轮播代理，并自动同步了对应频道的直播源列表`);
+      const syncStats = syncCarouselSources();
+      insertLog.run(logId, job.id, nowStr, "success", `成功检测了 ${testedCount} 个轮播代理（有效: ${activeCount}），并同步生成 ${syncStats.createdCount} 个新源，覆盖 ${syncStats.channelsCount} 个频道`);
     } else if (job.id === "job_server_test") {
       if (testStatus.status === "running") {
         insertLog.run(logId, job.id, nowStr, "failed", "当前已有测速任务在运行，跳过定时测速");
