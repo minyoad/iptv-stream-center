@@ -812,7 +812,7 @@ export default function App() {
         setEpgSources(await res.json());
       }
     } catch (err) {
-      console.error("Failed to load EPG sources", err);
+      console.warn("Failed to load EPG sources", err);
     }
   };
 
@@ -961,7 +961,7 @@ export default function App() {
     return window.fetch(input, init);
   };
 
-  const checkAuthStatus = async () => {
+  const checkAuthStatus = async (retryCount = 0) => {
     try {
       const res = await fetch("/api/auth/status");
       if (res.ok) {
@@ -989,11 +989,25 @@ export default function App() {
           setIsAuthRequired(false);
           setIsAuthenticated(true);
         }
+      } else if (retryCount < 3) {
+        setTimeout(() => checkAuthStatus(retryCount + 1), 1000);
+        return;
+      } else {
+        setIsAuthRequired(false);
+        setIsAuthenticated(true);
       }
     } catch (e) {
-      console.error("Auth status query failed", e);
+      if (retryCount < 3) {
+        setTimeout(() => checkAuthStatus(retryCount + 1), 1000);
+        return;
+      }
+      console.warn("Auth status check failed, defaulting to open mode:", e);
+      setIsAuthRequired(false);
+      setIsAuthenticated(true);
     } finally {
-      setAuthChecking(false);
+      if (retryCount === 0 || retryCount >= 3) {
+        setAuthChecking(false);
+      }
     }
   };
 
