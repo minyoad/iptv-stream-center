@@ -20,6 +20,7 @@ export interface LiveSource {
   isp: string;
   status: "active" | "inactive" | "unknown" | "checking";
   latency?: number;
+  resolution?: string;
   lastChecked?: string;
   clientIspReported?: string;
   clientProvinceReported?: string;
@@ -81,6 +82,7 @@ export interface TestStatus {
     url: string;
     status: "active" | "inactive";
     latency?: number;
+    resolution?: string;
   }[];
 }
 

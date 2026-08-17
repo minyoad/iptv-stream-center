@@ -199,6 +199,34 @@ async def phase_2_decode_check(ff_engine: dict, url: str) -> tuple:
     return False, 9999
 
 
+def parse_resolution(url: str, stdout_text: str = "") -> str:
+    if stdout_text:
+        try:
+            import json
+            data = json.loads(stdout_text)
+            streams = data.get("streams", [])
+            if streams:
+                w = int(streams[0].get("width", 0))
+                h = int(streams[0].get("height", 0))
+                if w > 0 and h > 0:
+                    if h >= 2160 or w >= 3840: return "4K"
+                    if h >= 1080 or w >= 1920: return "1080p"
+                    if h >= 720 or w >= 1280: return "720p"
+                    if h >= 576 or w >= 720: return "576p"
+                    if h >= 480 or w >= 640: return "480p"
+                    return f"{w}x{h}"
+        except Exception:
+            pass
+
+    url_lower = url.lower()
+    if any(x in url_lower for x in ["3840x2160", "2160p", "4k", "uhd"]): return "4K"
+    if any(x in url_lower for x in ["1920x1080", "1080p", "1080i", "4m1080", "7.5m1080", "8m1080"]): return "1080p"
+    if any(x in url_lower for x in ["1280x720", "720p", "720i", "2m720"]): return "720p"
+    if any(x in url_lower for x in ["720x576", "704x576", "576p", "576i"]): return "576p"
+    if any(x in url_lower for x in ["640x480", "480p"]): return "480p"
+    return ""
+
+
 async def process_test_pipeline(session: aiohttp.ClientSession, semaphore: asyncio.Semaphore, ff_engine: dict, source_id: str, channel_id: str, url: str, channel_name: str) -> dict:
     """一条线路完整的二段式调度管道
     """
@@ -217,13 +245,15 @@ async def process_test_pipeline(session: aiohttp.ClientSession, semaphore: async
                 "latency": 9999
             }
             
+        resolution = parse_resolution(url)
+
         # [阶段 2] 精深多媒体解码校验 (仅在本地存在 FFmpeg 工具时执行)
         if ff_engine:
             logger.info(f" 🔍 [Phase 1 通行] 对链路 {url[:45]}... 触发 Phase 2 视频帧解码质检...")
             p2_ok, p2_latency = await phase_2_decode_check(ff_engine, url)
             if p2_ok:
-                logger.info(f"  🎉 [质检通过] 解码顺畅，首帧延迟(建立耗时) - {p2_latency}ms")
-                return {
+                logger.info(f"  🎉 [质检通过] 解码顺畅，首帧延迟(建立耗时) - {p2_latency}ms | 分辨率: {resolution or '已识别'}")
+                res_dict = {
                     "sourceId": source_id,
                     "channelId": channel_id,
                     "channelName": channel_name,
@@ -231,6 +261,9 @@ async def process_test_pipeline(session: aiohttp.ClientSession, semaphore: async
                     "status": "active",
                     "latency": p2_latency
                 }
+                if resolution:
+                    res_dict["resolution"] = resolution
+                return res_dict
             else:
                 logger.warning(f"  ❌ [质检失败] {url[:45]}... 能连接端口但无法提取播放帧，归类为不可用")
                 return {
@@ -243,7 +276,7 @@ async def process_test_pipeline(session: aiohttp.ClientSession, semaphore: async
                 }
         else:
             # 如果本地无 FF 家族解码器，测速结果直接信任基于第一阶段轻量握手的延迟数据
-            return {
+            res_dict = {
                 "sourceId": source_id,
                 "channelId": channel_id,
                 "channelName": channel_name,
@@ -251,6 +284,9 @@ async def process_test_pipeline(session: aiohttp.ClientSession, semaphore: async
                 "status": "active",
                 "latency": p1_latency
             }
+            if resolution:
+                res_dict["resolution"] = resolution
+            return res_dict
 
 
 async def main():

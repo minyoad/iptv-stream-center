@@ -234,7 +234,8 @@ export default function App() {
   const [sourceForm, setSourceForm] = useState({
     url: "",
     province: "全国",
-    isp: "BGP"
+    isp: "BGP",
+    resolution: ""
   });
 
   const [isSyncModalOpen, setIsSyncModalOpen] = useState(false);
@@ -300,15 +301,38 @@ export default function App() {
   const [exportIncludeLineSpecs, setExportIncludeLineSpecs] = useState(true);
   const [exportSourceScope, setExportSourceScope] = useState<"channel" | "global" | "channels">("channel");
 
-  const filterSourcesByStatus = (sources: StreamSource[] = [], filterStatus: string = "all") => {
+  const filterSourcesByStatus = (sources: LiveSource[] = [], filterStatus: string = "all", filterResolution: string = "all") => {
     return sources.filter(src => {
-      if (filterStatus === "all") return !src.isolated;
-      if (filterStatus === "all_with_isolated") return true;
-      if (filterStatus === "isolated") return src.isolated;
-      if (src.isolated) return false;
-      if (filterStatus === "inactive") return src.status === "inactive" || (src.latency !== undefined && src.latency >= 9999);
-      if (filterStatus === "active") return src.status === "active" && (src.latency === undefined || src.latency < 9999);
-      return src.status === filterStatus || (filterStatus === "unknown" && src.status === "checking");
+      let matchesStatus = true;
+      if (filterStatus === "all") matchesStatus = !src.isolated;
+      else if (filterStatus === "all_with_isolated") matchesStatus = true;
+      else if (filterStatus === "isolated") matchesStatus = !!src.isolated;
+      else if (src.isolated) matchesStatus = false;
+      else if (filterStatus === "inactive") matchesStatus = src.status === "inactive" || (src.latency !== undefined && src.latency >= 9999);
+      else if (filterStatus === "active") matchesStatus = src.status === "active" && (src.latency === undefined || src.latency < 9999);
+      else matchesStatus = src.status === filterStatus || (filterStatus === "unknown" && src.status === "checking");
+
+      let matchesResolution = true;
+      if (filterResolution !== "all") {
+        const resStr = (src.resolution || "").trim();
+        if (filterResolution === "unknown") {
+          matchesResolution = !resStr || resStr === "未知";
+        } else if (filterResolution === "4K") {
+          matchesResolution = /4k|2160/i.test(resStr);
+        } else if (filterResolution === "1080p") {
+          matchesResolution = /1080/i.test(resStr);
+        } else if (filterResolution === "720p") {
+          matchesResolution = /720/i.test(resStr);
+        } else if (filterResolution === "576p") {
+          matchesResolution = /576/i.test(resStr);
+        } else if (filterResolution === "480p") {
+          matchesResolution = /480/i.test(resStr);
+        } else {
+          matchesResolution = resStr === filterResolution;
+        }
+      }
+
+      return matchesStatus && matchesResolution;
     });
   };
 
@@ -317,6 +341,8 @@ export default function App() {
   const [globalSourceIsp, setGlobalSourceIsp] = useState("all");
   const [globalSourceProvince, setGlobalSourceProvince] = useState("all");
   const [globalSourceStatus, setGlobalSourceStatus] = useState("all");
+  const [globalSourceResolution, setGlobalSourceResolution] = useState("all");
+  const [sourceFilterResolution, setSourceFilterResolution] = useState("all");
   const [selectedGlobalSourceIds, setSelectedGlobalSourceIds] = useState<string[]>([]);
   const [isBatchGlobalSourceModalOpen, setIsBatchGlobalSourceModalOpen] = useState(false);
   const [isMergeModalOpen, setIsMergeModalOpen] = useState(false);
@@ -324,7 +350,8 @@ export default function App() {
   const [batchGlobalSourceForm, setBatchGlobalSourceForm] = useState({
     isp: "",
     province: "",
-    status: ""
+    status: "",
+    resolution: ""
   });
 
   // Auto-reset current pagination page limit back to 1 when search filters change
@@ -334,7 +361,7 @@ export default function App() {
 
   useEffect(() => {
     setGlobalSourcePage(1);
-  }, [globalSourceSearch, globalSourceIsp, globalSourceProvince, globalSourceStatus]);
+  }, [globalSourceSearch, globalSourceIsp, globalSourceProvince, globalSourceStatus, globalSourceResolution]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -358,7 +385,7 @@ export default function App() {
   const [isClientTesting, setIsClientTesting] = useState(false);
   const [clientTestProgress, setClientTestProgress] = useState(0);
   const [clientTestTotal, setClientTestTotal] = useState(0);
-  const [clientTestResults, setClientTestResults] = useState<{ sourceId: string; channelId: string; url: string; status: "active" | "inactive"; latency: number }[]>([]);
+  const [clientTestResults, setClientTestResults] = useState<{ sourceId: string; channelId: string; url: string; status: "active" | "inactive"; latency: number; resolution?: string }[]>([]);
   const [clientTestList, setClientTestList] = useState<any[]>([]);
   const [isClientTestReady, setIsClientTestReady] = useState(false);
 
@@ -459,6 +486,20 @@ export default function App() {
     return Array.from(list);
   }, [channels]);
 
+  const allUniqueResolutionOptions = useMemo(() => {
+    const list = new Set<string>();
+    (channels || []).forEach(ch => {
+      if (ch && ch.sources) {
+        ch.sources.forEach(src => {
+          if (src && src.resolution && src.resolution.trim() && src.resolution !== "未知") {
+            list.add(src.resolution.trim());
+          }
+        });
+      }
+    });
+    return Array.from(list).sort();
+  }, [channels]);
+
   const filteredGlobalSources = useMemo(() => {
     const list: any[] = [];
     (channels || []).forEach((ch) => {
@@ -502,9 +543,29 @@ export default function App() {
       else if (globalSourceStatus === "active") matchesStatus = !isIsolated && isActive;
       else matchesStatus = !isIsolated && item.status === globalSourceStatus;
 
-      return matchesText && matchesIsp && matchesProvince && matchesStatus;
+      let matchesResolution = true;
+      if (globalSourceResolution !== "all") {
+        const resStr = (item.resolution || "").trim();
+        if (globalSourceResolution === "unknown") {
+          matchesResolution = !resStr || resStr === "未知";
+        } else if (globalSourceResolution === "4K") {
+          matchesResolution = /4k|2160/i.test(resStr);
+        } else if (globalSourceResolution === "1080p") {
+          matchesResolution = /1080/i.test(resStr);
+        } else if (globalSourceResolution === "720p") {
+          matchesResolution = /720/i.test(resStr);
+        } else if (globalSourceResolution === "576p") {
+          matchesResolution = /576/i.test(resStr);
+        } else if (globalSourceResolution === "480p") {
+          matchesResolution = /480/i.test(resStr);
+        } else {
+          matchesResolution = resStr === globalSourceResolution;
+        }
+      }
+
+      return matchesText && matchesIsp && matchesProvince && matchesStatus && matchesResolution;
     });
-  }, [channels, globalSourceSearch, globalSourceIsp, globalSourceProvince, globalSourceStatus]);
+  }, [channels, globalSourceSearch, globalSourceIsp, globalSourceProvince, globalSourceStatus, globalSourceResolution]);
 
   const slicedGlobalSources = useMemo(() => {
     return filteredGlobalSources.slice(0, globalSourcePage * SOURCES_PER_PAGE);
@@ -1968,8 +2029,8 @@ export default function App() {
   const handleGlobalBatchUpdateSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (selectedGlobalSourceIds.length === 0) return;
-    if (!batchGlobalSourceForm.isp && !batchGlobalSourceForm.province && !batchGlobalSourceForm.status) {
-      showFeedback("error", "请至少指定运营商(ISP)、省份(Province)或线路状态中的一个修改项");
+    if (!batchGlobalSourceForm.isp && !batchGlobalSourceForm.province && !batchGlobalSourceForm.status && !batchGlobalSourceForm.resolution) {
+      showFeedback("error", "请至少指定运营商(ISP)、省份(Province)、线路状态或画质分辨率中的一个修改项");
       return;
     }
 
@@ -1981,7 +2042,8 @@ export default function App() {
           sourceIds: selectedGlobalSourceIds,
           isp: batchGlobalSourceForm.isp,
           province: batchGlobalSourceForm.province,
-          status: batchGlobalSourceForm.status
+          status: batchGlobalSourceForm.status,
+          resolution: batchGlobalSourceForm.resolution
         })
       });
 
@@ -2057,7 +2119,7 @@ export default function App() {
     setClientTestResults([]);
 
     const queue = [...clientTestList];
-    const resultsTemp: { sourceId: string; channelId: string; url: string; status: "active" | "inactive"; latency: number }[] = [];
+    const resultsTemp: { sourceId: string; channelId: string; url: string; status: "active" | "inactive"; latency: number; resolution?: string }[] = [];
     let processedCount = 0;
 
     const runWorker = async () => {
@@ -2106,12 +2168,22 @@ export default function App() {
           }
         }
 
+        let resolution: string | undefined = item.resolution;
+        if (!resolution) {
+          if (/(3840x2160|2160p|4k|uhd)/i.test(urlLower)) resolution = "4K";
+          else if (/(1920x1080|1080p|1080i|4m1080|7\.5m1080|8m1080)/i.test(urlLower)) resolution = "1080p";
+          else if (/(1280x720|720p|720i|2m720)/i.test(urlLower)) resolution = "720p";
+          else if (/(720x576|704x576|576p|576i)/i.test(urlLower)) resolution = "576p";
+          else if (/(640x480|480p)/i.test(urlLower)) resolution = "480p";
+        }
+
         resultsTemp.push({
           sourceId: item.id,
           channelId: item.channelId,
           url: item.url,
           status,
-          latency: status === "active" ? latency : 9999
+          latency: status === "active" ? latency : 9999,
+          resolution
         });
 
         processedCount++;
@@ -2310,7 +2382,8 @@ export default function App() {
     setSourceForm({
       url: "",
       province: "全国",
-      isp: "BGP"
+      isp: "BGP",
+      resolution: ""
     });
     setIsSourceModalOpen(true);
   };
@@ -2320,7 +2393,8 @@ export default function App() {
     setSourceForm({
       url: src.url || "",
       province: src.province || "全国",
-      isp: src.isp || "BGP"
+      isp: src.isp || "BGP",
+      resolution: src.resolution || ""
     });
     setIsSourceModalOpen(true);
   };
@@ -3812,7 +3886,7 @@ export default function App() {
                                       onChange={(e) => {
                                         const newStatus = e.target.value as any;
                                         setSourceFilterStatus(newStatus);
-                                        const newFiltered = filterSourcesByStatus(selectedChannel?.sources || [], newStatus);
+                                        const newFiltered = filterSourcesByStatus(selectedChannel?.sources || [], newStatus, sourceFilterResolution);
                                         const newFilteredIds = new Set(newFiltered.map(s => s.id));
                                         setSelectedSourceIds(prev => prev.filter(id => newFilteredIds.has(id)));
                                       }}
@@ -3825,6 +3899,25 @@ export default function App() {
                                       <option value="unknown">未测试</option>
                                       <option value="isolated">已隔离 (软删除)</option>
                                     </select>
+                                    <select
+                                      value={sourceFilterResolution}
+                                      onChange={(e) => {
+                                        const newRes = e.target.value;
+                                        setSourceFilterResolution(newRes);
+                                        const newFiltered = filterSourcesByStatus(selectedChannel?.sources || [], sourceFilterStatus, newRes);
+                                        const newFilteredIds = new Set(newFiltered.map(s => s.id));
+                                        setSelectedSourceIds(prev => prev.filter(id => newFilteredIds.has(id)));
+                                      }}
+                                      className="text-xs border-slate-200 rounded px-2 py-1 bg-white outline-none focus:border-blue-400 cursor-pointer font-bold text-slate-700"
+                                    >
+                                      <option value="all">所有画质 (默认)</option>
+                                      <option value="4K">4K 超高清</option>
+                                      <option value="1080p">1080p 全高清</option>
+                                      <option value="720p">720p 高清</option>
+                                      <option value="576p">576p 标清</option>
+                                      <option value="480p">480p 标清</option>
+                                      <option value="unknown">未知画质</option>
+                                    </select>
                                   </div>
                                 </>
                               );
@@ -3832,7 +3925,7 @@ export default function App() {
                           </div>
 
                           {(() => {
-                            const currentFiltered = filterSourcesByStatus(selectedChannel.sources || [], sourceFilterStatus);
+                            const currentFiltered = filterSourcesByStatus(selectedChannel.sources || [], sourceFilterStatus, sourceFilterResolution);
                             const activeSelectedCount = currentFiltered.filter(s => selectedSourceIds.includes(s.id)).length;
                             if (activeSelectedCount === 0) return null;
                             return (
@@ -3879,15 +3972,7 @@ export default function App() {
                           </div>
                         ) : (
                           <div className="space-y-2.5 overflow-y-auto pr-1 flex-1 min-h-0 pb-2">
-                            {(selectedChannel.sources || []).filter(src => {
-                                if (sourceFilterStatus === "all") return !src.isolated;
-                                if (sourceFilterStatus === "all_with_isolated") return true;
-                                if (sourceFilterStatus === "isolated") return src.isolated;
-                                if (src.isolated) return false;
-                                if (sourceFilterStatus === "inactive") return src.status === "inactive" || (src.latency !== undefined && src.latency >= 9999);
-                                if (sourceFilterStatus === "active") return src.status === "active" && (src.latency === undefined || src.latency < 9999);
-                                return src.status === sourceFilterStatus || (sourceFilterStatus === "unknown" && src.status === "checking");
-                              }).map((src, index) => {
+                            {filterSourcesByStatus(selectedChannel.sources || [], sourceFilterStatus, sourceFilterResolution).map((src, index) => {
                               const isChecked = selectedSourceIds.includes(src.id);
                               return (
                                 <div 
@@ -3925,6 +4010,17 @@ export default function App() {
                                         }`}>
                                           {src.isp}
                                         </span>
+                                        
+                                        {/* Resolution Badge */}
+                                        {src.resolution && src.resolution !== "未知" ? (
+                                          <span className="bg-purple-50 text-purple-700 border border-purple-200/80 font-extrabold px-1.5 py-0.5 rounded text-[10px] font-mono">
+                                            {src.resolution}
+                                          </span>
+                                        ) : (
+                                          <span className="bg-slate-100 text-slate-400 border border-slate-200/60 font-medium px-1.5 py-0.5 rounded text-[10px] font-mono">
+                                            未知
+                                          </span>
+                                        )}
                                         
                                         {/* Connectivity Latency Status Pill */}
                                         {src.status === "active" && (
@@ -4408,11 +4504,11 @@ export default function App() {
                       <div className="space-y-3.5 text-slate-300 leading-relaxed font-sans shrink-0">
                         <div className="text-xs font-semibold flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 bg-slate-800/50 p-3 rounded-xl border border-slate-700/50">
                           <div>
-                            我们提供高标准的开放 API 接口。任何外界硬件探针、机顶盒或定时脚本（如 Cron 命令行代测、Kodi 测速插件、TvBox 本地测速包）均可直接批量向该网关发送性能报告。
+                            我们提供高标准的开放 API 接口。支持云端服务端异步并发测速，以及任何外界硬件探针、机顶盒或定时脚本（如 Cron 命令行代测、Kodi 测速插件、TvBox 本地测速包）直接批量发送性能与流分辨率报告。
                             <div className="text-slate-400 mt-1">
-                              【协议特殊处理规则】：<br/>
-                              1. HTTP/HTTPS/HLS/FLV：利用探针无跨域限制探针直测并计算 RTT 响应延时。<br/>
-                              2. RTSP / RTMP：内置 RTSP(端口554) 与 RTMP(端口1935) 智能 TCP Socket 握手机制与协议端口转换降级探测，解决浏览器原生沙箱屏蔽与 TypeError 误判痛点。
+                              【流探测与分辨率解析规则】：<br/>
+                              1. 服务端测速自动探针：当检测到线路可用时，服务端探针通过 HLS/M3U8 解析、H.264 SPS 帧解码以及 ffprobe 命令，自动提取流的物理分辨率（如 4K、1080p、720p 等）并保存至 resolution 字段。<br/>
+                              2. 多协议兼容：针对 HTTP/HTTPS/HLS/FLV 协议直接检测 RTT 与媒体头；针对 RTSP (端口 554) 与 RTMP (端口 1935) 使用智能 TCP Socket 握手与媒体流探针降级探测。
                             </div>
                           </div>
                           <a href="/iptv_probe2.py" download="iptv_probe2.py" className="bg-indigo-500/20 hover:bg-indigo-500/30 text-indigo-300 border border-indigo-500/30 px-3 py-2 rounded-lg flex items-center gap-1.5 shrink-0 transition font-bold whitespace-nowrap">
@@ -4422,19 +4518,50 @@ export default function App() {
                         </div>
 
                         <div className="space-y-1 bg-slate-950 p-3 rounded-xl border border-slate-800 text-[11px] font-mono">
-                          <span className="text-emerald-400 font-bold block pb-1">1. 获取待测源清单接口 (Get Target Test Sources)：</span>
+                          <span className="text-emerald-400 font-bold block pb-1">1. 触发服务端后台异步并发测速接口 (Server-Side Async Batch Test)：</span>
+                          <span className="text-white font-extrabold pr-2">POST</span>
+                          <span className="text-indigo-300 select-all">/api/sources/test</span>
+                          <pre className="text-slate-300 leading-snug overflow-x-auto select-all text-[10.5px] mt-1 pt-1 border-t border-slate-800/80">
+{`// Payload 选填过滤与并发控制示例
+{
+  "concurrency": 8,             // [选填] 测速并发线程数 (默认 8)
+  "isp": "电信",                 // [选填] 按运营商过滤 (如 "电信" / "联通" / "移动")
+  "province": "广东",            // [选填] 按省份过滤
+  "status": "unknown",          // [选填] 按当前状态过滤 ("active" | "inactive" | "unknown")
+  "sourceIds": ["src_101", ...]  // [选填] 指定只测试某几条线路 ID 列表
+}`}
+                          </pre>
+                          <p className="text-[10.5px] text-slate-400 pt-1 font-sans">触发后系统将在后台排队执行，并在检测成功后通过探针指令自动提取视频流的分辨率参数存入 <code>resolution</code> 字段。</p>
+                        </div>
+
+                        <div className="space-y-1 bg-slate-950 p-3 rounded-xl border border-slate-800 text-[11px] font-mono">
+                          <span className="text-emerald-400 font-bold block pb-1">2. 查询服务端测速任务实时进度 (Query Test Progress Status)：</span>
+                          <span className="text-white font-extrabold pr-2">GET</span>
+                          <span className="text-indigo-300 select-all">/api/sources/test-status</span>
+                          <p className="text-[10.5px] text-slate-400 pt-1 font-sans">返回当前测速状态 (<code>idle</code> / <code>running</code>)、总任务数 <code>total</code>、已测试数 <code>checked</code> 以及包含最新连通延迟与分辨率的实时结果列表 <code>results</code>。</p>
+                        </div>
+
+                        <div className="space-y-1 bg-slate-950 p-3 rounded-xl border border-slate-800 text-[11px] font-mono">
+                          <span className="text-emerald-400 font-bold block pb-1">3. 终止服务端测速任务接口 (Cancel Running Batch Test)：</span>
+                          <span className="text-white font-extrabold pr-2">POST</span>
+                          <span className="text-indigo-300 select-all">/api/sources/test-cancel</span>
+                        </div>
+
+                        <div className="space-y-1 bg-slate-950 p-3 rounded-xl border border-slate-800 text-[11px] font-mono">
+                          <span className="text-emerald-400 font-bold block pb-1">4. 客户端探针 - 获取待测源清单接口 (Get Target Test Sources)：</span>
                           <span className="text-white font-extrabold pr-2">GET</span>
                           <span className="text-indigo-300 select-all">/api/sources/client-test-list?isp=中国电信&province=广东&onlyActive=true&limit=100&page=1</span>
-                          <p className="text-[10.5px] text-slate-400 pt-1 font-sans">自动返回匹配指定运营商 (如中国电信) + 所有 BGP/多线/未知 专线的线路。支持 <strong>limit</strong> 和 <strong>page</strong> 参数进行分页，避免一次性返回过多数据导致内存溢出。</p>
+                          <p className="text-[10.5px] text-slate-400 pt-1 font-sans">自动返回匹配指定运营商 (如中国电信) + 所有 BGP/多线/未知 专线的线路。支持 <strong>limit</strong> 和 <strong>page</strong> 参数进行分页。</p>
                         </div>
+
                         <div className="space-y-1 bg-slate-950 p-3 rounded-xl border border-slate-800 text-[11px] font-mono">
-                          <span className="text-emerald-400 font-bold block pb-1">2. 提交测速结果报告接口 (Submit Test Report)：</span>
+                          <span className="text-emerald-400 font-bold block pb-1">5. 客户端探针 - 提交测速结果报告接口 (Submit Test Report)：</span>
                           <span className="text-white font-extrabold pr-2">POST</span>
                           <span className="text-indigo-300 select-all">/api/sources/client-test-results</span>
                         </div>
 
                         <div className="space-y-1 bg-slate-950 p-3 rounded-xl border border-slate-800 text-[11px] font-mono">
-                          <span className="text-emerald-400 font-bold block pb-1">3. 协议 Payload 结构体 (Request Body JSON Schema)：</span>
+                          <span className="text-emerald-400 font-bold block pb-1">6. 客户端测速结果上报 Payload 结构 (Request Body JSON Schema)：</span>
                           <pre className="text-indigo-300 leading-snug overflow-x-auto select-all text-[10.5px]">
 {`{
   "clientIsp": "中国电信",      // [必填] 本次测速探针网络的归属运营商名称
@@ -4444,7 +4571,8 @@ export default function App() {
       "sourceId": "src_8f2a10",         // 直播源线路物理唯一 ID
       "channelId": "ch_cctv1",          // 对应电视频道 ID
       "status": "active",               // 可用状态: "active"(可用) / "inactive"(断流/故障)
-      "latency": 154                    // 测试得出的延迟，单位 ms
+      "latency": 154,                   // 测试得出的延迟，单位 ms
+      "resolution": "1080p"             // [选填] 探针获取的流画质分辨率 (如 "4K", "1080p", "720p")
     }
   ]
 }`}
@@ -4452,7 +4580,7 @@ export default function App() {
                         </div>
 
                         <div className="space-y-2 bg-slate-950 p-3 rounded-xl border border-slate-800 text-[11px] font-mono">
-                          <span className="text-emerald-400 font-bold block pb-1">4. 云端返回体样例 (Response Code & Format)：</span>
+                          <span className="text-emerald-400 font-bold block pb-1">7. 云端返回体样例 (Response Code & Format)：</span>
                           <span className="text-slate-400 leading-snug font-sans block">完成更新后返回 200 OK 实有更新数：</span>
                           <span className="text-emerald-300 block select-all">{`{"success": true, "count": 1}`}</span>
                         </div>
@@ -4474,7 +4602,7 @@ export default function App() {
                       </span>
                     </div>
 
-                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5 sm:gap-4">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2.5 sm:gap-4">
                       <div className="space-y-1">
                         <label className="text-[10px] uppercase font-bold text-slate-400 block">搜索频道或流链接</label>
                         <div className="relative">
@@ -4521,6 +4649,25 @@ export default function App() {
                         </select>
                       </div>
                       <div className="space-y-1">
+                        <label className="text-[10px] uppercase font-bold text-slate-400 block">画质 / 分辨率 (Resolution)</label>
+                        <select
+                          value={globalSourceResolution}
+                          onChange={(e) => setGlobalSourceResolution(e.target.value)}
+                          className="w-full text-xs p-2 border border-slate-200 rounded-xl bg-slate-50 focus:outline-none focus:border-indigo-500 font-bold"
+                        >
+                          <option value="all">所有画质分辨率 (不限)</option>
+                          <option value="4K">📺 4K (超高清 2160p)</option>
+                          <option value="1080p">🎬 1080p (全高清)</option>
+                          <option value="720p">⚡ 720p (高清)</option>
+                          <option value="576p">📺 576p (标清)</option>
+                          <option value="480p">📱 480p (标清)</option>
+                          <option value="unknown">❓ 未知 (未检测到/未设置)</option>
+                          {(allUniqueResolutionOptions || []).filter(x => !["4K", "1080p", "720p", "576p", "480p", "未知"].includes(x)).map(x => (
+                            <option key={x} value={x}>🎥 {x}</option>
+                          ))}
+                        </select>
+                      </div>
+                      <div className="space-y-1">
                         <label className="text-[10px] uppercase font-bold text-slate-400 block">物理线路网络状态</label>
                         <select
                           value={globalSourceStatus}
@@ -4538,7 +4685,7 @@ export default function App() {
                       </div>
                     </div>
 
-                    {(globalSourceSearch || globalSourceIsp !== "all" || globalSourceProvince !== "all" || globalSourceStatus !== "all") && (
+                    {(globalSourceSearch || globalSourceIsp !== "all" || globalSourceProvince !== "all" || globalSourceStatus !== "all" || globalSourceResolution !== "all") && (
                       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center pt-2 border-t border-slate-100 gap-1.5">
                         <span className="text-[10px] text-slate-400 font-semibold">🔍 筛选出 {filteredGlobalSources.length} 条符合物理描述的直播源</span>
                         <button 
@@ -4547,6 +4694,7 @@ export default function App() {
                             setGlobalSourceIsp("all");
                             setGlobalSourceProvince("all");
                             setGlobalSourceStatus("all");
+                            setGlobalSourceResolution("all");
                           }}
                           className="text-xs font-bold text-slate-500 hover:text-indigo-650 flex items-center gap-1.5 transition-all cursor-pointer"
                         >
@@ -4657,6 +4805,7 @@ export default function App() {
                                 </th>
                                 <th className="py-4 px-3 w-48">所属电视频道</th>
                                 <th className="py-4 px-3">全量播放源链接</th>
+                                <th className="py-4 px-3 w-28">画质/分辨率</th>
                                 <th className="py-4 px-3 w-32">运营商 (ISP)</th>
                                 <th className="py-4 px-3 w-32">地区省份</th>
                                 <th className="py-4 px-3 w-32">网络连通状态</th>
@@ -4709,6 +4858,17 @@ export default function App() {
                                         <Copy className="w-3.5 h-3.5" />
                                       </button>
                                     </div>
+                                  </td>
+                                  <td className="py-3.5 px-3">
+                                    {item.resolution && item.resolution !== "未知" ? (
+                                      <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-extrabold font-mono bg-purple-50 text-purple-700 border border-purple-200/80 shadow-2xs">
+                                        {item.resolution}
+                                      </span>
+                                    ) : (
+                                      <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-medium font-mono bg-slate-100 text-slate-400 border border-slate-200/60">
+                                        未知
+                                      </span>
+                                    )}
                                   </td>
                                   <td className="py-3.5 px-3">
                                     <span className={`inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-black border ${
@@ -6908,6 +7068,17 @@ export default function App() {
                 </div>
               </div>
 
+              <div className="space-y-1.5 font-semibold text-slate-600">
+                <label>画质 / 分辨率 (如 1080p, 4K, 720p，留空默认显示未知)</label>
+                <input 
+                  type="text"
+                  value={sourceForm.resolution}
+                  onChange={(e)=>setSourceForm({...sourceForm, resolution: e.target.value})}
+                  placeholder="如 1080p, 4K, 720p..."
+                  className="w-full text-xs p-2.5 border border-slate-200 rounded-xl focus:border-indigo-500 bg-slate-50 focus:outline-none font-mono"
+                />
+              </div>
+
               <div className="flex gap-3 pt-3">
                 <button 
                   type="button" 
@@ -7413,6 +7584,17 @@ export default function App() {
                     <option value="checking">🟡 设为正在测速中 (Checking)</option>
                     <option value="unknown">⚪ 设为未知状态 (Unknown)</option>
                   </select>
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="text-slate-700 block">画质 / 分辨率 (Resolution)</label>
+                  <input 
+                    type="text"
+                    value={batchGlobalSourceForm.resolution}
+                    onChange={(e) => setBatchGlobalSourceForm({ ...batchGlobalSourceForm, resolution: e.target.value })}
+                    placeholder="如：1080p、4K、720p (留空代表：保持原样/不作处理)"
+                    className="w-full text-xs p-2.5 border border-slate-200 rounded-xl focus:border-indigo-500 bg-slate-50 focus:outline-none font-bold"
+                  />
                 </div>
                 
                 <p className="text-[10px] text-slate-400 font-medium font-sans mt-2 leading-relaxed">

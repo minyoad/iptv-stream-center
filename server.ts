@@ -1,6 +1,10 @@
 import express from "express";
 import path from "path";
 import fs from "fs";
+import { execFile } from "child_process";
+import { promisify } from "util";
+
+const execFileAsync = promisify(execFile);
 
 // Ensure local time is interpreted as CST (UTC+8) by default if not specified
 process.env.TZ = process.env.TZ || 'Asia/Shanghai';
@@ -23,6 +27,7 @@ interface LiveSource {
   isp: string;
   status: "active" | "inactive" | "unknown" | "checking";
   latency?: number;
+  resolution?: string;
   lastChecked?: string;
   clientIspReported?: string;
   clientProvinceReported?: string;
@@ -86,6 +91,7 @@ interface TestStatus {
     url: string;
     status: "active" | "inactive";
     latency?: number;
+    resolution?: string;
   }[];
 }
 
@@ -292,6 +298,9 @@ function initSqlite() {
   } catch (e) {}
   try {
     db.exec("ALTER TABLE sync_configs ADD COLUMN isp TEXT");
+  } catch (e) {}
+  try {
+    db.exec("ALTER TABLE sources ADD COLUMN resolution TEXT");
   } catch (e) {}
 
   // Clean up invalid Migu channels (Migu platform channel IDs must be numeric, like 631780532; cctv1, cctv2 belong to cntv)
@@ -1182,6 +1191,7 @@ function loadData() {
           isp: row.isp || "",
           status: row.status || "unknown",
           latency: row.latency !== null ? row.latency : undefined,
+          resolution: row.resolution || undefined,
           lastChecked: row.lastChecked || undefined,
           clientIspReported: row.clientIspReported || undefined,
           clientProvinceReported: row.clientProvinceReported || undefined,
@@ -1543,8 +1553,8 @@ function saveDataSync() {
 
       const insertChannel = db.prepare("INSERT INTO channels (id, name, logo, groupIds, alias, epgId, isolated) VALUES (?, ?, ?, ?, ?, ?, ?)");
       const insertSource = db.prepare(`
-        INSERT INTO sources (id, channelId, url, province, isp, status, latency, lastChecked, clientIspReported, clientProvinceReported, testCount, successCount, isolated)
-              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO sources (id, channelId, url, province, isp, status, latency, resolution, lastChecked, clientIspReported, clientProvinceReported, testCount, successCount, isolated)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
 
       for (const ch of channels) {
@@ -1568,6 +1578,7 @@ function saveDataSync() {
               s.isp || "",
               s.status || "unknown",
               s.latency !== undefined ? s.latency : null,
+              s.resolution || "",
               s.lastChecked || "",
               s.clientIspReported || "",
               s.clientProvinceReported || "",
@@ -1795,8 +1806,134 @@ function isPrivateOrIntranetUrl(urlStr: string): boolean {
   return false;
 }
 
+function parseH264Sps(buf: Buffer): string | undefined {
+  if (!buf || buf.length < 16) return undefined;
+  for (let i = 0; i < buf.length - 12; i++) {
+    if (buf[i] === 0 && buf[i + 1] === 0 && (buf[i + 2] === 1 || (buf[i + 2] === 0 && buf[i + 3] === 1))) {
+      const start = buf[i + 2] === 1 ? i + 3 : i + 4;
+      if (start >= buf.length) continue;
+      const nalType = buf[start] & 0x1F;
+      if (nalType === 7) {
+        try {
+          const sps = buf.subarray(start + 1, Math.min(buf.length, start + 35));
+          let bitPos = 0;
+          function readBit(): number {
+            const byteIdx = Math.floor(bitPos / 8);
+            const bitIdx = 7 - (bitPos % 8);
+            bitPos++;
+            if (byteIdx >= sps.length) return 0;
+            return (sps[byteIdx] >> bitIdx) & 1;
+          }
+          function readUE(): number {
+            let zeros = 0;
+            while (readBit() === 0 && zeros < 32) zeros++;
+            let val = 0;
+            for (let k = 0; k < zeros; k++) {
+              val = (val << 1) | readBit();
+            }
+            return (1 << zeros) - 1 + val;
+          }
+          readBit(); // profile_idc
+          bitPos += 16;
+          readUE();
+          const profileIdc = sps[0];
+          if ([100, 110, 122, 244, 44, 83, 86, 118, 128, 138, 139, 134, 135].includes(profileIdc)) {
+            const chromaFormatIdc = readUE();
+            if (chromaFormatIdc === 3) readBit();
+            readUE(); readUE(); readBit();
+          }
+          readUE();
+          const picOrderCntType = readUE();
+          if (picOrderCntType === 0) readUE();
+          else if (picOrderCntType === 1) {
+            readBit(); readUE(); readUE();
+            const numRef = readUE();
+            for (let r = 0; r < numRef; r++) readUE();
+          }
+          readUE();
+          readBit();
+          const widthMbs = readUE();
+          const heightMapUnits = readUE();
+          const width = (widthMbs + 1) * 16;
+          const height = (heightMapUnits + 1) * 16;
+          if (width >= 100 && height >= 100 && width <= 8192 && height <= 8192) {
+            if (height >= 2160 || width >= 3840) return "4K";
+            if (height >= 1080 || width >= 1920) return "1080p";
+            if (height >= 720 || width >= 1280) return "720p";
+            if (height >= 576 || width >= 720) return "576p";
+            if (height >= 480 || width >= 640) return "480p";
+            return `${width}x${height}`;
+          }
+        } catch (_) {}
+      }
+    }
+  }
+  return undefined;
+}
+
+function parseResolution(url: string, textOrHeader?: string): string | undefined {
+  if (textOrHeader) {
+    const resMatch = textOrHeader.match(/RESOLUTION=(\d+)x(\d+)/i);
+    if (resMatch) {
+      const w = parseInt(resMatch[1], 10);
+      const h = parseInt(resMatch[2], 10);
+      if (h >= 2160 || w >= 3840) return "4K";
+      if (h >= 1080 || w >= 1920) return "1080p";
+      if (h >= 720 || w >= 1280) return "720p";
+      if (h >= 576 || w >= 720) return "576p";
+      if (h >= 480 || w >= 640) return "480p";
+      return `${w}x${h}`;
+    }
+  }
+
+  const urlLower = url.toLowerCase();
+  if (/(3840x2160|2160p|4k|uhd)/i.test(urlLower)) return "4K";
+  if (/(1920x1080|1080p|1080i|4m1080|7\.5m1080|8m1080)/i.test(urlLower)) return "1080p";
+  if (/(1280x720|720p|720i|2m720)/i.test(urlLower)) return "720p";
+  if (/(720x576|704x576|576p|576i)/i.test(urlLower)) return "576p";
+  if (/(640x480|480p)/i.test(urlLower)) return "480p";
+
+  return undefined;
+}
+
+// Stream Resolution probe using ffprobe
+async function probeStreamResolutionWithFfprobe(url: string, timeoutMs = 2500): Promise<string | undefined> {
+  if (isPrivateOrIntranetUrl(url)) return undefined;
+
+  try {
+    const { stdout } = await execFileAsync("ffprobe", [
+      "-v", "error",
+      "-rw_timeout", `${timeoutMs * 1000}`,
+      "-timeout", `${timeoutMs * 1000}`,
+      "-select_streams", "v:0",
+      "-show_entries", "stream=width,height",
+      "-of", "json",
+      "-user_agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+      url
+    ], { timeout: timeoutMs + 500 });
+
+    const data = JSON.parse(stdout);
+    if (data && data.streams && data.streams.length > 0) {
+      const v = data.streams[0];
+      const w = parseInt(v.width, 10);
+      const h = parseInt(v.height, 10);
+      if (w > 0 && h > 0) {
+        if (h >= 2160 || w >= 3840) return "4K";
+        if (h >= 1080 || w >= 1920) return "1080p";
+        if (h >= 720 || w >= 1280) return "720p";
+        if (h >= 576 || w >= 720) return "576p";
+        if (h >= 480 || w >= 640) return "480p";
+        return `${w}x${h}`;
+      }
+    }
+  } catch (_) {
+    // ffprobe failed or timed out
+  }
+  return undefined;
+}
+
 // URL Testing Engine
-async function testSingleUrl(url: string, timeoutMs: number = 3000): Promise<{ status: "active" | "inactive"; latency: number }> {
+async function testSingleUrl(url: string, timeoutMs: number = 3000): Promise<{ status: "active" | "inactive"; latency: number; resolution?: string }> {
   const startTime = Date.now();
 
   const urlLower = url.toLowerCase();
@@ -1839,10 +1976,8 @@ async function testSingleUrl(url: string, timeoutMs: number = 3000): Promise<{ s
         }
       }
 
-      // If it's a private intranet IP or multicast address, Cloud Run / remote servers cannot probe it.
-      // Mark as active with 60ms latency so it is not incorrectly marked inactive or isolated!
       if (isPrivateOrIntranetUrl(url)) {
-        return { status: "active", latency: 60 };
+        return { status: "active", latency: 60, resolution: parseResolution(url) };
       }
 
       const socketTimeout = Math.max(timeoutMs, 6000);
@@ -1851,7 +1986,7 @@ async function testSingleUrl(url: string, timeoutMs: number = 3000): Promise<{ s
           host,
           port,
           timeout: socketTimeout
-        }, () => {
+        }, async () => {
           const latency = Date.now() - startTime;
           try {
             if (urlLower.startsWith("rtsp://")) {
@@ -1859,12 +1994,13 @@ async function testSingleUrl(url: string, timeoutMs: number = 3000): Promise<{ s
             }
           } catch (e) {}
           socket.destroy();
-          resolve({ status: "active", latency });
+          const probedRes = await probeStreamResolutionWithFfprobe(url, 2500).catch(() => undefined);
+          resolve({ status: "active", latency, resolution: probedRes || parseResolution(url) });
         });
         socket.on("error", () => {
           socket.destroy();
           if (isPrivateOrIntranetUrl(url) || urlLower.startsWith("rtsp://")) {
-            resolve({ status: "active", latency: 80 });
+            resolve({ status: "active", latency: 80, resolution: parseResolution(url) });
           } else {
             resolve({ status: "inactive", latency: Date.now() - startTime });
           }
@@ -1872,7 +2008,7 @@ async function testSingleUrl(url: string, timeoutMs: number = 3000): Promise<{ s
         socket.on("timeout", () => {
           socket.destroy();
           if (isPrivateOrIntranetUrl(url) || urlLower.startsWith("rtsp://")) {
-            resolve({ status: "active", latency: 80 });
+            resolve({ status: "active", latency: 80, resolution: parseResolution(url) });
           } else {
             resolve({ status: "inactive", latency: Date.now() - startTime });
           }
@@ -1880,7 +2016,7 @@ async function testSingleUrl(url: string, timeoutMs: number = 3000): Promise<{ s
       });
     } catch (e) {
       if (isPrivateOrIntranetUrl(url) || urlLower.startsWith("rtsp://")) {
-        return { status: "active", latency: 80 };
+        return { status: "active", latency: 80, resolution: parseResolution(url) };
       }
       return { status: "inactive", latency: Date.now() - startTime };
     }
@@ -1890,8 +2026,6 @@ async function testSingleUrl(url: string, timeoutMs: number = 3000): Promise<{ s
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
-    // We send a HTTP fetch request. Many stream servers support HEAD and GET.
-    // To be fast, we use GET with AbortController so we cancel after receiving headers or first chunk.
     const response = await fetch(url, {
       method: "GET",
       signal: controller.signal,
@@ -1902,21 +2036,41 @@ async function testSingleUrl(url: string, timeoutMs: number = 3000): Promise<{ s
 
     clearTimeout(timeoutId);
     
-    // Check if the status code indicates streaming success (200 OK or 206 Partial Content)
     if (response.ok) {
       const latency = Date.now() - startTime;
-      
-      // Let's cancel the request body streaming immediately to save container bandwidth
+      let resolution: string | undefined = undefined;
+
       try {
-        if (response.body) {
+        const contentType = response.headers.get("content-type") || "";
+        if (contentType.includes("mpegurl") || urlLower.endsWith(".m3u8") || contentType.includes("text")) {
+          const text = await response.text();
+          resolution = parseResolution(url, text);
+        } else if (response.body) {
           const reader = response.body.getReader();
-          await reader.cancel();
+          const { value } = await reader.read();
+          if (value && value.length > 0) {
+            const buf = Buffer.from(value);
+            resolution = parseH264Sps(buf) || parseResolution(url);
+          }
+          try { await reader.cancel(); } catch (_) {}
         }
       } catch (err) {
-        // Safe stream cancellation ignore
+        resolution = parseResolution(url);
       }
 
-      return { status: "active", latency };
+      // Execute probe instruction with ffprobe if fast parsing didn't find exact stream dimensions
+      if (!resolution || resolution === parseResolution(url)) {
+        const probedRes = await probeStreamResolutionWithFfprobe(url, 2500).catch(() => undefined);
+        if (probedRes) {
+          resolution = probedRes;
+        }
+      }
+
+      if (!resolution) {
+        resolution = parseResolution(url);
+      }
+
+      return { status: "active", latency, resolution };
     } else {
       return { status: "inactive", latency: Date.now() - startTime };
     }
@@ -1941,12 +2095,11 @@ async function runConcurrentTest(selectedSources: { id: string; channelId: strin
       const item = queue.shift();
       if (!item) continue;
 
-      // Update in-flight status
       updateSourceDbStatus(item.channelId, item.id, "checking", undefined);
 
       const result = await testSingleUrl(item.url);
 
-      updateSourceDbStatus(item.channelId, item.id, result.status, result.latency);
+      updateSourceDbStatus(item.channelId, item.id, result.status, result.latency, result.resolution);
 
       testStatus.checked++;
       testStatus.results.push({
@@ -1955,6 +2108,7 @@ async function runConcurrentTest(selectedSources: { id: string; channelId: strin
         url: item.url,
         status: result.status,
         latency: result.latency,
+        resolution: result.resolution,
       });
     }
   };
@@ -1966,7 +2120,7 @@ async function runConcurrentTest(selectedSources: { id: string; channelId: strin
   saveData(true);
 }
 
-function updateSourceDbStatus(channelId: string, sourceId: string, status: "active" | "inactive" | "checking" | "unknown", latency?: number) {
+function updateSourceDbStatus(channelId: string, sourceId: string, status: "active" | "inactive" | "checking" | "unknown", latency?: number, resolution?: string) {
   const channel = channels.find((c) => c.id === channelId);
   if (channel) {
     const source = channel.sources.find((s) => s.id === sourceId);
@@ -1974,6 +2128,9 @@ function updateSourceDbStatus(channelId: string, sourceId: string, status: "acti
       source.status = status;
       if (latency !== undefined) {
         source.latency = latency;
+      }
+      if (resolution) {
+        source.resolution = resolution;
       }
       source.lastChecked = new Date().toISOString();
     }
@@ -4097,7 +4254,7 @@ app.get("/api/channels", async (req, res) => {
   // Source endpoints
   app.post("/api/channels/:channelId/sources", (req, res) => {
     const { channelId } = req.params;
-    const { url, province, isp } = req.body;
+    const { url, province, isp, resolution } = req.body;
 
     if (!url) {
       return res.status(400).json({ error: "播放链接为必填项" });
@@ -4114,6 +4271,7 @@ app.get("/api/channels", async (req, res) => {
       province: province || "全国",
       isp: isp || "BGP",
       status: "unknown",
+      resolution: resolution || undefined,
     };
 
     channel.sources.push(newSource);
@@ -4123,7 +4281,7 @@ app.get("/api/channels", async (req, res) => {
 
   app.put("/api/channels/:channelId/sources/:sourceId", (req, res) => {
     const { channelId, sourceId } = req.params;
-    const { url, province, isp, status } = req.body;
+    const { url, province, isp, status, resolution } = req.body;
 
     const channel = channels.find((c) => c.id === channelId);
     if (!channel) {
@@ -4139,6 +4297,7 @@ app.get("/api/channels", async (req, res) => {
     if (province) source.province = province;
     if (isp) source.isp = isp;
     if (status) source.status = status;
+    if (resolution !== undefined) source.resolution = resolution;
 
     saveData();
     res.json(source);
@@ -4213,7 +4372,7 @@ app.get("/api/channels", async (req, res) => {
   // Batch update live sources ISP and Province
   app.post("/api/channels/:channelId/sources/batch-update", (req, res) => {
     const { channelId } = req.params;
-    const { sourceIds, isp, province } = req.body;
+    const { sourceIds, isp, province, resolution } = req.body;
     if (!Array.isArray(sourceIds) || sourceIds.length === 0) {
       return res.status(400).json({ error: "请提供要操作的直播线路 ID 列表" });
     }
@@ -4232,6 +4391,9 @@ app.get("/api/channels", async (req, res) => {
         if (province !== undefined && province !== null && province !== "") {
           s.province = province;
         }
+        if (resolution !== undefined && resolution !== null && resolution !== "") {
+          s.resolution = resolution;
+        }
         updatedCount++;
       }
     });
@@ -4244,7 +4406,7 @@ app.get("/api/channels", async (req, res) => {
 
   // Global batch update live sources
   app.post("/api/sources/global-batch-update", (req, res) => {
-    const { sourceIds, isp, province, status } = req.body;
+    const { sourceIds, isp, province, status, resolution } = req.body;
     if (!Array.isArray(sourceIds) || sourceIds.length === 0) {
       return res.status(400).json({ error: "请提供要操作的直播线路 ID 列表" });
     }
@@ -4261,6 +4423,9 @@ app.get("/api/channels", async (req, res) => {
           }
           if (status !== undefined && status !== null && status !== "") {
             s.status = status;
+          }
+          if (resolution !== undefined && resolution !== null && resolution !== "") {
+            s.resolution = resolution;
           }
           updatedCount++;
         }
@@ -4922,7 +5087,8 @@ app.get("/api/channels", async (req, res) => {
             isp: s.isp || "未知",
             province: s.province || "全国",
             status: s.status || "unknown",
-            latency: s.latency
+            latency: s.latency,
+            resolution: s.resolution
           });
         }
       });
@@ -4957,7 +5123,7 @@ app.get("/api/channels", async (req, res) => {
 
     let updatedCount = 0;
     results.forEach((r: any) => {
-      const { sourceId, channelId, status, latency } = r;
+      const { sourceId, channelId, status, latency, resolution } = r;
       if (!sourceId || !status) return;
 
       channels.forEach((c) => {
@@ -4968,6 +5134,10 @@ app.get("/api/channels", async (req, res) => {
           src.testCount = (src.testCount || 0) + 1;
           if (status === "active") {
             src.successCount = (src.successCount || 0) + 1;
+          }
+
+          if (resolution) {
+            src.resolution = resolution;
           }
 
           // Exponential Moving Average for latency to smooth out anomalies
