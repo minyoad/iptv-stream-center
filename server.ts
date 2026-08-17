@@ -1666,6 +1666,46 @@ function loadData() {
          }
       }
 
+      if (Array.isArray(parsed.carouselProxies)) {
+        db.exec("DELETE FROM carousel_proxies");
+        const ins = db.prepare("INSERT INTO carousel_proxies (id, platform, urlTemplate, status) VALUES (?, ?, ?, ?)");
+        for (const item of parsed.carouselProxies) {
+          ins.run(item.id || crypto.randomUUID(), item.platform || '', item.urlTemplate || '', item.status || 'active');
+        }
+      }
+
+      if (Array.isArray(parsed.deletedCarouselProxies)) {
+        db.exec("DELETE FROM deleted_carousel_proxies");
+        const ins = db.prepare("INSERT OR REPLACE INTO deleted_carousel_proxies (urlTemplate, deletedAt) VALUES (?, ?)");
+        for (const item of parsed.deletedCarouselProxies) {
+          ins.run(item.urlTemplate || '', item.deletedAt || new Date().toISOString());
+        }
+      }
+
+      if (Array.isArray(parsed.carouselChannels)) {
+        db.exec("DELETE FROM carousel_channels");
+        const ins = db.prepare("INSERT INTO carousel_channels (id, channelId, name, platform, originalId) VALUES (?, ?, ?, ?, ?)");
+        for (const item of parsed.carouselChannels) {
+          ins.run(item.id || crypto.randomUUID(), item.channelId || '', item.name || '', item.platform || '', item.originalId || '');
+        }
+      }
+
+      if (Array.isArray(parsed.carouselDiscoveryRules)) {
+        db.exec("DELETE FROM carousel_discovery_rules");
+        const ins = db.prepare("INSERT INTO carousel_discovery_rules (id, platform, keyword, enabled) VALUES (?, ?, ?, ?)");
+        for (const item of parsed.carouselDiscoveryRules) {
+          ins.run(item.id || crypto.randomUUID(), item.platform || '', item.keyword || '', item.enabled === false ? 0 : 1);
+        }
+      }
+
+      if (Array.isArray(parsed.carouselDisabledRules)) {
+        db.exec("DELETE FROM carousel_disabled_rules");
+        const ins = db.prepare("INSERT INTO carousel_disabled_rules (id, pattern, type, platform, description, enabled) VALUES (?, ?, ?, ?, ?, ?)");
+        for (const item of parsed.carouselDisabledRules) {
+          ins.run(item.id || crypto.randomUUID(), item.pattern || item.keyword || '', item.type || 'pattern', item.platform || '', item.description || '', item.enabled === false ? 0 : 1);
+        }
+      }
+
       // Populate SQLite with this state
       saveData();
 
@@ -2223,6 +2263,11 @@ function checkAndPerformDailyBackup() {
           epgSources,
           adminPassword,
           githubProxy,
+          carouselProxies: db.prepare("SELECT * FROM carousel_proxies").all(),
+          deletedCarouselProxies: db.prepare("SELECT * FROM deleted_carousel_proxies").all(),
+          carouselChannels: db.prepare("SELECT * FROM carousel_channels").all(),
+          carouselDiscoveryRules: db.prepare("SELECT * FROM carousel_discovery_rules").all(),
+          carouselDisabledRules: db.prepare("SELECT * FROM carousel_disabled_rules").all(),
         };
         fs.writeFileSync(backupJsonPath, zlib.gzipSync(Buffer.from(JSON.stringify(backupJson, null, 2), "utf-8")));
       }
@@ -7663,8 +7708,21 @@ ${JSON.stringify(scoredList.map(c => ({ epgId: c.epgId, names: c.displayNames, s
     if (parsed.autoCreateChannel !== undefined) resultObj.autoCreateChannel = parsed.autoCreateChannel;
     if (parsed.cronJobs && Array.isArray(parsed.cronJobs)) resultObj.cronJobs = parsed.cronJobs;
 
-    if (resultObj.channels.length === 0 && resultObj.groups.length === 0 && resultObj.syncConfigs.length === 0 && resultObj.epgSources.length === 0) {
-      throw new Error("备份文件中未包含任何可识别的频道、分组、订阅源或 EPG 数据节点");
+    if (Array.isArray(parsed.carouselProxies)) resultObj.carouselProxies = parsed.carouselProxies;
+    if (Array.isArray(parsed.deletedCarouselProxies)) resultObj.deletedCarouselProxies = parsed.deletedCarouselProxies;
+    if (Array.isArray(parsed.carouselChannels)) resultObj.carouselChannels = parsed.carouselChannels;
+    if (Array.isArray(parsed.carouselDiscoveryRules)) resultObj.carouselDiscoveryRules = parsed.carouselDiscoveryRules;
+    if (Array.isArray(parsed.carouselDisabledRules)) resultObj.carouselDisabledRules = parsed.carouselDisabledRules;
+
+    if (
+      resultObj.channels.length === 0 &&
+      resultObj.groups.length === 0 &&
+      resultObj.syncConfigs.length === 0 &&
+      resultObj.epgSources.length === 0 &&
+      (!resultObj.carouselChannels || resultObj.carouselChannels.length === 0) &&
+      (!resultObj.carouselProxies || resultObj.carouselProxies.length === 0)
+    ) {
+      throw new Error("备份文件中未包含任何可识别的频道、分组、订阅源、EPG 或轮播代理数据节点");
     }
 
     return resultObj;
@@ -7750,6 +7808,11 @@ ${JSON.stringify(scoredList.map(c => ({ epgId: c.epgId, names: c.displayNames, s
         syncConfigs,
         epgSources,
         cronJobs: cronJobsData,
+        carouselProxies: db.prepare("SELECT * FROM carousel_proxies").all(),
+        deletedCarouselProxies: db.prepare("SELECT * FROM deleted_carousel_proxies").all(),
+        carouselChannels: db.prepare("SELECT * FROM carousel_channels").all(),
+        carouselDiscoveryRules: db.prepare("SELECT * FROM carousel_discovery_rules").all(),
+        carouselDisabledRules: db.prepare("SELECT * FROM carousel_disabled_rules").all(),
         adminPassword,
         githubProxy,
         autoCreateChannel,
@@ -7779,6 +7842,11 @@ ${JSON.stringify(scoredList.map(c => ({ epgId: c.epgId, names: c.displayNames, s
           channels,
           syncConfigs,
           epgSources,
+          carouselProxies: db.prepare("SELECT * FROM carousel_proxies").all(),
+          deletedCarouselProxies: db.prepare("SELECT * FROM deleted_carousel_proxies").all(),
+          carouselChannels: db.prepare("SELECT * FROM carousel_channels").all(),
+          carouselDiscoveryRules: db.prepare("SELECT * FROM carousel_discovery_rules").all(),
+          carouselDisabledRules: db.prepare("SELECT * FROM carousel_disabled_rules").all(),
           adminPassword,
           githubProxy,
         };
