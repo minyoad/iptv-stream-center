@@ -293,6 +293,25 @@ function initSqlite() {
   try {
     db.exec("ALTER TABLE sync_configs ADD COLUMN isp TEXT");
   } catch (e) {}
+
+  // Clean up invalid Migu channels (Migu platform channel IDs must be numeric, like 631780532; cctv1, cctv2 belong to cntv)
+  try {
+    const invalidMigu = db.prepare("SELECT * FROM carousel_channels WHERE platform = 'migu'").all() as any[];
+    for (const item of invalidMigu) {
+      if (/^cctv|^cgtn/i.test(item.originalId)) {
+        const cntvExists = db.prepare("SELECT id FROM carousel_channels WHERE platform = 'cntv' AND originalId = ?").get(item.originalId);
+        if (cntvExists) {
+          db.prepare("DELETE FROM carousel_channels WHERE id = ?").run(item.id);
+        } else {
+          db.prepare("UPDATE carousel_channels SET platform = 'cntv' WHERE id = ?").run(item.id);
+        }
+      } else if (!/^\d+$/.test(item.originalId)) {
+        db.prepare("DELETE FROM carousel_channels WHERE id = ?").run(item.id);
+      }
+    }
+  } catch (e) {
+    console.error("Failed to clean up invalid migu carousel channels:", e);
+  }
   try {
     db.exec("ALTER TABLE sync_configs ADD COLUMN aliasOnly INTEGER DEFAULT 0");
   } catch (e) {}
@@ -545,8 +564,9 @@ const testStatus: TestStatus = {
     if (overwrite) {
       db.prepare('DELETE FROM carousel_discovery_rules').run();
     } else {
-      // Clean up obsolete / overly loose Migu rules
+      // Clean up obsolete / overly loose Migu rules and invalid miguvideo proxy templates
       db.prepare("DELETE FROM carousel_discovery_rules WHERE keyword IN ('/608', ':3566/', ':3566', ':\\d+/608') OR keyword LIKE ':\\d+/\\d{9}' OR keyword LIKE '%[0-9]{9}%'").run();
+      db.prepare("DELETE FROM carousel_proxies WHERE urlTemplate LIKE '%miguvideo%'").run();
     }
     const insertStmt = db.prepare('INSERT OR IGNORE INTO carousel_discovery_rules (id, platform, keyword) VALUES (?, ?, ?)');
     const insertMany = db.transaction((rules) => {
@@ -606,8 +626,16 @@ function syncCarouselSources() {
   }
 }
 
-function matchesRuleKeyword(url: string, keyword: string): boolean {
+function matchesRuleKeyword(url: string, keyword: string, platform?: string): boolean {
   if (!url || !keyword) return false;
+  
+  // Exclude official miguvideo domain for migu platform/rules
+  if (platform === "migu" || keyword.includes("migu")) {
+    if (url.toLowerCase().includes("miguvideo")) {
+      return false;
+    }
+  }
+
   if (keyword.startsWith("regex:") || keyword.includes("\\d") || keyword.includes(".*") || keyword.includes("[") || keyword.includes("^") || keyword.includes("$")) {
     try {
       const pattern = keyword.startsWith("regex:") ? keyword.slice(6) : keyword;
@@ -625,7 +653,7 @@ function parseCarouselUrl(url) {
   
   const rules = typeof getDiscoveryRules === 'function' ? getDiscoveryRules() : [];
   for (const rule of rules) {
-    if (matchesRuleKeyword(url, rule.keyword)) {
+    if (matchesRuleKeyword(url, rule.keyword, rule.platform)) {
       platform = rule.platform;
       break;
     }
@@ -636,6 +664,17 @@ function parseCarouselUrl(url) {
     const match2 = url.match(/\/([a-zA-Z0-9_]+)(?:\.flv|\.m3u8)?(?:\?.*)?\/?$/i);
     if (match1) originalId = match1[1];
     else if (match2) originalId = match2[1];
+
+    // Correction rule: Migu live channel IDs are 8-10 digit numbers (e.g. 631780532).
+    // CCTV/CGTN identifiers (like cctv1, cctv2) belong to CNTV platform.
+    if (platform === 'migu' && originalId) {
+      if (/^cctv|^cgtn/i.test(originalId)) {
+        platform = 'cntv';
+      } else if (!/^\d+$/.test(originalId)) {
+        platform = null;
+        originalId = null;
+      }
+    }
   }
   return { platform, originalId };
 }
@@ -648,7 +687,7 @@ function detectAndRegisterCarouselProxy(url) {
 
     const rules = typeof getDiscoveryRules === 'function' ? getDiscoveryRules() : [];
     for (const rule of rules) {
-      if (matchesRuleKeyword(url, rule.keyword)) {
+      if (matchesRuleKeyword(url, rule.keyword, rule.platform)) {
         platform = rule.platform;
         break;
       }

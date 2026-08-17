@@ -149,11 +149,26 @@ export const CarouselChannelView = ({ fetchData, channelsData = [] }: { fetchDat
 
   const saveChannel = async () => {
     if (!form.name || !effectiveFormPlatform || !form.originalId) return alert("请填写完整的频道名称、平台和直播间 ID");
+
+    let platformToSave = effectiveFormPlatform;
+    let originalIdToSave = form.originalId.trim();
+
+    // Validate Migu IDs vs CNTV IDs
+    if (platformToSave === "migu") {
+      if (/^cctv|^cgtn/i.test(originalIdToSave)) {
+        platformToSave = "cntv";
+        showToast("检测到央视 (cctv) 标识，已自动修正平台为 CNTV 央视", "info");
+      } else if (!/^\d+$/.test(originalIdToSave)) {
+        showToast("咪咕 (migu) 频道的直播间 ID 须为 8~10 位纯数字（如 631780532）。cctv1 等字符属于 CNTV (央视) 平台。", "error");
+        return;
+      }
+    }
+
     const existing = channelsData?.find(c => c.name === form.name);
     const payload = {
       name: form.name.trim(),
-      platform: effectiveFormPlatform,
-      originalId: form.originalId.trim(),
+      platform: platformToSave,
+      originalId: originalIdToSave,
       channelId: existing ? existing.id : ""
     };
     try {
@@ -254,6 +269,43 @@ export const CarouselChannelView = ({ fetchData, channelsData = [] }: { fetchDat
       loadData();
     } catch(e) {
       console.error(e);
+    }
+  };
+
+  const handleExportSelectedRegistry = async () => {
+    if (selectedRegistryIds.length === 0) return;
+    const targetChannels = channels.filter(c => selectedRegistryIds.includes(c.id));
+    try {
+      const res = await fetch('/api/carousel-proxies');
+      const proxies = await res.json();
+      const activeProxies = (Array.isArray(proxies) ? proxies : []).filter((p: any) => p.status === 'active');
+
+      let m3uContent = "#EXTM3U\n";
+      for (const channel of targetChannels) {
+        const matchingProxies = activeProxies.filter((p: any) => p.platform === channel.platform);
+        if (matchingProxies.length > 0) {
+          for (const proxy of matchingProxies) {
+            const streamUrl = proxy.urlTemplate.replace('{}', channel.originalId);
+            m3uContent += `#EXTINF:-1 group-title="轮播频道",${channel.name}\n${streamUrl}\n`;
+          }
+        } else {
+          m3uContent += `#EXTINF:-1 group-title="轮播频道",${channel.name}\n# 品牌: ${channel.platform}, ID: ${channel.originalId}\n`;
+        }
+      }
+
+      const blob = new Blob([m3uContent], { type: "text/plain;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `selected_carousel_channels_${targetChannels.length}个.m3u`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      showToast(`已成功导出 ${targetChannels.length} 个选中轮播映射！`, "success");
+    } catch(e) {
+      console.error(e);
+      showToast("导出失败", "error");
     }
   };
 
@@ -628,15 +680,24 @@ export const CarouselChannelView = ({ fetchData, channelsData = [] }: { fetchDat
              </div>
              
              {selectedRegistryIds.length > 0 && (
-                <div className="bg-indigo-50 border-b border-indigo-100 p-3 px-4 flex justify-between items-center">
+                <div className="bg-indigo-50 border-b border-indigo-100 p-3 px-4 flex justify-between items-center gap-2">
                   <span className="text-sm font-bold text-indigo-700">已选择 {selectedRegistryIds.length} 个映射</span>
-                  <button 
-                    onClick={handleBatchDeleteRegistry}
-                    className="px-3 py-1.5 bg-rose-100 text-rose-600 hover:bg-rose-200 rounded text-xs font-bold transition flex items-center"
-                  >
-                    <Trash2 className="w-3.5 h-3.5 mr-1.5" />
-                    批量删除
-                  </button>
+                  <div className="flex items-center gap-2">
+                    <button 
+                      onClick={handleExportSelectedRegistry}
+                      className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded text-xs font-bold transition flex items-center shadow-xs cursor-pointer"
+                    >
+                      <Download className="w-3.5 h-3.5 mr-1.5" />
+                      导出选中轮播 (.m3u)
+                    </button>
+                    <button 
+                      onClick={handleBatchDeleteRegistry}
+                      className="px-3 py-1.5 bg-rose-100 text-rose-600 hover:bg-rose-200 rounded text-xs font-bold transition flex items-center cursor-pointer"
+                    >
+                      <Trash2 className="w-3.5 h-3.5 mr-1.5" />
+                      批量删除
+                    </button>
+                  </div>
                 </div>
              )}
              

@@ -293,6 +293,25 @@ export default function App() {
     province: ""
   });
 
+  // Export selected sources modal states
+  const [isExportSelectedSourcesModalOpen, setIsExportSelectedSourcesModalOpen] = useState(false);
+  const [exportSelectedSourcesFormat, setExportSelectedSourcesFormat] = useState<"m3u" | "txt">("txt");
+  const [exportIncludeGroupHeader, setExportIncludeGroupHeader] = useState(true);
+  const [exportIncludeLineSpecs, setExportIncludeLineSpecs] = useState(true);
+  const [exportSourceScope, setExportSourceScope] = useState<"channel" | "global" | "channels">("channel");
+
+  const filterSourcesByStatus = (sources: StreamSource[] = [], filterStatus: string = "all") => {
+    return sources.filter(src => {
+      if (filterStatus === "all") return !src.isolated;
+      if (filterStatus === "all_with_isolated") return true;
+      if (filterStatus === "isolated") return src.isolated;
+      if (src.isolated) return false;
+      if (filterStatus === "inactive") return src.status === "inactive" || (src.latency !== undefined && src.latency >= 9999);
+      if (filterStatus === "active") return src.status === "active" && (src.latency === undefined || src.latency < 9999);
+      return src.status === filterStatus || (filterStatus === "unknown" && src.status === "checking");
+    });
+  };
+
   // Global bulk source operations and filter states
   const [globalSourceSearch, setGlobalSourceSearch] = useState("");
   const [globalSourceIsp, setGlobalSourceIsp] = useState("all");
@@ -1618,6 +1637,214 @@ export default function App() {
     } catch (e) {
       showFeedback("error", "网络连接异常");
     }
+  };
+
+  const handleOpenExportSelectedSourcesModal = (scope: "channel" | "global" | "channels" = "channel") => {
+    if (scope === "channels") {
+      if (selectedChannelIds.length === 0) {
+        showFeedback("info", "请先在列表中勾选需要导出的频道");
+        return;
+      }
+    } else if (scope === "channel") {
+      if (!selectedChannel) {
+        showFeedback("info", "请选择需要导出的频道");
+        return;
+      }
+      const filteredSources = filterSourcesByStatus(selectedChannel.sources || [], sourceFilterStatus);
+      if (filteredSources.length === 0) {
+        showFeedback("info", "当前筛选条件下暂无线路可导出");
+        return;
+      }
+      const filteredIds = filteredSources.map(s => s.id);
+      const validSelectedIds = selectedSourceIds.filter(id => filteredIds.includes(id));
+      if (validSelectedIds.length === 0) {
+        setSelectedSourceIds(filteredIds);
+      } else {
+        setSelectedSourceIds(validSelectedIds);
+      }
+    } else {
+      if (selectedGlobalSourceIds.length === 0) {
+        showFeedback("info", "请先在列表中勾选需要导出的直播线路");
+        return;
+      }
+    }
+    setExportSourceScope(scope);
+    setIsExportSelectedSourcesModalOpen(true);
+  };
+
+  const generateExportSelectedSourcesContent = () => {
+    let itemsToExport: {
+      channelName: string;
+      channelLogo?: string;
+      epgId?: string;
+      groupTitle: string;
+      url: string;
+      isp?: string;
+      province?: string;
+    }[] = [];
+
+    if (exportSourceScope === "global") {
+      itemsToExport = (filteredGlobalSources || [])
+        .filter(s => selectedGlobalSourceIds.includes(s.id))
+        .map(s => {
+          const chGroupNames = (Array.isArray(s.channelGroupIds) ? s.channelGroupIds : [])
+            .map((gId: string) => (groups || []).find(g => g.id === gId)?.name)
+            .filter(Boolean);
+          const groupTitle = chGroupNames.length > 0 ? chGroupNames.join(",") : "其它频道";
+          return {
+            channelName: s.channelName || "未命名频道",
+            channelLogo: s.channelLogo,
+            epgId: s.epgId,
+            groupTitle,
+            url: s.url,
+            isp: s.isp,
+            province: s.province
+          };
+        });
+    } else if (exportSourceScope === "channels") {
+      const targetChannels = channels.filter(c => selectedChannelIds.includes(c.id));
+      targetChannels.forEach(ch => {
+        const groupNames = (Array.isArray(ch.groupIds) ? ch.groupIds : [])
+          .map(gId => (groups || []).find(g => g.id === gId)?.name)
+          .filter(Boolean);
+        const groupTitle = groupNames.length > 0 ? groupNames.join(",") : "其它频道";
+        (ch.sources || []).forEach(s => {
+          itemsToExport.push({
+            channelName: ch.name,
+            channelLogo: ch.logo,
+            epgId: ch.epgId,
+            groupTitle,
+            url: s.url,
+            isp: s.isp,
+            province: s.province
+          });
+        });
+      });
+    } else if (selectedChannel) {
+      const groupNames = (Array.isArray(selectedChannel.groupIds) ? selectedChannel.groupIds : [])
+        .map(gId => (groups || []).find(g => g.id === gId)?.name)
+        .filter(Boolean);
+      const groupTitle = groupNames.length > 0 ? groupNames.join(",") : "其它频道";
+
+      const filteredSources = filterSourcesByStatus(selectedChannel.sources || [], sourceFilterStatus);
+
+      itemsToExport = filteredSources
+        .filter(s => selectedSourceIds.includes(s.id))
+        .map(s => ({
+          channelName: selectedChannel.name,
+          channelLogo: selectedChannel.logo,
+          epgId: selectedChannel.epgId,
+          groupTitle,
+          url: s.url,
+          isp: s.isp,
+          province: s.province
+        }));
+    }
+
+    if (itemsToExport.length === 0) return "";
+
+    if (exportSelectedSourcesFormat === "m3u") {
+      const lines = ["#EXTM3U"];
+      itemsToExport.forEach(item => {
+        let displayName = item.channelName;
+        if (exportIncludeLineSpecs) {
+          const specs: string[] = [];
+          if (item.isp) specs.push(item.isp);
+          if (item.province) specs.push(item.province);
+          if (specs.length > 0) {
+            displayName += ` (${specs.join(" ")})`;
+          }
+        }
+        const tvgId = item.epgId ? ` tvg-id="${item.epgId}"` : "";
+        const tvgLogo = item.channelLogo ? ` tvg-logo="${item.channelLogo}"` : "";
+        lines.push(`#EXTINF:-1${tvgId} tvg-name="${item.channelName}"${tvgLogo} group-title="${item.groupTitle}",${displayName}`);
+        lines.push(item.url);
+      });
+      return lines.join("\n");
+    } else {
+      // TXT format
+      const lines: string[] = [];
+      if (exportIncludeGroupHeader) {
+        const groupsMap = new Map<string, typeof itemsToExport>();
+        itemsToExport.forEach(item => {
+          const key = item.groupTitle || "其它频道";
+          if (!groupsMap.has(key)) groupsMap.set(key, []);
+          groupsMap.get(key)!.push(item);
+        });
+
+        groupsMap.forEach((items, groupName) => {
+          lines.push(`${groupName},#genre`);
+          items.forEach(item => {
+            let displayName = item.channelName;
+            if (exportIncludeLineSpecs) {
+              const specs: string[] = [];
+              if (item.isp) specs.push(item.isp);
+              if (item.province) specs.push(item.province);
+              if (specs.length > 0) {
+                displayName += ` (${specs.join(" ")})`;
+              }
+            }
+            lines.push(`${displayName},${item.url}`);
+          });
+          lines.push("");
+        });
+      } else {
+        itemsToExport.forEach(item => {
+          let displayName = item.channelName;
+          if (exportIncludeLineSpecs) {
+            const specs: string[] = [];
+            if (item.isp) specs.push(item.isp);
+            if (item.province) specs.push(item.province);
+            if (specs.length > 0) {
+              displayName += ` (${specs.join(" ")})`;
+            }
+          }
+          lines.push(`${displayName},${item.url}`);
+        });
+      }
+      return lines.join("\n").trim();
+    }
+  };
+
+  const handleDownloadExportSelectedSources = () => {
+    const content = generateExportSelectedSourcesContent();
+    if (!content) {
+      showFeedback("error", "未选择有效的导出数据");
+      return;
+    }
+    const isM3u = exportSelectedSourcesFormat === "m3u";
+    const ext = isM3u ? "m3u" : "txt";
+    const channelName = exportSourceScope === "channels"
+      ? `选中${selectedChannelIds.length}个频道`
+      : exportSourceScope === "channel" && selectedChannel
+      ? selectedChannel.name
+      : "直播线路";
+    const count = exportSourceScope === "channels"
+      ? channels.filter(c => selectedChannelIds.includes(c.id)).reduce((acc, c) => acc + (c.sources?.length || 0), 0)
+      : exportSourceScope === "channel"
+      ? selectedSourceIds.length
+      : selectedGlobalSourceIds.length;
+    const fileName = `${channelName}_导出的线路_${count}条.${ext}`;
+
+    const blob = new Blob([content], { type: isM3u ? "audio/x-mpegurl;charset=utf-8" : "text/plain;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = fileName;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+
+    showFeedback("success", `已成功导出并下载文件: ${fileName}`);
+    setIsExportSelectedSourcesModalOpen(false);
+  };
+
+  const handleCopyExportSelectedSources = () => {
+    const content = generateExportSelectedSourcesContent();
+    if (!content) return;
+    navigator.clipboard.writeText(content);
+    showFeedback("success", "已将选中线路列表内容复制到剪贴板");
   };
 
   const handleSmartIsolateInactive = () => {
@@ -3226,6 +3453,13 @@ export default function App() {
                         <span className="text-[10px] font-bold text-blue-700">已选 {selectedChannelIds.length} 个项目</span>
                         <div className="flex flex-wrap gap-1.5">
                           <button
+                            onClick={() => handleOpenExportSelectedSourcesModal("channels")}
+                            className="bg-emerald-600 hover:bg-emerald-700 text-white text-[10px] font-bold px-2.5 py-1 rounded-lg transition shadow-xs cursor-pointer flex items-center gap-1"
+                          >
+                            <Download className="w-3 h-3" />
+                            导出选中频道
+                          </button>
+                          <button
                             onClick={() => openBatchGroupModal()}
                             className="bg-blue-600 hover:bg-blue-700 text-white text-[10px] font-bold px-2.5 py-1 rounded-lg transition shadow-xs cursor-pointer flex items-center gap-1"
                           >
@@ -3531,78 +3765,111 @@ export default function App() {
                       {/* Display playback source lines */}
                       <div className="flex-1 min-h-0 flex flex-col gap-3" id="sources_panel_list">
                         <div className="flex flex-col gap-2.5 shrink-0">
-                          <div className="flex justify-between items-center bg-slate-50/50 p-2.5 rounded-xl border border-slate-100">
-                            <div className="flex items-center gap-2">
-                              <input
-                                type="checkbox"
-                                className="w-3.5 h-3.5 text-indigo-600 border-slate-300 rounded focus:ring-blue-500 cursor-pointer"
-                                checked={(selectedChannel.sources || []).length > 0 && (selectedChannel.sources || []).every(src => selectedSourceIds.includes(src.id))}
-                                onChange={(e) => {
-                                  if (e.target.checked) {
-                                    const idsToSelect = (selectedChannel.sources || []).map(src => src.id);
-                                    setSelectedSourceIds(prev => Array.from(new Set([...prev, ...idsToSelect])));
-                                  } else {
-                                    const idsToDeselect = (selectedChannel.sources || []).map(src => src.id);
-                                    setSelectedSourceIds(prev => prev.filter(id => !idsToDeselect.includes(id)));
-                                  }
-                                }}
-                              />
-                              {(() => {
-                                 const filteredCount = (selectedChannel.sources || []).filter(src => {
-                                  if (sourceFilterStatus === "all") return !src.isolated;
-                                  if (sourceFilterStatus === "all_with_isolated") return true;
-                                  if (sourceFilterStatus === "isolated") return src.isolated;
-                                  if (src.isolated) return false;
-                                  if (sourceFilterStatus === "inactive") return src.status === "inactive" || (src.latency !== undefined && src.latency >= 9999);
-                                  if (sourceFilterStatus === "active") return src.status === "active" && (src.latency === undefined || src.latency < 9999);
-                                  return src.status === sourceFilterStatus || (sourceFilterStatus === "unknown" && src.status === "checking");
-                                }).length;
-                                return (
-                                  <span className="text-xs font-bold text-slate-500">已接入线路列表 ({filteredCount} 条)</span>
-                                );
-                              })()}
-                            </div>
-                            <select
-                              value={sourceFilterStatus}
-                              onChange={(e) => setSourceFilterStatus(e.target.value as any)}
-                              className="text-xs border-slate-200 rounded px-2 py-1 bg-white outline-none focus:border-blue-400"
-                            >
-                              <option value="all">全部状态 (默认)</option>
-                              <option value="all_with_isolated">全部 (含已隔离)</option>
-                              <option value="active">有效/可用</option>
-                              <option value="inactive">失效/离线</option>
-                              <option value="unknown">未测试</option>
-                              <option value="isolated">已隔离 (软删除)</option>
-                            </select>
+                          <div className="flex justify-between items-center bg-slate-50/50 p-2.5 rounded-xl border border-slate-100 gap-2 flex-wrap sm:flex-nowrap">
+                            {(() => {
+                              const currentFiltered = filterSourcesByStatus(selectedChannel.sources || [], sourceFilterStatus);
+                              const currentFilteredIds = currentFiltered.map(s => s.id);
+                              const isAllFilteredSelected = currentFilteredIds.length > 0 && currentFilteredIds.every(id => selectedSourceIds.includes(id));
+                              const activeSelectedCount = currentFiltered.filter(s => selectedSourceIds.includes(s.id)).length;
+
+                              return (
+                                <>
+                                  <div className="flex items-center gap-2">
+                                    <input
+                                      type="checkbox"
+                                      className="w-3.5 h-3.5 text-indigo-600 border-slate-300 rounded focus:ring-blue-500 cursor-pointer"
+                                      checked={isAllFilteredSelected}
+                                      onChange={(e) => {
+                                        if (e.target.checked) {
+                                          setSelectedSourceIds(prev => Array.from(new Set([...prev, ...currentFilteredIds])));
+                                        } else {
+                                          setSelectedSourceIds(prev => prev.filter(id => !currentFilteredIds.includes(id)));
+                                        }
+                                      }}
+                                    />
+                                    <span className="text-xs font-bold text-slate-500">已接入线路列表 ({currentFiltered.length} 条)</span>
+                                  </div>
+                                  <div className="flex items-center gap-2">
+                                    <button
+                                      onClick={() => handleOpenExportSelectedSourcesModal("channel")}
+                                      className={`text-xs font-bold px-2.5 py-1 rounded-lg transition shadow-2xs cursor-pointer flex items-center gap-1.5 ${
+                                        activeSelectedCount > 0
+                                          ? "bg-emerald-600 hover:bg-emerald-700 text-white"
+                                          : "bg-white hover:bg-slate-100 text-slate-700 border border-slate-200"
+                                      }`}
+                                      title="将勾选的线路信息导出为单独的 .txt 或 .m3u 文件"
+                                    >
+                                      <Download className={`w-3.5 h-3.5 ${activeSelectedCount > 0 ? "text-white" : "text-emerald-600"}`} />
+                                      <span>导出选中线路</span>
+                                      {activeSelectedCount > 0 && (
+                                        <span className="bg-emerald-800 text-emerald-100 text-[10px] font-black px-1.5 py-0.2 rounded-full">
+                                          {activeSelectedCount}
+                                        </span>
+                                      )}
+                                    </button>
+                                    <select
+                                      value={sourceFilterStatus}
+                                      onChange={(e) => {
+                                        const newStatus = e.target.value as any;
+                                        setSourceFilterStatus(newStatus);
+                                        const newFiltered = filterSourcesByStatus(selectedChannel?.sources || [], newStatus);
+                                        const newFilteredIds = new Set(newFiltered.map(s => s.id));
+                                        setSelectedSourceIds(prev => prev.filter(id => newFilteredIds.has(id)));
+                                      }}
+                                      className="text-xs border-slate-200 rounded px-2 py-1 bg-white outline-none focus:border-blue-400 cursor-pointer font-bold text-slate-700"
+                                    >
+                                      <option value="all">全部状态 (默认)</option>
+                                      <option value="all_with_isolated">全部 (含已隔离)</option>
+                                      <option value="active">有效/可用</option>
+                                      <option value="inactive">失效/离线</option>
+                                      <option value="unknown">未测试</option>
+                                      <option value="isolated">已隔离 (软删除)</option>
+                                    </select>
+                                  </div>
+                                </>
+                              );
+                            })()}
                           </div>
 
-                          {selectedSourceIds.length > 0 && (
-                            <div className="flex items-center justify-between bg-emerald-50/80 border border-emerald-100 rounded-xl px-2.5 py-1.5 transition-all duration-200 animate-slide-in">
-                              <span className="text-[10px] font-bold text-emerald-700">已选 {selectedSourceIds.length} 条线路</span>
-                              <div className="flex gap-1.5 animate-fade-in">
-                                <button
-                                  onClick={() => openBatchSourceEditModal()}
-                                  className="bg-indigo-600 hover:bg-indigo-700 text-white text-[10px] font-bold px-2.5 py-1 rounded-lg transition shadow-xs cursor-pointer flex items-center gap-1"
-                                >
-                                  <Layers className="w-3.5 h-3.5" />
-                                  批量修改 ISP/省份
-                                </button>
-                                <button
-                                  onClick={() => handleBatchSourceDelete()}
-                                  className="bg-rose-600 hover:bg-rose-700 text-white text-[10px] font-bold px-2.5 py-1 rounded-lg transition shadow-xs cursor-pointer flex items-center gap-1"
-                                >
-                                  <Trash2 className="w-3 h-3" />
-                                  批量删除
-                                </button>
-                                <button
-                                  onClick={() => setSelectedSourceIds([])}
-                                  className="bg-slate-200 hover:bg-slate-300 text-slate-600 text-[10px] font-bold px-2.5 py-1 rounded-lg transition cursor-pointer"
-                                >
-                                  取消
-                                </button>
+                          {(() => {
+                            const currentFiltered = filterSourcesByStatus(selectedChannel.sources || [], sourceFilterStatus);
+                            const activeSelectedCount = currentFiltered.filter(s => selectedSourceIds.includes(s.id)).length;
+                            if (activeSelectedCount === 0) return null;
+                            return (
+                              <div className="flex items-center justify-between bg-emerald-50/80 border border-emerald-100 rounded-xl px-2.5 py-1.5 transition-all duration-200 animate-slide-in">
+                                <span className="text-[10px] font-bold text-emerald-700">已选 {activeSelectedCount} 条线路</span>
+                                <div className="flex gap-1.5 animate-fade-in flex-wrap">
+                                  <button
+                                    onClick={() => handleOpenExportSelectedSourcesModal("channel")}
+                                    className="bg-emerald-600 hover:bg-emerald-700 text-white text-[10px] font-bold px-2.5 py-1 rounded-lg transition shadow-xs cursor-pointer flex items-center gap-1"
+                                  >
+                                    <Download className="w-3.5 h-3.5" />
+                                    导出选中线路
+                                  </button>
+                                  <button
+                                    onClick={() => openBatchSourceEditModal()}
+                                    className="bg-indigo-600 hover:bg-indigo-700 text-white text-[10px] font-bold px-2.5 py-1 rounded-lg transition shadow-xs cursor-pointer flex items-center gap-1"
+                                  >
+                                    <Layers className="w-3.5 h-3.5" />
+                                    批量修改 ISP/省份
+                                  </button>
+                                  <button
+                                    onClick={() => handleBatchSourceDelete()}
+                                    className="bg-rose-600 hover:bg-rose-700 text-white text-[10px] font-bold px-2.5 py-1 rounded-lg transition shadow-xs cursor-pointer flex items-center gap-1"
+                                  >
+                                    <Trash2 className="w-3 h-3" />
+                                    批量删除
+                                  </button>
+                                  <button
+                                    onClick={() => setSelectedSourceIds([])}
+                                    className="bg-slate-200 hover:bg-slate-300 text-slate-600 text-[10px] font-bold px-2.5 py-1 rounded-lg transition cursor-pointer"
+                                  >
+                                    取消
+                                  </button>
+                                </div>
                               </div>
-                            </div>
-                          )}
+                            );
+                          })()}
                         </div>
                         
                         {(!selectedChannel.sources || selectedChannel.sources.length === 0) ? (
@@ -4304,6 +4571,13 @@ export default function App() {
                       </div>
 
                       <div className="grid grid-cols-2 sm:flex sm:flex-wrap gap-2">
+                        <button
+                          onClick={() => handleOpenExportSelectedSourcesModal("global")}
+                          className="bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] sm:text-xs font-bold px-3 py-2 rounded-xl transition cursor-pointer flex items-center justify-center gap-1"
+                        >
+                          <Download className="w-3.5 h-3.5" />
+                          导出选中线路
+                        </button>
                         <button
                           onClick={async () => {
                             setBatchGlobalSourceForm({ isp: "", province: "", status: "" });
@@ -6862,6 +7136,156 @@ export default function App() {
 
 
 
+
+       {/* Modal Dialog: Export Selected Stream Sources */}
+      {isExportSelectedSourcesModalOpen && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 font-sans" id="export_selected_sources_modal">
+          <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl border border-slate-100 space-y-5 flex flex-col animate-fade-in">
+            <div className="flex justify-between items-center border-b border-slate-100 pb-3">
+              <div className="flex items-center gap-2">
+                <div className="p-2 bg-emerald-50 text-emerald-600 rounded-xl">
+                  <Download className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-slate-800">导出选中直播源线路</h3>
+                  <p className="text-[11px] text-slate-500 font-medium">
+                    共选择 <span className="font-bold text-emerald-600">{
+                      exportSourceScope === "channels"
+                        ? channels.filter(c => selectedChannelIds.includes(c.id)).reduce((acc, c) => acc + (c.sources?.length || 0), 0)
+                        : exportSourceScope === "channel" && selectedChannel
+                        ? filterSourcesByStatus(selectedChannel.sources || [], sourceFilterStatus).filter(s => selectedSourceIds.includes(s.id)).length
+                        : selectedGlobalSourceIds.length
+                    }</span> 条直播流线路
+                  </p>
+                </div>
+              </div>
+              <button 
+                className="text-slate-400 hover:text-slate-600 font-bold p-1 rounded-lg hover:bg-slate-100 cursor-pointer" 
+                onClick={() => setIsExportSelectedSourcesModalOpen(false)}
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="space-y-4 text-xs font-semibold text-slate-600">
+              {/* Export format radio selector */}
+              <div className="space-y-1.5">
+                <label className="text-slate-700 font-bold block">选择导出格式</label>
+                <div className="grid grid-cols-2 gap-3">
+                  <label 
+                    className={`p-3 rounded-xl border-2 flex flex-col gap-1 cursor-pointer transition ${
+                      exportSelectedSourcesFormat === "txt" 
+                        ? "border-emerald-500 bg-emerald-50/30 text-emerald-900" 
+                        : "border-slate-200 hover:border-slate-300 text-slate-700 bg-slate-50/50"
+                    }`}
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="font-extrabold text-xs">TXT 格式 (.txt)</span>
+                      <input 
+                        type="radio" 
+                        name="export_format" 
+                        checked={exportSelectedSourcesFormat === "txt"} 
+                        onChange={() => setExportSelectedSourcesFormat("txt")}
+                        className="w-4 h-4 text-emerald-600 focus:ring-emerald-500 cursor-pointer"
+                      />
+                    </div>
+                    <span className="text-[10px] text-slate-500 font-normal">适配 TVBox / 影视频道格式 (`频道名,URL`)</span>
+                  </label>
+
+                  <label 
+                    className={`p-3 rounded-xl border-2 flex flex-col gap-1 cursor-pointer transition ${
+                      exportSelectedSourcesFormat === "m3u" 
+                        ? "border-emerald-500 bg-emerald-50/30 text-emerald-900" 
+                        : "border-slate-200 hover:border-slate-300 text-slate-700 bg-slate-50/50"
+                    }`}
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="font-extrabold text-xs">M3U 格式 (.m3u)</span>
+                      <input 
+                        type="radio" 
+                        name="export_format" 
+                        checked={exportSelectedSourcesFormat === "m3u"} 
+                        onChange={() => setExportSelectedSourcesFormat("m3u")}
+                        className="w-4 h-4 text-emerald-600 focus:ring-emerald-500 cursor-pointer"
+                      />
+                    </div>
+                    <span className="text-[10px] text-slate-500 font-normal">标准 IPTV 列表 (`#EXTM3U` + `#EXTINF`)</span>
+                  </label>
+                </div>
+              </div>
+
+              {/* Options for TXT & M3U */}
+              <div className="space-y-2">
+                {exportSelectedSourcesFormat === "txt" && (
+                  <label className="flex items-center gap-2 p-2.5 rounded-xl border border-slate-200 bg-slate-50/50 cursor-pointer hover:bg-slate-100/60 transition">
+                    <input 
+                      type="checkbox" 
+                      checked={exportIncludeGroupHeader} 
+                      onChange={(e) => setExportIncludeGroupHeader(e.target.checked)}
+                      className="w-4 h-4 text-emerald-600 border-slate-300 rounded focus:ring-emerald-500 cursor-pointer"
+                    />
+                    <div>
+                      <span className="text-xs font-bold text-slate-800 block">包含分组头 (Group Header)</span>
+                      <span className="text-[10px] text-slate-500 font-normal block">勾选后将生成如 `央视频道,#genre` 分组分类标识</span>
+                    </div>
+                  </label>
+                )}
+
+                <label className="flex items-center gap-2 p-2.5 rounded-xl border border-slate-200 bg-slate-50/50 cursor-pointer hover:bg-slate-100/60 transition">
+                  <input 
+                    type="checkbox" 
+                    checked={exportIncludeLineSpecs} 
+                    onChange={(e) => setExportIncludeLineSpecs(e.target.checked)}
+                    className="w-4 h-4 text-emerald-600 border-slate-300 rounded focus:ring-emerald-500 cursor-pointer"
+                  />
+                  <div>
+                    <span className="text-xs font-bold text-slate-800 block">频道名称后包含线路属性/说明 (运营商/省份)</span>
+                    <span className="text-[10px] text-slate-500 font-normal block">
+                      {exportIncludeLineSpecs ? "开启：频道名称后自动附带如 `(电信 四川)`" : "关闭：仅输出纯频道名称，如 `CCTV-1`"}
+                    </span>
+                  </div>
+                </label>
+              </div>
+
+              {/* Preview snippet box */}
+              <div className="space-y-1.5">
+                <div className="flex justify-between items-center">
+                  <label className="text-slate-700 font-bold block">导出内容实时预览</label>
+                  <button 
+                    type="button"
+                    onClick={handleCopyExportSelectedSources}
+                    className="text-[10px] font-bold text-emerald-600 hover:text-emerald-800 flex items-center gap-1 bg-emerald-50 px-2 py-1 rounded-lg cursor-pointer transition"
+                  >
+                    <Copy className="w-3 h-3" />
+                    复制预览内容
+                  </button>
+                </div>
+                <div className="bg-slate-900 text-emerald-400 p-3 rounded-xl font-mono text-[11px] leading-relaxed max-h-40 overflow-y-auto whitespace-pre border border-slate-800 shadow-inner select-all">
+                  {generateExportSelectedSourcesContent() || "（未选择任何线路）"}
+                </div>
+              </div>
+            </div>
+
+            <div className="flex gap-3 pt-2 border-t border-slate-100">
+              <button 
+                type="button" 
+                onClick={() => setIsExportSelectedSourcesModalOpen(false)}
+                className="w-1/3 py-2.5 border border-slate-200 hover:bg-slate-50 text-slate-600 rounded-xl cursor-pointer text-center font-bold text-xs transition"
+              >
+                取消
+              </button>
+              <button 
+                type="button" 
+                onClick={handleDownloadExportSelectedSources}
+                className="w-2/3 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl cursor-pointer text-center font-bold text-xs transition shadow-md flex items-center justify-center gap-1.5"
+              >
+                <Download className="w-4 h-4" />
+                下载 .{exportSelectedSourcesFormat} 文件
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
        {/* 3.2. Modal Dialog: Batch Update Playback Sources ISP / Province */}
       {isBatchSourceModalOpen && (
