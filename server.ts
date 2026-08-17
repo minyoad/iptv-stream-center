@@ -533,8 +533,8 @@ const testStatus: TestStatus = {
     { platform: 'cntv', keyword: 'cntv.php' },
     { platform: 'migu', keyword: '/migu/' },
     { platform: 'migu', keyword: 'migu.php' },
-    { platform: 'migu', keyword: ':\\d+/\\d{9}' },
-    { platform: 'migu', keyword: 'regex:^https?://[^/]+/[0-9]{9}(?:\\?|$)' },
+    { platform: 'migu', keyword: 'regex::\\d+/6\\d{8}(?!\\d)(?:/|\\?|\\.|#|$)' },
+    { platform: 'migu', keyword: 'regex:^https?://[^/]+/6\\d{8}(?!\\d)(?:/|\\?|\\.|#|$)' },
     { platform: 'iptv', keyword: '/iptv/' },
     { platform: 'iptv', keyword: 'iptv.php' }
   ];
@@ -545,8 +545,8 @@ const testStatus: TestStatus = {
     if (overwrite) {
       db.prepare('DELETE FROM carousel_discovery_rules').run();
     } else {
-      // Clean up obsolete rules
-      db.prepare("DELETE FROM carousel_discovery_rules WHERE keyword IN ('/608', ':3566/', ':3566', ':\\d+/608')").run();
+      // Clean up obsolete / overly loose Migu rules
+      db.prepare("DELETE FROM carousel_discovery_rules WHERE keyword IN ('/608', ':3566/', ':3566', ':\\d+/608') OR keyword LIKE ':\\d+/\\d{9}' OR keyword LIKE '%[0-9]{9}%'").run();
     }
     const insertStmt = db.prepare('INSERT OR IGNORE INTO carousel_discovery_rules (id, platform, keyword) VALUES (?, ?, ?)');
     const insertMany = db.transaction((rules) => {
