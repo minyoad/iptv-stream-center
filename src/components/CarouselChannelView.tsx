@@ -537,13 +537,13 @@ export const CarouselChannelView = ({ fetchData, channelsData = [] }: { fetchDat
                   </div>
                 )}
 
-                <div className="w-64">
-                  <label className="block text-xs font-bold text-slate-500 mb-1">URL 特征关键词</label>
+                <div className="w-72">
+                  <label className="block text-xs font-bold text-slate-500 mb-1">URL 特征关键词 / 正则</label>
                   <input 
                     type="text" 
                     value={ruleForm.keyword}
                     onChange={e => setRuleForm({...ruleForm, keyword: e.target.value})}
-                    placeholder="例如: /yy/ 或 dy.php 或 /bili/"
+                    placeholder="例如: /608 或 :\d+/\d{9} 或 dy.php"
                     className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-sm font-mono"
                   />
                 </div>

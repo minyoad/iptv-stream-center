@@ -533,6 +533,8 @@ const testStatus: TestStatus = {
     { platform: 'cntv', keyword: 'cntv.php' },
     { platform: 'migu', keyword: '/migu/' },
     { platform: 'migu', keyword: 'migu.php' },
+    { platform: 'migu', keyword: ':\\d+/\\d{9}' },
+    { platform: 'migu', keyword: 'regex:^https?://[^/]+/[0-9]{9}(?:\\?|$)' },
     { platform: 'iptv', keyword: '/iptv/' },
     { platform: 'iptv', keyword: 'iptv.php' }
   ];
@@ -542,6 +544,9 @@ const testStatus: TestStatus = {
   function seedKnownRules(overwrite = false) {
     if (overwrite) {
       db.prepare('DELETE FROM carousel_discovery_rules').run();
+    } else {
+      // Clean up obsolete rules
+      db.prepare("DELETE FROM carousel_discovery_rules WHERE keyword IN ('/608', ':3566/', ':3566', ':\\d+/608')").run();
     }
     const insertStmt = db.prepare('INSERT OR IGNORE INTO carousel_discovery_rules (id, platform, keyword) VALUES (?, ?, ?)');
     const insertMany = db.transaction((rules) => {
@@ -559,11 +564,8 @@ const testStatus: TestStatus = {
 
   function getDiscoveryRules() {
     if (!discoveryRulesCache) {
+      seedKnownRules(false);
       discoveryRulesCache = db.prepare('SELECT * FROM carousel_discovery_rules').all();
-      if (discoveryRulesCache.length === 0) {
-        seedKnownRules();
-        discoveryRulesCache = db.prepare('SELECT * FROM carousel_discovery_rules').all();
-      }
     }
     return discoveryRulesCache;
   }
@@ -604,13 +606,26 @@ function syncCarouselSources() {
   }
 }
 
+function matchesRuleKeyword(url: string, keyword: string): boolean {
+  if (!url || !keyword) return false;
+  if (keyword.startsWith("regex:") || keyword.includes("\\d") || keyword.includes(".*") || keyword.includes("[") || keyword.includes("^") || keyword.includes("$")) {
+    try {
+      const pattern = keyword.startsWith("regex:") ? keyword.slice(6) : keyword;
+      return new RegExp(pattern, "i").test(url);
+    } catch (e) {
+      // fallback
+    }
+  }
+  return url.includes(keyword);
+}
+
 function parseCarouselUrl(url) {
   let platform = null;
   let originalId = null;
   
   const rules = typeof getDiscoveryRules === 'function' ? getDiscoveryRules() : [];
   for (const rule of rules) {
-    if (url.includes(rule.keyword)) {
+    if (matchesRuleKeyword(url, rule.keyword)) {
       platform = rule.platform;
       break;
     }
@@ -627,21 +642,13 @@ function parseCarouselUrl(url) {
 
 function detectAndRegisterCarouselProxy(url) {
   try {
-    // Basic heuristic to detect YY, Douyu, Huya proxies
-    // Matches patterns like:
-    // .../yy/12345
-    // .../yy/12345.flv
-    // .../yy.php?id=12345
-    // .../douyu/12345
-    // .../douyu.php?id=12345
-    // .../huya/12345
     let platform = null;
     let channelId = null;
     let template = null;
 
     const rules = typeof getDiscoveryRules === 'function' ? getDiscoveryRules() : [];
     for (const rule of rules) {
-      if (url.includes(rule.keyword)) {
+      if (matchesRuleKeyword(url, rule.keyword)) {
         platform = rule.platform;
         break;
       }
@@ -678,16 +685,17 @@ function stripBitrateAndResolution(name: string): string {
   let clean = name.trim();
 
   // Remove common Chinese/English quality tags optionally appended mid-string or at the end
-  clean = clean.replace(/(?:\s+|-|_)*(?:高清|超清|标清|蓝光|原画|1080[pPiI]|720[pPiI]|576[pPiI]|480[pPiI]|4[kK]|8[kK]|HEVC|hevc|H265|h265|H264|h264)+/g, " ");
+  // Preserve 4K, 8K, and 超高清 as they distinguish dedicated ultra-high-definition channels
+  clean = clean.replace(/(?:\s+|-|_)*(?:(?<!超)高清|超清(?!高)|标清|蓝光|原画|1080[pPiI]|720[pPiI]|576[pPiI]|480[pPiI]|HEVC|hevc|H265|h265|H264|h264)+/g, " ");
 
-  // Remove bracketed resolution or bitrate, e.g. "[1080p]", "(4M1080)", "[7.5M1080]"
-  clean = clean.replace(/[\[(]\s*(?:480|576|720|1080|1280|1440|1920|2160|4320|[48][kK]|\d+(?:\.\d+)?[MmGg]\d*)[pPiI]?\s*[\])]/gi, "");
+  // Remove bracketed resolution or bitrate, e.g. "[1080p]", "(4M1080)", "[7.5M1080]" (keep [4K] and [8K])
+  clean = clean.replace(/[\[(]\s*(?:480|576|720|1080|1280|1440|1920|2160|4320|\d+(?:\.\d+)?[MmGg]\d*)[pPiI]?\s*[\])]/gi, "");
 
   // Remove trailing or mid-string bandwidth and pixel specs (e.g., " 4M1080", " 7.5M1080", " 8M")
   clean = clean.replace(/(?:\s+|-|_)+(?:\d+(?:\.\d+)?[MmGg](?:[bB][pP][sS])?\d*[pPiI]?)/gi, "");
 
   // Remove trailing or mid-string numerical resolution tags (e.g., " 1080", " 720")
-  clean = clean.replace(/(?:\s+|-|_)+(?:(?:480|576|720|1080|1280|1440|1920|2160|4320|[48][kK])(?:[pPiI]\d*|fps|FPS)?|\d+[pPiI]\d*)/gi, "");
+  clean = clean.replace(/(?:\s+|-|_)+(?:(?:480|576|720|1080|1280|1440|1920|2160|4320)(?:[pPiI]\d*|fps|FPS)?|\d+[pPiI]\d*)/gi, "");
 
   // Remove empty brackets or parentheses remaining from substitutions
   clean = clean.replace(/[\[(（【]\s*[\])）】]/g, ""); // First remove empty pairs like ( ) or （ ）
@@ -701,20 +709,65 @@ function normalizeChannelName(name: string): string {
   if (!name) return "";
   const stripped = stripBitrateAndResolution(name);
   let clean = stripped.toLowerCase().replace(/\s+/g, "");
+
+  if (clean.includes("4k") || clean.includes("8k")) {
+    clean = clean.replace("超高清", "");
+  }
   
+  // Special handling for CCTV 4K, 8K, and 超高清 to distinguish them from standard CCTV channels
+  if (/^cctv/i.test(clean)) {
+    if (clean.includes("4k")) {
+      return "cctv4k";
+    }
+    if (clean.includes("8k")) {
+      return "cctv8k";
+    }
+    if (clean.includes("超高清")) {
+      return "cctv超高清";
+    }
+  }
+
   // Custom smart matching for CCTV channels (e.g., CCTV-1, CCTV1, CCTV1HD, CCTV-1综合, CCTV-1 综合HD, cctv 1, CCTV 5+)
-  // We match cctv followed by optional separator and a digit, plus optional "+"
-  const cctvMatch = clean.match(/^cctv[-_]?(\d+)(\+)?/);
+  const cctvMatch = clean.match(/^cctv[-_]?(\d+)(\+)?(.*)$/);
   if (cctvMatch) {
     const num = cctvMatch[1];
     const plus = cctvMatch[2] || "";
+    let sub = cctvMatch[3] || "";
+    
+    sub = sub
+      .replace(/(hd|uhd|fhd|ud|(?<!超)高清|超清(?!高)|标清|sdi|channel|tv)/g, "")
+      .replace(/(频道|电视台|台|版)$/, "")
+      .trim();
+
+    // Preserve regional and continent variants for CCTV channels (e.g., CCTV-4美洲, CCTV-4欧洲, CCTV-4亚洲)
+    if (sub.includes("美洲") || sub.includes("america") || sub.includes("ame")) {
+      return `cctv${num}${plus}美洲`;
+    }
+    if (sub.includes("欧洲") || sub.includes("europe") || sub.includes("euo") || sub.includes("eur")) {
+      return `cctv${num}${plus}欧洲`;
+    }
+    if (sub.includes("亚洲") || sub.includes("asia")) {
+      return `cctv${num}${plus}亚洲`;
+    }
+
+    // List of standard generic CCTV sub-category descriptors that map to the primary channel
+    const genericSubs = [
+      "综合", "财经", "综艺", "中文国际", "中文", "国际", "体育", "电影",
+      "国防军事", "军事", "电视剧", "纪录", "科教", "戏曲", "社会与法",
+      "新闻", "少儿", "音乐", "奥林匹克", "农业农村", "农业", "农村农业"
+    ];
+
+    if (sub && !genericSubs.includes(sub)) {
+      return `cctv${num}${plus}${sub}`;
+    }
+
     return `cctv${num}${plus}`;
   }
   
-  // For other channels, remove hyphens, spaces, and common quality tags to improve match rates
+  // For other channels, remove hyphens, spaces, and common quality tags (preserving 4k, 8k, 超高清) to improve match rates
   return clean
     .replace(/[-_.\s]+/g, "")
-    .replace(/(hd|uhd|fhd|ud|4k|8k|高清|超清|标清|sdi|channel|tv)/g, "")
+    .replace(/(hd|uhd|fhd|ud|(?<!超)高清|超清(?!高)|标清|sdi|channel|tv)/g, "")
     .replace(/(频道|电视台|台)$/, "");
 }
 
@@ -730,18 +783,40 @@ function generateDefaultEpgId(name: string): string {
   // 3. Remove spaces, hyphens, dots, underscores, braces, brackets, and common symbol noise
   clean = clean.replace(/[-_.\s※\(\)\[\]{\\}/]+/g, "");
 
+  // Special handling for CCTV 4K, 8K, and 超高清
+  if (/^cctv/i.test(clean)) {
+    if (clean.includes("4k")) return "cctv4k";
+    if (clean.includes("8k")) return "cctv8k";
+    if (clean.includes("超高清")) return "cctv_chaogaoqing";
+  }
+
   // 4. Custom matching for CCTV channels (CCTV-1, CCTV5+, CCTV-6电影, etc.)
-  const cctvMatch = clean.match(/^cctv[-_]?(\d+)(\+)?/);
+  const cctvMatch = clean.match(/^cctv[-_]?(\d+)(\+)?(.*)$/);
   if (cctvMatch) {
     const num = cctvMatch[1];
     const plus = cctvMatch[2] || "";
+    let sub = cctvMatch[3] || "";
+    
+    sub = sub
+      .replace(/(fhd|uhd|hd|sd|hevc|h265|h264|1080p|720p|(?<!超)高清|超清(?!高)|标清|sdi|channel|tv)/g, "")
+      .replace(/(频道|电视台|台|版)$/, "")
+      .trim();
+
+    if (sub.includes("美洲") || sub.includes("america") || sub.includes("ame")) {
+      return `cctv${num}${plus}_meizhou`;
+    }
+    if (sub.includes("欧洲") || sub.includes("europe") || sub.includes("euo") || sub.includes("eur")) {
+      return `cctv${num}${plus}_ouzhou`;
+    }
+    if (sub.includes("亚洲") || sub.includes("asia")) {
+      return `cctv${num}${plus}_yazhou`;
+    }
+
     return `cctv${num}${plus}`;
   }
 
-  // 5. Remove quality/format words but ONLY if they are not the sole text.
-  // Let's remove them safely. If we remove 'hd' from 'hbo hd', we want 'hbo'.
-  // But if the word is exactly 'hd' or empty after removal, we fallback so we don't return empty.
-  const noiseRegex = /(fhd|uhd|hd|sd|hevc|h265|h264|1080p|720p|4k|8k|高清|超清|标清|sdi|channel|tv)/g;
+  // 5. Remove quality/format words but ONLY if they are not the sole text (preserving 4k, 8k, 超高清).
+  const noiseRegex = /(fhd|uhd|hd|sd|hevc|h265|h264|1080p|720p|(?<!超)高清|超清(?!高)|标清|sdi|channel|tv)/g;
   let withoutNoise = clean.replace(noiseRegex, "");
   if (withoutNoise.trim().length > 0) {
     clean = withoutNoise;
@@ -1146,6 +1221,63 @@ function loadData() {
       }
     });
 
+    // Migrate & Sanitize regional and 4K/8K/超高清 aliases from channels whose primary name is NOT regional or 4K/8K/超高清
+    const regionalAliasPattern = /(美洲|欧洲|亚洲|america|europe|asia|AME|EUO|EUR)/i;
+    const ultraHdAliasPattern = /(4K|8K|超高清)/i;
+
+    channels.forEach(ch => {
+      const isRegionalChannel = regionalAliasPattern.test(ch.name);
+      const isUltraHdChannel = ultraHdAliasPattern.test(ch.name);
+
+      if (ch.alias && ch.alias.length > 0) {
+        const origLen = ch.alias.length;
+        ch.alias = ch.alias.filter(a => {
+          // Remove regional CCTV aliases from non-regional channels
+          if (!isRegionalChannel && /cctv/i.test(a) && regionalAliasPattern.test(a)) {
+            return false;
+          }
+          // Remove 4K / 8K / 超高清 aliases from non-4K/8K/超高清 channels
+          if (!isUltraHdChannel && ultraHdAliasPattern.test(a)) {
+            return false;
+          }
+          return true;
+        });
+        if (ch.alias.length !== origLen) {
+          updated = true;
+          console.log(`[Sanitize Migration] Cleaned erroneous aliases from channel "${ch.name}" (${ch.id})`);
+        }
+      }
+    });
+
+    // Re-assign sources mistakenly mapped to non-regional CCTV-4 to CCTV-4美洲 / CCTV-4欧洲
+    const chMeizhou = channels.find(c => c.name === "CCTV-4美洲" || c.name === "CCTV4美洲");
+    const chOuzhou = channels.find(c => c.name === "CCTV-4欧洲" || c.name === "CCTV4欧洲");
+    channels.forEach(ch => {
+      if (ch.name.includes("CCTV-4") && !ch.name.includes("美洲") && !ch.name.includes("欧洲")) {
+        const remainingSources: LiveSource[] = [];
+        for (const src of ch.sources || []) {
+          const u = src.url || "";
+          if ((u.includes("cctv4meihd") || u.includes("608807416")) && chMeizhou) {
+            if (!chMeizhou.sources.some(s => s.id === src.id)) {
+              chMeizhou.sources.push(src);
+              updated = true;
+            }
+          } else if ((u.includes("cctv4ouhd") || u.includes("608807419")) && chOuzhou) {
+            if (!chOuzhou.sources.some(s => s.id === src.id)) {
+              chOuzhou.sources.push(src);
+              updated = true;
+            }
+          } else {
+            remainingSources.push(src);
+          }
+        }
+        if (remainingSources.length !== (ch.sources || []).length) {
+          ch.sources = remainingSources;
+          updated = true;
+        }
+      }
+    });
+
     if (groups.length === 0) {
       const uniqueCats = new Set<string>();
       channels.forEach((c: any) => {
@@ -1229,7 +1361,7 @@ function loadData() {
     });
 
     if (updated) {
-      saveData();
+      saveDataSync();
     } else {
       // Proactively generate caches on startup if not updated
       setTimeout(() => {
