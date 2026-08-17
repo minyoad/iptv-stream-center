@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { Plus, Trash2, Edit2, Search, Link as LinkIcon, Save, RefreshCw, Wand2, CheckSquare, X , Download, Eye, EyeOff, Filter, RotateCcw } from "lucide-react";
+import { Plus, Trash2, Edit2, Search, Link as LinkIcon, Save, RefreshCw, Wand2, CheckSquare, Square, X , Download, Eye, EyeOff, Filter, RotateCcw, Power, ShieldAlert, AlertTriangle } from "lucide-react";
 import { authFetch as fetch } from "../utils/api";
 import { PRESET_CAROUSEL_PLATFORMS, getPlatformBadge, getPlatformInfo } from "../utils/carouselPlatforms";
 
@@ -15,6 +15,9 @@ export const CarouselChannelView = ({ fetchData, channelsData = [] }: { fetchDat
   const [rules, setRules] = useState<any[]>([]);
   const [ruleForm, setRuleForm] = useState({ platform: "yy", keyword: "" });
   const [customPlatform, setCustomPlatform] = useState("");
+  const [ruleSearchQuery, setRuleSearchQuery] = useState("");
+  const [rulePlatformFilter, setRulePlatformFilter] = useState("all");
+  const [selectedRuleIds, setSelectedRuleIds] = useState<string[]>([]);
   const [applying, setApplying] = useState(false);
   const [presetLoading, setPresetLoading] = useState(false);
   const [toast, setToast] = useState<{ message: string; type: "success" | "error" | "info" } | null>(null);
@@ -207,27 +210,106 @@ export const CarouselChannelView = ({ fetchData, channelsData = [] }: { fetchDat
     const finalPlatform = ruleForm.platform === "custom" ? customPlatform.trim().toLowerCase() : ruleForm.platform;
     if (!finalPlatform || !ruleForm.keyword.trim()) return showToast("请填写完整的平台标识和 URL 特征关键词", "error");
     try {
-      await fetch("/api/carousel-discovery-rules", {
+      const res = await fetch("/api/carousel-discovery-rules", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ platform: finalPlatform, keyword: ruleForm.keyword.trim() })
+        body: JSON.stringify({ platform: finalPlatform, keyword: ruleForm.keyword.trim(), enabled: 1 })
       });
-      setRuleForm({ platform: "yy", keyword: "" });
-      setCustomPlatform("");
-      showToast("已成功保存规则：" + ruleForm.keyword.trim());
-      loadRulesOnly();
+      if (res.ok) {
+        setRuleForm({ platform: "yy", keyword: "" });
+        setCustomPlatform("");
+        showToast("已成功添加特征发现规则：" + ruleForm.keyword.trim());
+        loadRulesOnly();
+      } else {
+        const d = await res.json().catch(() => ({}));
+        showToast("保存规则失败: " + (d.error || "未知原因"), "error");
+      }
     } catch (e) {
       console.error(e);
-      showToast("保存规则失败", "error");
+      showToast("保存规则网络错误", "error");
+    }
+  };
+
+  const toggleRuleEnabled = async (r: any) => {
+    const nextEnabled = r.enabled === 0 ? 1 : 0;
+    try {
+      const res = await fetch(`/api/carousel-discovery-rules/${r.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled: nextEnabled })
+      });
+      if (res.ok) {
+        setRules(prev => prev.map(item => item.id === r.id ? { ...item, enabled: nextEnabled } : item));
+        showToast(nextEnabled ? "已启用该特征发现规则" : "已停用该特征发现规则", "info");
+      } else {
+        showToast("切换规则状态失败", "error");
+      }
+    } catch (e) {
+      console.error(e);
+      showToast("网络通信错误", "error");
     }
   };
 
   const deleteRule = async (id: string) => {
     try {
-      await fetch(`/api/carousel-discovery-rules/${id}`, { method: "DELETE" });
-      loadRulesOnly();
+      const res = await fetch(`/api/carousel-discovery-rules/${id}`, { method: "DELETE" });
+      if (res.ok) {
+        setRules(prev => prev.filter(r => r.id !== id));
+        setSelectedRuleIds(prev => prev.filter(i => i !== id));
+        showToast("已成功删除特征发现规则");
+      } else {
+        showToast("删除规则失败", "error");
+      }
     } catch (e) {
       console.error(e);
+      showToast("删除规则网络错误", "error");
+    }
+  };
+
+  const handleBatchDeleteRules = async () => {
+    if (selectedRuleIds.length === 0) return;
+    if (!confirm(`确定要批量删除选中的 ${selectedRuleIds.length} 条特征规则吗？`)) return;
+    try {
+      const res = await fetch('/api/carousel-discovery-rules/batch-delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids: selectedRuleIds })
+      });
+      if (res.ok) {
+        setRules(prev => prev.filter(r => !selectedRuleIds.includes(r.id)));
+        showToast(`已成功批量删除 ${selectedRuleIds.length} 条特征发现规则`);
+        setSelectedRuleIds([]);
+      } else {
+        showToast("批量删除规则失败", "error");
+      }
+    } catch (e) {
+      console.error(e);
+      showToast("批量删除网络通信失败", "error");
+    }
+  };
+
+  const handleClearIptvRules = async () => {
+    const iptvRuleIds = rules.filter(r => r.platform === 'iptv' || (r.keyword && r.keyword.toLowerCase().includes('iptv'))).map(r => r.id);
+    if (iptvRuleIds.length === 0) {
+      return showToast("当前规则库中未包含任何 IPTV 规则", "info");
+    }
+    if (!confirm(`确定要一键清理全部 ${iptvRuleIds.length} 条 IPTV 相关特征规则吗？`)) return;
+    try {
+      const res = await fetch('/api/carousel-discovery-rules/batch-delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids: iptvRuleIds })
+      });
+      if (res.ok) {
+        setRules(prev => prev.filter(r => !iptvRuleIds.includes(r.id)));
+        setSelectedRuleIds(prev => prev.filter(id => !iptvRuleIds.includes(id)));
+        showToast(`已成功清除 ${iptvRuleIds.length} 条 IPTV 特征规则`);
+      } else {
+        showToast("清除 IPTV 规则失败", "error");
+      }
+    } catch (e) {
+      console.error(e);
+      showToast("网络通信故障", "error");
     }
   };
 
@@ -315,8 +397,15 @@ export const CarouselChannelView = ({ fetchData, channelsData = [] }: { fetchDat
       const res = await fetch("/api/carousel-channels-apply", { method: "POST", headers: { "Content-Type": "application/json" }});
       const data = await res.json();
       if (data.success) {
-        showToast(`已成功同步生成 ${data.createdSourcesCount || 0} 个轮播频道直播源！`, "success");
-        fetchData();
+        if (data.createdSourcesCount > 0 || data.updatedCount > 0) {
+          showToast(data.message || `已成功同步生成 ${data.createdSourcesCount} 个新直播源，归类 ${data.updatedCount} 条线路（累计 ${data.totalSourcesCount} 个有效轮播源，覆盖 ${data.channelsCount} 个频道）！`, "success");
+        } else if (data.totalSourcesCount > 0) {
+          showToast(data.message || `所有 ${data.channelsCount} 个轮播频道的直播源（共 ${data.totalSourcesCount} 条线路）均已处于最新同步状态。`, "success");
+        } else {
+          showToast(data.message || `已同步 ${data.registriesCount || channels.length} 个频道映射，但未匹配到启用的轮播代理模板。请前往【轮播代理】配置并启用代理！`, "info");
+        }
+        loadData();
+        fetchData?.();
       } else {
         showToast(data.error || "应用失败", "error");
       }
@@ -507,26 +596,29 @@ export const CarouselChannelView = ({ fetchData, channelsData = [] }: { fetchDat
           </div>
         </div>
 
-        <div className="px-5 pt-3 border-b border-slate-100 bg-slate-50/50">
-          <div className="flex justify-between items-center">
-            <div className="flex space-x-1 bg-slate-200/60 p-1 rounded-lg">
+        <div className="px-3 sm:px-5 pt-3 border-b border-slate-100 bg-slate-50/50">
+          <div className="flex justify-between items-center pb-2">
+            <div className="grid grid-cols-3 sm:flex sm:items-center gap-1 bg-slate-200/70 p-1 rounded-xl w-full sm:w-auto">
                <button 
                   onClick={() => setActiveTab("registry")}
-                  className={`px-4 py-1.5 rounded-md text-sm font-bold transition ${activeTab === "registry" ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-600 hover:text-slate-800'}`}
+                  className={`px-2 sm:px-4 py-1.5 rounded-lg text-xs font-bold transition flex items-center justify-center gap-1 ${activeTab === "registry" ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-600 hover:text-slate-800'}`}
                >
-                  映射列表 ({channels.length})
+                  <span>映射列表</span>
+                  <span className="text-[10px] opacity-75">({channels.length})</span>
                </button>
                <button 
                   onClick={() => setActiveTab("unregistered")}
-                  className={`px-4 py-1.5 rounded-md text-sm font-bold transition ${activeTab === "unregistered" ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-600 hover:text-slate-800'}`}
+                  className={`px-2 sm:px-4 py-1.5 rounded-lg text-xs font-bold transition flex items-center justify-center gap-1 ${activeTab === "unregistered" ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-600 hover:text-slate-800'}`}
                >
-                  未识别项发现 ({unregistered.filter(u => !ignoredKeys.includes(`${u.platform}_${u.originalId}`)).length})
+                  <span>未识别项</span>
+                  <span className="text-[10px] opacity-75">({unregistered.filter(u => !ignoredKeys.includes(`${u.platform}_${u.originalId}`)).length})</span>
                </button>
                <button 
                   onClick={() => setActiveTab("rules")}
-                  className={`px-4 py-1.5 rounded-md text-sm font-bold transition ${activeTab === "rules" ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-600 hover:text-slate-800'}`}
+                  className={`px-2 sm:px-4 py-1.5 rounded-lg text-xs font-bold transition flex items-center justify-center gap-1 ${activeTab === "rules" ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-600 hover:text-slate-800'}`}
                >
-                  特征发现规则 ({rules.length})
+                  <span>发现规则</span>
+                  <span className="text-[10px] opacity-75">({rules.length})</span>
                </button>
             </div>
           </div>
@@ -534,128 +626,284 @@ export const CarouselChannelView = ({ fetchData, channelsData = [] }: { fetchDat
 
         {activeTab === "rules" ? (
           <div className="p-0 animate-fade-in">
-             <div className="p-4 bg-indigo-50/50 border-b border-indigo-100 flex flex-wrap items-center justify-between gap-3">
-                <div className="text-xs text-indigo-900 leading-relaxed font-sans">
-                  <span className="font-bold">特征发现机制：</span> 系统下载订阅或解析 M3U 时，会根据以下关键词规则自动捕获对应的第三方或网络直播间 URL，将其归类并自动提取为通用轮播映射。
+             <div className="p-4 bg-indigo-50/50 border-b border-indigo-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div className="text-xs text-indigo-900 leading-relaxed font-sans flex-1">
+                  <span className="font-bold">特征发现机制：</span> 系统下载订阅或解析 M3U 时，会根据以下关键词规则自动捕获对应的第三方网络直播间 URL，将其归类并自动提取为通用轮播映射。
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2 shrink-0">
+                  {rules.some(r => r.platform === 'iptv' || (r.keyword && r.keyword.toLowerCase().includes('iptv'))) && (
+                    <button 
+                      onClick={handleClearIptvRules}
+                      className="px-3 py-1.5 bg-rose-50 text-rose-700 hover:bg-rose-100 border border-rose-200 rounded-lg font-bold text-xs flex items-center transition whitespace-nowrap"
+                      title="清理规则库中残留的 IPTV 规则"
+                    >
+                      <Trash2 className="w-3.5 h-3.5 mr-1 text-rose-500" />
+                      一键清除 IPTV 规则
+                    </button>
+                  )}
                   <button 
                     onClick={() => handleLoadPresetRules('seed')}
                     disabled={presetLoading}
-                    className="px-3.5 py-1.5 bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-60 rounded-lg font-bold text-xs flex items-center shadow-sm transition"
-                    title="自动补全常见已知平台（YY, 斗鱼, 虎牙, B站, 快手, 抖音, 央视, 咪咕, IPTV等）识别特征"
+                    className="px-3.5 py-1.5 bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-60 rounded-lg font-bold text-xs flex items-center shadow-sm transition whitespace-nowrap"
+                    title="自动补全常见已知平台（YY, 斗鱼, 虎牙, B站, 快手, 抖音, 央视, 咪咕等）识别特征"
                   >
                     {presetLoading ? <RefreshCw className="w-3.5 h-3.5 mr-1.5 animate-spin" /> : <Wand2 className="w-3.5 h-3.5 mr-1.5" />}
-                    预置已知规则库
+                    补全推荐规则
                   </button>
                   <button 
                     onClick={() => setShowResetConfirmModal(true)}
                     disabled={presetLoading}
-                    className="px-3 py-1.5 bg-white text-slate-700 hover:bg-slate-100 disabled:opacity-60 border border-slate-200 rounded-lg font-bold text-xs transition"
+                    className="px-3 py-1.5 bg-white text-slate-700 hover:bg-slate-100 disabled:opacity-60 border border-slate-200 rounded-lg font-bold text-xs transition whitespace-nowrap"
                   >
                     重置默认
                   </button>
                 </div>
              </div>
 
-             <div className="p-4 bg-slate-50/50 border-b border-slate-100 flex flex-wrap items-end gap-3">
-                <div className="w-56">
-                  <label className="block text-xs font-bold text-slate-500 mb-1">平台标识</label>
-                  <select 
-                    value={ruleForm.platform} 
-                    onChange={e => setRuleForm({...ruleForm, platform: e.target.value})}
-                    className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-sm font-bold text-slate-800"
-                  >
-                    {PRESET_CAROUSEL_PLATFORMS.map(p => (
-                      <option key={p.value} value={p.value}>{p.label}</option>
-                    ))}
-                    {extraCustomPlatforms.map(p => (
-                      <option key={p} value={p}>{p.toUpperCase()} (已存在平台)</option>
-                    ))}
-                    <option value="custom">+ 自定义平台标识...</option>
-                  </select>
-                </div>
+             {/* Search and Filters Bar */}
+             <div className="p-3.5 bg-white border-b border-slate-100 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
+               <div className="flex flex-wrap items-center gap-3 flex-1">
+                 <div className="relative flex-1 min-w-[180px] max-w-xs">
+                   <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                   <input
+                     type="text"
+                     value={ruleSearchQuery}
+                     onChange={e => setRuleSearchQuery(e.target.value)}
+                     placeholder="搜索规则特征 / 关键词..."
+                     className="w-full pl-9 pr-3 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                   />
+                 </div>
 
-                {ruleForm.platform === "custom" && (
-                  <div className="w-40">
-                    <label className="block text-xs font-bold text-slate-500 mb-1">自定义平台代码</label>
-                    <input 
-                      type="text" 
-                      value={customPlatform}
-                      onChange={e => setCustomPlatform(e.target.value)}
-                      placeholder="例如: zhibo8"
-                      className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-sm font-bold text-slate-800"
-                    />
-                  </div>
-                )}
+                 <select
+                   value={rulePlatformFilter}
+                   onChange={e => setRulePlatformFilter(e.target.value)}
+                   className="px-3 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-lg text-slate-700 font-bold"
+                 >
+                   <option value="all">全部平台 ({rules.length})</option>
+                   {PRESET_CAROUSEL_PLATFORMS.map(p => {
+                     const cnt = rules.filter(r => r.platform === p.value).length;
+                     return <option key={p.value} value={p.value}>{p.label} ({cnt})</option>;
+                   })}
+                   {extraCustomPlatforms.map(p => {
+                     const cnt = rules.filter(r => r.platform === p).length;
+                     return <option key={p} value={p}>{p.toUpperCase()} ({cnt})</option>;
+                   })}
+                 </select>
+               </div>
 
-                <div className="w-72">
-                  <label className="block text-xs font-bold text-slate-500 mb-1">URL 特征关键词 / 正则</label>
-                  <input 
-                    type="text" 
-                    value={ruleForm.keyword}
-                    onChange={e => setRuleForm({...ruleForm, keyword: e.target.value})}
-                    placeholder="例如: /608 或 :\d+/\d{9} 或 dy.php"
-                    className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-sm font-mono"
-                  />
-                </div>
-                <button 
-                  onClick={saveRule}
-                  className="px-4 py-2 bg-indigo-600 text-white rounded-lg font-bold text-sm hover:bg-indigo-700 flex items-center shadow-sm transition"
-                >
-                  <Plus className="w-4 h-4 mr-1.5" />
-                  添加发现规则
-                </button>
+               {selectedRuleIds.length > 0 && (
+                 <div className="flex items-center gap-2 bg-indigo-50 px-3 py-1.5 rounded-lg border border-indigo-100 shrink-0 animate-fade-in">
+                   <span className="text-xs font-bold text-indigo-700">
+                     已选 {selectedRuleIds.length} 项
+                   </span>
+                   <button
+                     onClick={handleBatchDeleteRules}
+                     className="px-2.5 py-1 bg-rose-600 hover:bg-rose-700 text-white rounded text-xs font-bold transition flex items-center shadow-xs"
+                   >
+                     <Trash2 className="w-3 h-3 mr-1" />
+                     批量删除
+                   </button>
+                   <button
+                     onClick={() => setSelectedRuleIds([])}
+                     className="p-1 text-slate-400 hover:text-slate-600 transition"
+                     title="取消全选"
+                   >
+                     <X className="w-3.5 h-3.5" />
+                   </button>
+                 </div>
+               )}
              </div>
 
-             <table className="w-full text-left text-sm">
-                <thead className="bg-slate-50 border-b border-slate-100 text-slate-500 font-bold text-xs uppercase">
-                   <tr>
-                      <th className="px-4 py-3 w-48">目标平台</th>
-                      <th className="px-4 py-3">识别特征 (URL 包含该关键词即触发)</th>
-                      <th className="px-4 py-3 text-right">操作</th>
-                   </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                   {rules.map(r => (
-                      <tr key={r.id} className="hover:bg-slate-50 transition-colors">
-                         <td className="px-4 py-3">
-                            {getPlatformBadge(r.platform)}
-                         </td>
-                         <td className="px-4 py-3 font-mono font-bold text-indigo-600 bg-slate-50/50 inline-block rounded px-2 py-0.5 my-1 border border-slate-100">
-                            {r.keyword}
-                         </td>
-                         <td className="px-4 py-3 text-right">
+             {/* Add Rule Form */}
+             <div className="p-4 bg-slate-50/50 border-b border-slate-100">
+               <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-12 gap-3 items-end">
+                  <div className="sm:col-span-1 md:col-span-4">
+                    <label className="block text-xs font-bold text-slate-500 mb-1">平台标识</label>
+                    <select 
+                      value={ruleForm.platform} 
+                      onChange={e => setRuleForm({...ruleForm, platform: e.target.value})}
+                      className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-sm font-bold text-slate-800"
+                    >
+                      {PRESET_CAROUSEL_PLATFORMS.map(p => (
+                        <option key={p.value} value={p.value}>{p.label}</option>
+                      ))}
+                      {extraCustomPlatforms.map(p => (
+                        <option key={p} value={p}>{p.toUpperCase()} (已存在平台)</option>
+                      ))}
+                      <option value="custom">+ 自定义平台标识...</option>
+                    </select>
+                  </div>
+
+                  {ruleForm.platform === "custom" && (
+                    <div className="sm:col-span-1 md:col-span-3">
+                      <label className="block text-xs font-bold text-slate-500 mb-1">自定义平台代码</label>
+                      <input 
+                        type="text" 
+                        value={customPlatform}
+                        onChange={e => setCustomPlatform(e.target.value)}
+                        placeholder="例如: zhibo8"
+                        className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-sm font-bold text-slate-800"
+                      />
+                    </div>
+                  )}
+
+                  <div className={ruleForm.platform === "custom" ? "sm:col-span-2 md:col-span-3" : "sm:col-span-1 md:col-span-6"}>
+                    <label className="block text-xs font-bold text-slate-500 mb-1">URL 特征关键词 / 正则</label>
+                    <input 
+                      type="text" 
+                      value={ruleForm.keyword}
+                      onChange={e => setRuleForm({...ruleForm, keyword: e.target.value})}
+                      placeholder="例如: /yy/ 或 regex:\/yy\/[a-zA-Z0-9]+ 或 dy.php"
+                      className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-sm font-mono"
+                    />
+                  </div>
+
+                  <div className="sm:col-span-2 md:col-span-2 flex">
+                    <button 
+                      onClick={saveRule}
+                      className="w-full px-4 py-2 bg-indigo-600 text-white rounded-lg font-bold text-sm hover:bg-indigo-700 flex items-center justify-center shadow-sm transition whitespace-nowrap"
+                    >
+                      <Plus className="w-4 h-4 mr-1.5" />
+                      添加发现规则
+                    </button>
+                  </div>
+               </div>
+             </div>
+
+             {/* Rules Table */}
+             <div className="overflow-x-auto">
+               <table className="w-full text-left text-sm min-w-[550px]">
+                  <thead className="bg-slate-50 border-b border-slate-100 text-slate-500 font-bold text-xs uppercase">
+                     <tr>
+                        <th className="px-3 py-3 w-10 text-center whitespace-nowrap">
+                          <input
+                            type="checkbox"
+                            checked={
+                              rules.length > 0 &&
+                              rules
+                                .filter(r => 
+                                  (rulePlatformFilter === "all" || r.platform === rulePlatformFilter) &&
+                                  (!ruleSearchQuery || (r.keyword || "").toLowerCase().includes(ruleSearchQuery.toLowerCase()) || (r.platform || "").toLowerCase().includes(ruleSearchQuery.toLowerCase()))
+                                )
+                                .every(r => selectedRuleIds.includes(r.id))
+                            }
+                            onChange={(e) => {
+                              const filtered = rules.filter(r => 
+                                (rulePlatformFilter === "all" || r.platform === rulePlatformFilter) &&
+                                (!ruleSearchQuery || (r.keyword || "").toLowerCase().includes(ruleSearchQuery.toLowerCase()) || (r.platform || "").toLowerCase().includes(ruleSearchQuery.toLowerCase()))
+                              );
+                              if (e.target.checked) {
+                                const allFilteredIds = filtered.map(r => r.id);
+                                setSelectedRuleIds(Array.from(new Set([...selectedRuleIds, ...allFilteredIds])));
+                              } else {
+                                const filteredSet = new Set(filtered.map(r => r.id));
+                                setSelectedRuleIds(selectedRuleIds.filter(id => !filteredSet.has(id)));
+                              }
+                            }}
+                            className="rounded text-indigo-600 border-slate-300 focus:ring-indigo-500"
+                          />
+                        </th>
+                        <th className="px-3 py-3 w-16 text-center whitespace-nowrap">启用</th>
+                        <th className="px-4 py-3 w-36 sm:w-44 whitespace-nowrap">目标平台</th>
+                        <th className="px-4 py-3">识别特征 (URL 包含关键词或匹配正则即触发)</th>
+                        <th className="px-4 py-3 text-right w-20 whitespace-nowrap">操作</th>
+                     </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                     {rules
+                       .filter(r => 
+                         (rulePlatformFilter === "all" || r.platform === rulePlatformFilter) &&
+                         (!ruleSearchQuery || (r.keyword || "").toLowerCase().includes(ruleSearchQuery.toLowerCase()) || (r.platform || "").toLowerCase().includes(ruleSearchQuery.toLowerCase()))
+                       )
+                       .map(r => {
+                          const isEnabled = r.enabled === 1 || r.enabled === true || r.enabled === undefined;
+                          const isSelected = selectedRuleIds.includes(r.id);
+                          return (
+                            <tr key={r.id} className={`hover:bg-slate-50 transition-colors ${!isEnabled ? "opacity-50 bg-slate-50/40" : ""} ${isSelected ? "bg-indigo-50/30" : ""}`}>
+                               <td className="px-3 py-3 text-center whitespace-nowrap">
+                                 <input
+                                   type="checkbox"
+                                   checked={isSelected}
+                                   onChange={(e) => {
+                                     if (e.target.checked) {
+                                       setSelectedRuleIds(prev => [...prev, r.id]);
+                                     } else {
+                                       setSelectedRuleIds(prev => prev.filter(id => id !== r.id));
+                                     }
+                                   }}
+                                   className="rounded text-indigo-600 border-slate-300 focus:ring-indigo-500"
+                                 />
+                               </td>
+                               <td className="px-3 py-3 text-center whitespace-nowrap">
+                                 <button
+                                   onClick={() => toggleRuleEnabled(r)}
+                                   className={`w-8 h-4.5 flex items-center rounded-full p-0.5 transition duration-300 ${
+                                     isEnabled ? "bg-indigo-600" : "bg-slate-300"
+                                   }`}
+                                   title={isEnabled ? "点击停用此规则（不删除）" : "点击启用此规则"}
+                                 >
+                                   <div
+                                     className={`bg-white w-3.5 h-3.5 rounded-full shadow-md transform transition duration-300 ${
+                                       isEnabled ? "translate-x-3.5" : "translate-x-0"
+                                     }`}
+                                   />
+                                 </button>
+                               </td>
+                               <td className="px-4 py-3 whitespace-nowrap">
+                                  {getPlatformBadge(r.platform)}
+                               </td>
+                               <td className="px-4 py-3">
+                                  <span className={`font-mono font-bold text-xs sm:text-sm rounded px-2 py-1 my-0.5 border break-all inline-block max-w-full ${
+                                    isEnabled 
+                                      ? "text-indigo-600 bg-slate-50/70 border-slate-200/80" 
+                                      : "text-slate-400 bg-slate-100 border-slate-200 line-through"
+                                  }`}>
+                                     {r.keyword}
+                                  </span>
+                               </td>
+                               <td className="px-4 py-3 text-right whitespace-nowrap">
+                                  <button 
+                                    onClick={() => deleteRule(r.id)} 
+                                    className="p-1.5 text-slate-400 hover:text-rose-600 transition"
+                                    title="删除此条发现规则"
+                                  >
+                                     <Trash2 className="w-4 h-4" />
+                                  </button>
+                               </td>
+                            </tr>
+                          );
+                       })}
+                     {rules.length === 0 && (
+                        <tr>
+                          <td colSpan={5} className="text-center py-10 text-slate-400 space-y-3">
+                            <div>暂无特征发现规则</div>
                             <button 
-                              onClick={() => deleteRule(r.id)} 
-                              className="p-1.5 text-slate-400 hover:text-rose-600 transition"
-                              title="删除此条发现规则"
+                              onClick={() => handleLoadPresetRules('seed')}
+                              className="px-4 py-2 bg-indigo-50 text-indigo-600 hover:bg-indigo-100 rounded-lg text-xs font-bold inline-flex items-center transition"
                             >
-                               <Trash2 className="w-4 h-4" />
+                              <Wand2 className="w-4 h-4 mr-1.5" />
+                              一键预置推荐规则库
                             </button>
-                         </td>
-                      </tr>
-                   ))}
-                   {rules.length === 0 && (
-                      <tr>
-                        <td colSpan={3} className="text-center py-10 text-slate-400 space-y-3">
-                          <div>暂无特征发现规则</div>
-                          <button 
-                            onClick={() => handleLoadPresetRules('seed')}
-                            className="px-4 py-2 bg-indigo-50 text-indigo-600 hover:bg-indigo-100 rounded-lg text-xs font-bold inline-flex items-center transition"
-                          >
-                            <Wand2 className="w-4 h-4 mr-1.5" />
-                            一键预置常见已知规则库
-                          </button>
-                        </td>
-                      </tr>
-                   )}
-                </tbody>
-             </table>
+                          </td>
+                        </tr>
+                     )}
+                     {rules.length > 0 && rules.filter(r => 
+                         (rulePlatformFilter === "all" || r.platform === rulePlatformFilter) &&
+                         (!ruleSearchQuery || (r.keyword || "").toLowerCase().includes(ruleSearchQuery.toLowerCase()) || (r.platform || "").toLowerCase().includes(ruleSearchQuery.toLowerCase()))
+                       ).length === 0 && (
+                        <tr>
+                          <td colSpan={5} className="text-center py-8 text-slate-400">
+                            未找到符合搜索条件的特征规则
+                          </td>
+                        </tr>
+                     )}
+                  </tbody>
+               </table>
+             </div>
           </div>
         ) : activeTab === "registry" ? (
           <div className="p-0 animate-fade-in">
-             <div className="p-4 bg-slate-50/50 border-b border-slate-100 flex items-center justify-between gap-3">
+             <div className="p-4 bg-slate-50/50 border-b border-slate-100 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
                 <div className="relative flex-1 max-w-md">
                   <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
                   <input 
@@ -672,7 +920,7 @@ export const CarouselChannelView = ({ fetchData, channelsData = [] }: { fetchDat
                     setForm({ name: "", channelId: "", platform: "yy", customPlatform: "", originalId: "" });
                     setIsModalOpen(true);
                   }}
-                  className="px-4 py-2 bg-indigo-600 text-white rounded-lg font-bold text-sm hover:bg-indigo-700 flex items-center shadow-sm transition"
+                  className="px-4 py-2 bg-indigo-600 text-white rounded-lg font-bold text-sm hover:bg-indigo-700 flex items-center justify-center shadow-sm transition whitespace-nowrap"
                 >
                   <Plus className="w-4 h-4 mr-1.5" />
                   添加映射
@@ -680,19 +928,19 @@ export const CarouselChannelView = ({ fetchData, channelsData = [] }: { fetchDat
              </div>
              
              {selectedRegistryIds.length > 0 && (
-                <div className="bg-indigo-50 border-b border-indigo-100 p-3 px-4 flex justify-between items-center gap-2">
+                <div className="bg-indigo-50 border-b border-indigo-100 p-3 px-4 flex flex-wrap justify-between items-center gap-2">
                   <span className="text-sm font-bold text-indigo-700">已选择 {selectedRegistryIds.length} 个映射</span>
                   <div className="flex items-center gap-2">
                     <button 
                       onClick={handleExportSelectedRegistry}
-                      className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded text-xs font-bold transition flex items-center shadow-xs cursor-pointer"
+                      className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded text-xs font-bold transition flex items-center shadow-xs cursor-pointer whitespace-nowrap"
                     >
                       <Download className="w-3.5 h-3.5 mr-1.5" />
                       导出选中轮播 (.m3u)
                     </button>
                     <button 
                       onClick={handleBatchDeleteRegistry}
-                      className="px-3 py-1.5 bg-rose-100 text-rose-600 hover:bg-rose-200 rounded text-xs font-bold transition flex items-center cursor-pointer"
+                      className="px-3 py-1.5 bg-rose-100 text-rose-600 hover:bg-rose-200 rounded text-xs font-bold transition flex items-center cursor-pointer whitespace-nowrap"
                     >
                       <Trash2 className="w-3.5 h-3.5 mr-1.5" />
                       批量删除
@@ -701,79 +949,86 @@ export const CarouselChannelView = ({ fetchData, channelsData = [] }: { fetchDat
                 </div>
              )}
              
-             <table className="w-full text-left text-sm">
-                <thead className="bg-slate-50 border-b border-slate-100 text-slate-500 font-bold text-xs uppercase">
-                   <tr>
-                      <th className="px-4 py-3 w-10">
-                        <input 
-                           type="checkbox" 
-                           checked={selectedRegistryIds.length === channels.length && channels.length > 0}
-                           onChange={toggleSelectAllRegistry}
-                           className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
-                        />
-                      </th>
-                      <th className="px-4 py-3">统一频道名</th>
-                      <th className="px-4 py-3">平台</th>
-                      <th className="px-4 py-3">直播间 ID</th>
-                      <th className="px-4 py-3 text-right">操作</th>
-                   </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                   {(Array.isArray(channels) ? channels : [])
-                       .filter(p => (p.name || "").toLowerCase().includes(searchQuery.toLowerCase()) || (p.originalId || "").includes(searchQuery) || (p.platform || "").toLowerCase().includes(searchQuery.toLowerCase()))
-                       .sort((a, b) => sortKey === "name" ? (a.name || "").localeCompare(b.name || "") : (a.platform || "").localeCompare(b.platform || ""))
-                       .map(p => (
-                      <tr key={p.id} className={`hover:bg-slate-50 transition-colors ${selectedRegistryIds.includes(p.id) ? 'bg-indigo-50/50' : ''}`}>
-                         <td className="px-4 py-3">
-                           <input 
-                              type="checkbox" 
-                              checked={selectedRegistryIds.includes(p.id)}
-                              onChange={() => toggleSelectRegistry(p.id)}
-                              className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
-                           />
-                         </td>
-                         <td className="px-4 py-3 font-bold text-slate-800">
-                            {p.name}
-                         </td>
-                         <td className="px-4 py-3">
-                            {getPlatformBadge(p.platform)}
-                         </td>
-                         <td className="px-4 py-3 text-xs font-mono text-slate-600 font-bold">
-                            {p.originalId}
-                         </td>
-                         <td className="px-4 py-3 text-right">
-                            <button onClick={() => {
-                               setEditingId(p.id);
-                               const isPreset = PRESET_CAROUSEL_PLATFORMS.some(pre => pre.value === p.platform);
-                               setForm({
-                                 name: p.name || "",
-                                 channelId: p.channelId || "",
-                                 platform: isPreset ? p.platform : "custom",
-                                 customPlatform: isPreset ? "" : p.platform,
-                                 originalId: p.originalId
-                               });
-                               setIsModalOpen(true);
-                            }} className="p-1.5 text-slate-400 hover:text-indigo-600 transition">
-                               <Edit2 className="w-4 h-4" />
-                            </button>
-                            <button onClick={() => deleteChannel(p.id)} className="p-1.5 text-slate-400 hover:text-rose-600 transition ml-2">
-                               <Trash2 className="w-4 h-4" />
-                            </button>
-                         </td>
-                      </tr>
-                   ))}
-                   {channels.length === 0 && (
-                     <tr><td colSpan={5} className="text-center py-8 text-slate-400">暂无映射数据</td></tr>
-                   )}
-                </tbody>
-             </table>
+             <div className="overflow-x-auto">
+               <table className="w-full text-left text-sm min-w-[540px]">
+                  <thead className="bg-slate-50 border-b border-slate-100 text-slate-500 font-bold text-xs uppercase">
+                     <tr>
+                        <th className="px-4 py-3 w-10 whitespace-nowrap">
+                          <input 
+                             type="checkbox" 
+                             checked={selectedRegistryIds.length === channels.length && channels.length > 0}
+                             onChange={toggleSelectAllRegistry}
+                             className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                          />
+                        </th>
+                        <th className="px-4 py-3">统一频道名</th>
+                        <th className="px-4 py-3 whitespace-nowrap">平台</th>
+                        <th className="px-4 py-3 whitespace-nowrap">直播间 ID</th>
+                        <th className="px-4 py-3 text-right whitespace-nowrap">操作</th>
+                     </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                     {(Array.isArray(channels) ? channels : [])
+                         .filter(p => (p.name || "").toLowerCase().includes(searchQuery.toLowerCase()) || (p.originalId || "").includes(searchQuery) || (p.platform || "").toLowerCase().includes(searchQuery.toLowerCase()))
+                         .sort((a, b) => sortKey === "name" ? (a.name || "").localeCompare(b.name || "") : (a.platform || "").localeCompare(b.platform || ""))
+                         .map(p => (
+                        <tr key={p.id} className={`hover:bg-slate-50 transition-colors ${selectedRegistryIds.includes(p.id) ? 'bg-indigo-50/50' : ''}`}>
+                           <td className="px-4 py-3 whitespace-nowrap">
+                             <input 
+                                type="checkbox" 
+                                checked={selectedRegistryIds.includes(p.id)}
+                                onChange={() => toggleSelectRegistry(p.id)}
+                                className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                             />
+                           </td>
+                           <td className="px-4 py-3 font-bold text-slate-800 break-words">
+                              {p.name}
+                           </td>
+                           <td className="px-4 py-3 whitespace-nowrap">
+                              {getPlatformBadge(p.platform)}
+                           </td>
+                           <td className="px-4 py-3 text-xs font-mono text-slate-600 font-bold whitespace-nowrap">
+                              {p.originalId}
+                           </td>
+                           <td className="px-4 py-3 text-right whitespace-nowrap">
+                              <button onClick={() => {
+                                 setEditingId(p.id);
+                                 const isPreset = PRESET_CAROUSEL_PLATFORMS.some(pre => pre.value === p.platform);
+                                 setForm({
+                                   name: p.name || "",
+                                   channelId: p.channelId || "",
+                                   platform: isPreset ? p.platform : "custom",
+                                   customPlatform: isPreset ? "" : p.platform,
+                                   originalId: p.originalId
+                                 });
+                                 setIsModalOpen(true);
+                              }} className="p-1.5 text-slate-400 hover:text-indigo-600 transition">
+                                 <Edit2 className="w-4 h-4" />
+                              </button>
+                              <button onClick={() => deleteChannel(p.id)} className="p-1.5 text-slate-400 hover:text-rose-600 transition ml-2">
+                                 <Trash2 className="w-4 h-4" />
+                              </button>
+                           </td>
+                        </tr>
+                     ))}
+                     {channels.length === 0 && (
+                       <tr><td colSpan={5} className="text-center py-8 text-slate-400">暂无映射数据</td></tr>
+                     )}
+                  </tbody>
+               </table>
+             </div>
           </div>
         ) : (
           <div className="p-0 animate-fade-in">
              <div className="p-4 bg-amber-50/80 text-amber-800 text-sm font-semibold border-b border-amber-100 flex flex-col md:flex-row md:items-center justify-between gap-3">
-                <div className="flex items-center">
-                  <Search className="w-4 h-4 mr-2 shrink-0 text-amber-600" />
-                  <span>我们在你当前导入的直播源中，发现以下未配置映射的轮播直播间。你能为它们建立统一映射。</span>
+                <div className="flex flex-wrap items-center gap-2">
+                  <div className="flex items-center">
+                    <Search className="w-4 h-4 mr-2 shrink-0 text-amber-600" />
+                    <span>在当前直播源中自动发现未配置映射的轮播直播间（已自动忽略已隔离源与频道）。</span>
+                  </div>
+                  <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-bold bg-amber-200/80 text-amber-900 border border-amber-300/60">
+                    已忽略隔离源
+                  </span>
                 </div>
                 
                 <div className="flex items-center gap-2 shrink-0">
@@ -856,7 +1111,7 @@ export const CarouselChannelView = ({ fetchData, channelsData = [] }: { fetchDat
                    {!showIgnored && (
                      <button 
                        onClick={handleBatchCreateUnregistered}
-                       className="px-3 py-1.5 bg-indigo-600 text-white hover:bg-indigo-700 rounded text-xs font-bold transition flex items-center shadow-sm"
+                       className="px-3 py-1.5 bg-indigo-600 text-white hover:bg-indigo-700 rounded text-xs font-bold transition flex items-center shadow-sm whitespace-nowrap"
                      >
                        <CheckSquare className="w-3.5 h-3.5 mr-1.5" />
                        一键批量注册 (使用首个常用名)
@@ -864,7 +1119,7 @@ export const CarouselChannelView = ({ fetchData, channelsData = [] }: { fetchDat
                    )}
                    <button 
                      onClick={() => batchIgnoreUnregistered(selectedUnregIds)}
-                     className="px-3 py-1.5 bg-slate-200 text-slate-700 hover:bg-slate-300 rounded text-xs font-bold transition flex items-center"
+                     className="px-3 py-1.5 bg-slate-200 text-slate-700 hover:bg-slate-300 rounded text-xs font-bold transition flex items-center whitespace-nowrap"
                    >
                      {showIgnored ? <Eye className="w-3.5 h-3.5 mr-1.5" /> : <EyeOff className="w-3.5 h-3.5 mr-1.5" />}
                      {showIgnored ? '批量取消忽略' : '批量移入忽略'}
@@ -873,107 +1128,109 @@ export const CarouselChannelView = ({ fetchData, channelsData = [] }: { fetchDat
                </div>
              )}
              
-             <table className="w-full text-left text-sm">
-                <thead className="bg-slate-50 border-b border-slate-100 text-slate-500 font-bold text-xs uppercase">
-                   <tr>
-                      <th className="px-4 py-3 w-10">
-                        <input 
-                           type="checkbox" 
-                           checked={visibleUnregistered.length > 0 && visibleUnregistered.every(u => selectedUnregIds.includes(`${u.platform}_${u.originalId}`))}
-                           onChange={toggleSelectAllUnreg}
-                           className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
-                        />
-                      </th>
-                      <th className="px-4 py-3 w-1/5">平台 & ID</th>
-                      <th className="px-4 py-3">当前检测到的凌乱频道名</th>
-                      <th className="px-4 py-3 text-right">操作</th>
-                   </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                   {visibleUnregistered.map((item) => {
-                      const key = `${item.platform}_${item.originalId}`;
-                      const isSelected = selectedUnregIds.includes(key);
-                      const isIgnored = ignoredKeys.includes(key);
-                      return (
-                      <tr key={key} className={`hover:bg-slate-50 transition-colors ${isSelected ? 'bg-indigo-50/50' : ''}`}>
-                         <td className="px-4 py-3">
-                           <input 
-                              type="checkbox" 
-                              checked={isSelected}
-                              onChange={() => toggleSelectUnreg(key)}
-                              className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
-                           />
-                         </td>
-                         <td className="px-4 py-3">
-                            <div className="flex flex-col gap-1 items-start">
-                              {getPlatformBadge(item.platform)}
-                              <span className="text-xs font-mono font-bold text-slate-600 bg-indigo-50 border border-indigo-100 px-2 py-0.5 rounded">
-                                {item.originalId}
-                              </span>
-                            </div>
-                         </td>
-                         <td className="px-4 py-3 text-slate-600">
-                            <div className="flex flex-wrap gap-1">
-                              {item.sampleNames.map((n: string, idx: number) => (
-                                <span key={idx} className="bg-slate-100 px-2 py-0.5 rounded text-xs">
-                                  {n}
-                                </span>
-                              ))}
-                            </div>
-                         </td>
-                         <td className="px-4 py-3 text-right">
-                            <div className="flex items-center justify-end gap-1.5">
-                              <button 
-                                 onClick={() => {
-                                    setActiveTab("registry");
-                                    const isPreset = PRESET_CAROUSEL_PLATFORMS.some(pre => pre.value === item.platform);
-                                    setForm({
-                                      name: item.sampleNames[0] || "",
-                                      channelId: "",
-                                      platform: isPreset ? item.platform : "custom",
-                                      customPlatform: isPreset ? "" : item.platform,
-                                      originalId: item.originalId
-                                    });
-                                    setIsModalOpen(true);
-                                 }}
-                                 className="px-3 py-1.5 bg-indigo-50 text-indigo-600 rounded text-xs font-bold hover:bg-indigo-100 transition"
-                              >
-                                 独立编辑映射
-                              </button>
-                              <button
-                                 onClick={() => toggleIgnoreUnregistered(key)}
-                                 className={`p-1.5 rounded transition ${isIgnored ? 'text-amber-600 bg-amber-50 hover:bg-amber-100' : 'text-slate-400 hover:text-slate-600 hover:bg-slate-100'}`}
-                                 title={isIgnored ? "取消忽略此项" : "忽略此项 (不再在未识别列表中显示)"}
-                              >
-                                 {isIgnored ? <Eye className="w-4 h-4" /> : <EyeOff className="w-4 h-4" />}
-                              </button>
-                            </div>
-                         </td>
-                      </tr>
-                   )})}
-                   {visibleUnregistered.length === 0 && (
+             <div className="overflow-x-auto">
+               <table className="w-full text-left text-sm min-w-[580px]">
+                  <thead className="bg-slate-50 border-b border-slate-100 text-slate-500 font-bold text-xs uppercase">
                      <tr>
-                       <td colSpan={4} className="text-center py-10 text-slate-400 space-y-2">
-                         <p className="font-bold text-sm">
-                           {showIgnored 
-                             ? "当前忽略名单中没有匹配的未识别源" 
-                             : (unregSearchQuery || unregPlatformFilter !== "all") 
-                               ? "没有找到符合搜索条件的未识别源" 
-                               : "目前没有未识别的杂乱轮播源"}
-                         </p>
-                         {(unregSearchQuery || unregPlatformFilter !== "all") && (
-                           <button
-                             onClick={() => { setUnregSearchQuery(""); setUnregPlatformFilter("all"); }}
-                             className="text-xs text-indigo-600 font-bold hover:underline"
-                           >
-                             重置筛选条件
-                           </button>
-                         )}
-                       </td>
+                        <th className="px-4 py-3 w-10 whitespace-nowrap">
+                          <input 
+                             type="checkbox" 
+                             checked={visibleUnregistered.length > 0 && visibleUnregistered.every(u => selectedUnregIds.includes(`${u.platform}_${u.originalId}`))}
+                             onChange={toggleSelectAllUnreg}
+                             className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                          />
+                        </th>
+                        <th className="px-4 py-3 w-1/5 whitespace-nowrap">平台 & ID</th>
+                        <th className="px-4 py-3">当前检测到的凌乱频道名</th>
+                        <th className="px-4 py-3 text-right whitespace-nowrap">操作</th>
                      </tr>
-                   )}
-                </tbody>
-             </table>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                     {visibleUnregistered.map((item) => {
+                        const key = `${item.platform}_${item.originalId}`;
+                        const isSelected = selectedUnregIds.includes(key);
+                        const isIgnored = ignoredKeys.includes(key);
+                        return (
+                        <tr key={key} className={`hover:bg-slate-50 transition-colors ${isSelected ? 'bg-indigo-50/50' : ''}`}>
+                           <td className="px-4 py-3 whitespace-nowrap">
+                             <input 
+                                type="checkbox" 
+                                checked={isSelected}
+                                onChange={() => toggleSelectUnreg(key)}
+                                className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                             />
+                           </td>
+                           <td className="px-4 py-3 whitespace-nowrap">
+                              <div className="flex flex-col gap-1 items-start">
+                                {getPlatformBadge(item.platform)}
+                                <span className="text-xs font-mono font-bold text-slate-600 bg-indigo-50 border border-indigo-100 px-2 py-0.5 rounded">
+                                  {item.originalId}
+                                </span>
+                              </div>
+                           </td>
+                           <td className="px-4 py-3 text-slate-600">
+                              <div className="flex flex-wrap gap-1 max-w-sm">
+                                {item.sampleNames.map((n: string, idx: number) => (
+                                  <span key={idx} className="bg-slate-100 px-2 py-0.5 rounded text-xs break-all">
+                                    {n}
+                                  </span>
+                                ))}
+                              </div>
+                           </td>
+                           <td className="px-4 py-3 text-right whitespace-nowrap">
+                              <div className="flex items-center justify-end gap-1.5">
+                                <button 
+                                   onClick={() => {
+                                      setActiveTab("registry");
+                                      const isPreset = PRESET_CAROUSEL_PLATFORMS.some(pre => pre.value === item.platform);
+                                      setForm({
+                                        name: item.sampleNames[0] || "",
+                                        channelId: "",
+                                        platform: isPreset ? item.platform : "custom",
+                                        customPlatform: isPreset ? "" : item.platform,
+                                        originalId: item.originalId
+                                      });
+                                      setIsModalOpen(true);
+                                   }}
+                                   className="px-3 py-1.5 bg-indigo-50 text-indigo-600 rounded text-xs font-bold hover:bg-indigo-100 transition whitespace-nowrap"
+                                >
+                                   独立编辑映射
+                                </button>
+                                <button
+                                   onClick={() => toggleIgnoreUnregistered(key)}
+                                   className={`p-1.5 rounded transition ${isIgnored ? 'text-amber-600 bg-amber-50 hover:bg-amber-100' : 'text-slate-400 hover:text-slate-600 hover:bg-slate-100'}`}
+                                   title={isIgnored ? "取消忽略此项" : "忽略此项 (不再在未识别列表中显示)"}
+                                >
+                                   {isIgnored ? <Eye className="w-4 h-4" /> : <EyeOff className="w-4 h-4" />}
+                                </button>
+                              </div>
+                           </td>
+                        </tr>
+                     )})}
+                     {visibleUnregistered.length === 0 && (
+                       <tr>
+                         <td colSpan={4} className="text-center py-10 text-slate-400 space-y-2">
+                           <p className="font-bold text-sm">
+                             {showIgnored 
+                               ? "当前忽略名单中没有匹配的未识别源" 
+                               : (unregSearchQuery || unregPlatformFilter !== "all") 
+                                 ? "没有找到符合搜索条件的未识别源" 
+                                 : "目前没有未识别的杂乱轮播源"}
+                           </p>
+                           {(unregSearchQuery || unregPlatformFilter !== "all") && (
+                             <button
+                               onClick={() => { setUnregSearchQuery(""); setUnregPlatformFilter("all"); }}
+                               className="text-xs text-indigo-600 font-bold hover:underline"
+                             >
+                               重置筛选条件
+                             </button>
+                           )}
+                         </td>
+                       </tr>
+                     )}
+                  </tbody>
+               </table>
+             </div>
           </div>
         )}
       </div>

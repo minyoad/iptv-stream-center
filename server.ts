@@ -113,10 +113,10 @@ let githubProxy = "";
 let autoCreateChannel = true;
 let m3uLogoVersion = "";
 let carouselProxyPresets = {
-  "yy": [{"name":"YY 官方","id":"12345"},{"name":"YY 跳舞","id":"76"}],
-  "douyu": [{"name":"英雄联盟","id":"9999"},{"name":"Dota2","id":"1126960"}],
-  "huya": [{"name":"LPL赛事","id":"lpl"},{"name":"楚河","id":"116361"}],
-  "bilibili": [{"name":"散人","id":"1129"},{"name":"官方赛事","id":"6"}],
+  "yy": [{"name":"开心麻花","id":"54880976"},{"name":"YY 官方","id":"12345"},{"name":"YY 舞蹈","id":"76"}],
+  "douyu": [{"name":"开心麻花经典小品","id":"10153463"},{"name":"贾玲经典小品","id":"10419541"},{"name":"龙视开心麻花街","id":"9374862"},{"name":"英雄联盟","id":"9999"},{"name":"Dota2","id":"1126960"}],
+  "huya": [{"name":"虎牙放映厅","id":"11602077"},{"name":"战争电影放映厅","id":"21059618"},{"name":"悬疑放映厅","id":"26355797"},{"name":"LPL赛事","id":"lpl"},{"name":"楚河","id":"116361"}],
+  "bilibili": [{"name":"逍遥散人","id":"1129"},{"name":"官方赛事","id":"6"}],
   "kuaishou": [{"name":"王者荣耀","id":"kpl"},{"name":"快手精选","id":"3x876g5g6f7"}],
   "douyin": [{"name":"抖音直播精选","id":"123456"}],
   "cntv": [{"name":"CCTV-1 综合","id":"cctv1"},{"name":"CCTV-5 体育","id":"cctv5"}],
@@ -257,27 +257,84 @@ function initSqlite() {
     CREATE TABLE IF NOT EXISTS carousel_discovery_rules (
       id TEXT PRIMARY KEY,
       platform TEXT NOT NULL,
-      keyword TEXT NOT NULL
+      keyword TEXT NOT NULL,
+      enabled INTEGER DEFAULT 1
     );
     CREATE UNIQUE INDEX IF NOT EXISTS idx_carousel_discovery_rules_keyword ON carousel_discovery_rules(keyword);
+    CREATE TABLE IF NOT EXISTS carousel_disabled_rules (
+      id TEXT PRIMARY KEY,
+      pattern TEXT NOT NULL,
+      type TEXT DEFAULT 'contains',
+      platform TEXT DEFAULT '',
+      description TEXT DEFAULT '',
+      enabled INTEGER DEFAULT 1,
+      createdAt DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_carousel_disabled_rules_pattern ON carousel_disabled_rules(pattern, platform);
+    CREATE TABLE IF NOT EXISTS deleted_carousel_proxies (
+      urlTemplate TEXT PRIMARY KEY,
+      deletedAt TEXT
+    );
   `);
 
-  // Seed default carousel proxies
-  const proxyCount = (db.prepare('SELECT COUNT(*) as count FROM carousel_proxies').get() as any).count;
-  if (proxyCount === 0) {
-    const seedProxies = [
-      { id: crypto.randomUUID(), platform: 'yy', urlTemplate: 'http://11.xmyxc.cn/api/php/yy.php?id={}', status: 'active' },
-      { id: crypto.randomUUID(), platform: 'yy', urlTemplate: 'https://lunbo.freetv.top/yy/{}', status: 'active' },
-      { id: crypto.randomUUID(), platform: 'yy', urlTemplate: 'http://cfss.cc/cdn/yy/{}.flv', status: 'active' },
-      { id: crypto.randomUUID(), platform: 'douyu', urlTemplate: 'https://diyp.zxyxndc.top/douyu/{}', status: 'active' },
-      { id: crypto.randomUUID(), platform: 'douyu', urlTemplate: 'http://live.iill.top/douyu.php?id={}', status: 'active' },
-      { id: crypto.randomUUID(), platform: 'huya', urlTemplate: 'http://8.155.43.98:35455/huya/{}', status: 'active' }
-    ];
-    const stmt = db.prepare('INSERT INTO carousel_proxies (id, platform, urlTemplate, status) VALUES (@id, @platform, @urlTemplate, @status)');
-    const insertMany = db.transaction((proxies) => {
-      for (const p of proxies) stmt.run(p);
-    });
-    insertMany(seedProxies);
+  // Column migration for carousel_discovery_rules enabled column
+  try {
+    db.prepare("ALTER TABLE carousel_discovery_rules ADD COLUMN enabled INTEGER DEFAULT 1").run();
+  } catch (e) {
+    // Column already exists
+  }
+
+  // Seed default carousel proxies (only on first startup initialization)
+  const seedProxies = [
+    { id: crypto.randomUUID(), platform: 'yy', urlTemplate: 'http://11.xmyxc.cn/api/php/yy.php?id={}', status: 'active' },
+    { id: crypto.randomUUID(), platform: 'yy', urlTemplate: 'https://lunbo.freetv.top/yy/{}', status: 'active' },
+    { id: crypto.randomUUID(), platform: 'yy', urlTemplate: 'http://cfss.cc/cdn/yy/{}.flv', status: 'active' },
+    { id: crypto.randomUUID(), platform: 'douyu', urlTemplate: 'https://diyp.zxyxndc.top/douyu/{}', status: 'active' },
+    { id: crypto.randomUUID(), platform: 'douyu', urlTemplate: 'http://live.iill.top/douyu.php?id={}', status: 'active' },
+    { id: crypto.randomUUID(), platform: 'huya', urlTemplate: 'http://8.155.43.98:35455/huya/{}', status: 'active' },
+    { id: crypto.randomUUID(), platform: 'bilibili', urlTemplate: 'http://live.iill.top/bilibili.php?id={}', status: 'active' },
+    { id: crypto.randomUUID(), platform: 'migu', urlTemplate: 'https://lunbo.freetv.top/migu/{}', status: 'active' },
+    { id: crypto.randomUUID(), platform: 'migu', urlTemplate: 'http://live.iill.top/migu.php?id={}', status: 'active' },
+    { id: crypto.randomUUID(), platform: 'migu', urlTemplate: 'http://127.0.0.1:35455/migu/{}', status: 'active' },
+    { id: crypto.randomUUID(), platform: 'cntv', urlTemplate: 'https://lunbo.freetv.top/cntv/{}.m3u8', status: 'active' },
+    { id: crypto.randomUUID(), platform: 'kuaishou', urlTemplate: 'http://live.iill.top/kuaishou.php?id={}', status: 'active' },
+    { id: crypto.randomUUID(), platform: 'douyin', urlTemplate: 'http://live.iill.top/douyin.php?id={}', status: 'active' }
+  ];
+
+  try {
+    const isProxiesInit = db.prepare("SELECT value FROM system_settings WHERE key = 'carousel_proxies_initialized'").get() as any;
+    if (!isProxiesInit) {
+      const proxyCount = (db.prepare('SELECT COUNT(*) as count FROM carousel_proxies').get() as any).count;
+      if (proxyCount === 0) {
+        const stmt = db.prepare('INSERT INTO carousel_proxies (id, platform, urlTemplate, status) VALUES (@id, @platform, @urlTemplate, @status)');
+        const insertMany = db.transaction((proxies) => {
+          for (const p of proxies) stmt.run(p);
+        });
+        insertMany(seedProxies);
+      }
+      db.prepare("INSERT OR REPLACE INTO system_settings (key, value) VALUES ('carousel_proxies_initialized', 'true')").run();
+    }
+  } catch (e) {
+    console.error("Error initializing carousel proxies:", e);
+  }
+
+  // Clean up any invalid miguvideo proxy templates
+  try {
+    db.prepare("DELETE FROM carousel_proxies WHERE urlTemplate LIKE '%miguvideo%'").run();
+  } catch (e) {}
+
+  // One-time initialization for carousel discovery rules
+  try {
+    const isRulesInit = db.prepare("SELECT value FROM system_settings WHERE key = 'carousel_rules_initialized'").get() as any;
+    if (!isRulesInit) {
+      const rulesCount = (db.prepare('SELECT COUNT(*) as count FROM carousel_discovery_rules').get() as any).count;
+      if (rulesCount === 0) {
+        seedKnownRules(false);
+      }
+      db.prepare("INSERT OR REPLACE INTO system_settings (key, value) VALUES ('carousel_rules_initialized', 'true')").run();
+    }
+  } catch (e) {
+    // ignore
   }
 
   // Add new columns if they don't exist
@@ -556,28 +613,179 @@ const testStatus: TestStatus = {
     { platform: 'douyin', keyword: 'douyin.php' },
     { platform: 'douyin', keyword: 'dyin.php' },
 
-    // 央视/CNTV/咪咕/IPTV
+    // 央视/CNTV/咪咕 (不包含通用 IPTV 规则，避免误识别普通电视频道)
     { platform: 'cntv', keyword: '/cntv/' },
     { platform: 'cntv', keyword: 'cntv.php' },
     { platform: 'migu', keyword: '/migu/' },
+    { platform: 'migu', keyword: '/migu?' },
     { platform: 'migu', keyword: 'migu.php' },
+    { platform: 'migu', keyword: '/migu_live/' },
+    { platform: 'migu', keyword: '/mg/' },
+    { platform: 'migu', keyword: 'mg.php' },
+    { platform: 'migu', keyword: 'regex:[?&]platform=migu' },
+    { platform: 'migu', keyword: 'regex::\\d+/(?:migu|mg)/\\d+' },
     { platform: 'migu', keyword: 'regex::\\d+/6\\d{8}(?!\\d)(?:/|\\?|\\.|#|$)' },
-    { platform: 'migu', keyword: 'regex:^https?://[^/]+/6\\d{8}(?!\\d)(?:/|\\?|\\.|#|$)' },
-    { platform: 'iptv', keyword: '/iptv/' },
-    { platform: 'iptv', keyword: 'iptv.php' }
+    { platform: 'migu', keyword: 'regex:^https?://[^/]+/6\\d{8}(?!\\d)(?:/|\\?|\\.|#|$)' }
   ];
 
-  let discoveryRulesCache = null;
+  let discoveryRulesCache: any[] | null = null;
+  let disabledRulesCache: any[] | null = null;
+
+  const PRESET_DISABLED_RULES = [
+    {
+      pattern: "miguvideo",
+      type: "contains",
+      platform: "",
+      description: "忽略咪咕官方直链与CDN流 (miguvideo.com)",
+      enabled: 1
+    },
+    {
+      pattern: "hw-mbl-live.miguvideo.com",
+      type: "domain",
+      platform: "migu",
+      description: "忽略咪咕华为移动直播CDN域名",
+      enabled: 1
+    },
+    {
+      pattern: "play.miguvideo.com",
+      type: "domain",
+      platform: "migu",
+      description: "忽略咪咕播放CDN域名",
+      enabled: 1
+    },
+    {
+      pattern: "aliyuncs.com",
+      type: "contains",
+      platform: "",
+      description: "忽略阿里云官方点播/直链流",
+      enabled: 0
+    },
+    {
+      pattern: "douyucdn.cn",
+      type: "domain",
+      platform: "douyu",
+      description: "忽略斗鱼官方CDN临时直链",
+      enabled: 0
+    }
+  ];
+
+  function seedDisabledRules(overwrite = false) {
+    if (overwrite) {
+      db.prepare('DELETE FROM carousel_disabled_rules').run();
+    }
+    const insertStmt = db.prepare(`
+      INSERT OR IGNORE INTO carousel_disabled_rules (id, pattern, type, platform, description, enabled)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `);
+    const insertMany = db.transaction((rules) => {
+      let count = 0;
+      for (const rule of rules) {
+        const info = insertStmt.run(
+          crypto.randomUUID(),
+          rule.pattern,
+          rule.type || 'contains',
+          rule.platform || '',
+          rule.description || '',
+          rule.enabled !== undefined ? (rule.enabled ? 1 : 0) : 1
+        );
+        if (info.changes > 0) count++;
+      }
+      return count;
+    });
+    const added = insertMany(PRESET_DISABLED_RULES);
+    disabledRulesCache = null;
+    return added;
+  }
+
+  function getDisabledRules() {
+    if (!disabledRulesCache) {
+      const count = (db.prepare('SELECT COUNT(*) as count FROM carousel_disabled_rules').get() as any).count;
+      if (count === 0) {
+        seedDisabledRules(false);
+      }
+      disabledRulesCache = db.prepare('SELECT * FROM carousel_disabled_rules ORDER BY createdAt DESC').all() as any[];
+    }
+    return disabledRulesCache;
+  }
+
+  function isUrlBlockedByDisabledRules(url: string, platform?: string): boolean {
+    if (!url || typeof url !== 'string') return true;
+    const urlLower = url.toLowerCase();
+
+    // Always block miguvideo as core hard rule
+    if (urlLower.includes("miguvideo")) return true;
+
+    try {
+      const rules = getDisabledRules();
+      for (const rule of rules) {
+        if (rule.enabled !== 1 && rule.enabled !== true) continue;
+        if (rule.platform && platform && rule.platform.toLowerCase() !== platform.toLowerCase()) {
+          continue;
+        }
+        const pat = (rule.pattern || '').trim();
+        if (!pat) continue;
+        const patLower = pat.toLowerCase();
+
+        if (rule.type === 'regex') {
+          try {
+            const reg = new RegExp(pat, 'i');
+            if (reg.test(url)) return true;
+          } catch (e) {}
+        } else if (rule.type === 'prefix') {
+          if (urlLower.startsWith(patLower)) return true;
+        } else if (rule.type === 'domain') {
+          try {
+            let host = "";
+            if (url.startsWith("http://") || url.startsWith("https://")) {
+              host = new URL(url).hostname.toLowerCase();
+            } else {
+              host = url.split("/")[0].split(":")[0].toLowerCase();
+            }
+            if (host === patLower || host.endsWith("." + patLower) || host.includes(patLower)) {
+              return true;
+            }
+          } catch (e) {
+            if (urlLower.includes(patLower)) return true;
+          }
+        } else {
+          // contains
+          if (urlLower.includes(patLower)) return true;
+        }
+      }
+    } catch (e) {
+      // fallback
+    }
+
+    return false;
+  }
+
+  function cleanupBlockedCarouselProxies(): number {
+    let count = 0;
+    try {
+      const resMigu = db.prepare("DELETE FROM carousel_proxies WHERE urlTemplate LIKE '%miguvideo%'").run();
+      count += resMigu.changes;
+
+      const allProxies = db.prepare('SELECT id, platform, urlTemplate FROM carousel_proxies').all() as any[];
+      for (const p of allProxies) {
+        if (isUrlBlockedByDisabledRules(p.urlTemplate, p.platform)) {
+          const r = db.prepare('DELETE FROM carousel_proxies WHERE id = ?').run(p.id);
+          count += r.changes;
+        }
+      }
+    } catch (e) {
+      console.error("Failed to cleanup blocked carousel proxies:", e);
+    }
+    return count;
+  }
 
   function seedKnownRules(overwrite = false) {
     if (overwrite) {
       db.prepare('DELETE FROM carousel_discovery_rules').run();
     } else {
-      // Clean up obsolete / overly loose Migu rules and invalid miguvideo proxy templates
-      db.prepare("DELETE FROM carousel_discovery_rules WHERE keyword IN ('/608', ':3566/', ':3566', ':\\d+/608') OR keyword LIKE ':\\d+/\\d{9}' OR keyword LIKE '%[0-9]{9}%'").run();
-      db.prepare("DELETE FROM carousel_proxies WHERE urlTemplate LIKE '%miguvideo%'").run();
+      // Clean up obsolete / overly loose Migu rules or unwanted legacy iptv rules
+      db.prepare("DELETE FROM carousel_discovery_rules WHERE keyword IN ('/608', ':3566/', ':3566', ':\\d+/608', '/iptv/', 'iptv.php') OR keyword LIKE ':\\d+/\\d{9}' OR keyword LIKE '%[0-9]{9}%'").run();
     }
-    const insertStmt = db.prepare('INSERT OR IGNORE INTO carousel_discovery_rules (id, platform, keyword) VALUES (?, ?, ?)');
+    const insertStmt = db.prepare('INSERT OR IGNORE INTO carousel_discovery_rules (id, platform, keyword, enabled) VALUES (?, ?, ?, 1)');
     const insertMany = db.transaction((rules) => {
       let count = 0;
       for (const rule of rules) {
@@ -591,58 +799,290 @@ const testStatus: TestStatus = {
     return addedCount;
   }
 
-  function getDiscoveryRules() {
+  function getDiscoveryRules(includeDisabled = false) {
     if (!discoveryRulesCache) {
-      seedKnownRules(false);
-      discoveryRulesCache = db.prepare('SELECT * FROM carousel_discovery_rules').all();
+      try {
+        discoveryRulesCache = db.prepare('SELECT * FROM carousel_discovery_rules').all();
+      } catch (e) {
+        discoveryRulesCache = [];
+      }
     }
-    return discoveryRulesCache;
+    if (includeDisabled) {
+      return discoveryRulesCache || [];
+    }
+    return (discoveryRulesCache || []).filter((r: any) => r.enabled === 1 || r.enabled === true || r.enabled === undefined || r.enabled === null);
   }
 
 // Helper to parse carousel platform and ID
 
-function syncCarouselSources() {
+function removeSourcesForProxyTemplates(templates: { platform?: string; urlTemplate: string }[]) {
+  if (!templates || templates.length === 0) return 0;
+  let removedCount = 0;
+  
+  for (const t of templates) {
+    if (!t || !t.urlTemplate) continue;
+    const parts = t.urlTemplate.split('{}');
+    const prefix = parts[0];
+    const suffix = parts[1] !== undefined ? parts[1] : '';
+
+    // 1. Remove from in-memory channels
+    for (const ch of channels) {
+      if (ch.sources && ch.sources.length > 0) {
+        const initLen = ch.sources.length;
+        ch.sources = ch.sources.filter((s: any) => {
+          if (!s || !s.url) return true;
+          if (suffix) {
+            if (s.url.startsWith(prefix) && s.url.endsWith(suffix)) return false;
+          } else {
+            if (s.url.startsWith(prefix)) return false;
+          }
+          return true;
+        });
+        removedCount += (initLen - ch.sources.length);
+      }
+    }
+
+    // 2. Remove from SQLite sources table
+    try {
+      if (suffix) {
+        const res = db.prepare("DELETE FROM sources WHERE url LIKE ? AND url LIKE ?").run(`${prefix}%`, `%${suffix}`);
+        removedCount += res.changes;
+      } else {
+        const res = db.prepare("DELETE FROM sources WHERE url LIKE ?").run(`${prefix}%`);
+        removedCount += res.changes;
+      }
+    } catch (e) {
+      console.error("Error deleting sources from SQLite for proxy template:", e);
+    }
+  }
+
+  saveData(true);
+  return removedCount;
+}
+
+async function testCarouselProxyAvailability(proxy: { platform: string; urlTemplate: string }, timeoutMs = 6000): Promise<{ available: boolean; latency: number | null; error?: string }> {
+  try {
+    const plat = (proxy.platform || '').toLowerCase();
+    const fallbacks: Record<string, string[]> = {
+      "yy": ["54880976", "12345", "76"],
+      "douyu": ["10153463", "10419541", "9374862", "9999"],
+      "huya": ["11602077", "21059618", "26355797", "lpl"],
+      "bilibili": ["1129", "6", "102"],
+      "kuaishou": ["3x876g5g6f7", "kpl"],
+      "douyin": ["123456"],
+      "cntv": ["cctv1", "cctv5"],
+      "migu": ["608807420"],
+      "iptv": ["live"]
+    };
+    
+    // Collect candidate test IDs: registered channels > preset IDs > fallbacks
+    const candidateIds: string[] = [];
+    try {
+      const regList = db.prepare('SELECT originalId FROM carousel_channels WHERE LOWER(platform) = ? LIMIT 5').all(plat) as any[];
+      for (const r of regList) {
+        if (r.originalId && !candidateIds.includes(r.originalId)) {
+          candidateIds.push(r.originalId);
+        }
+      }
+    } catch (e) {}
+
+    const presetList = (carouselProxyPresets as any)?.[plat] || [];
+    for (const p of presetList) {
+      if (p.id && !candidateIds.includes(p.id)) {
+        candidateIds.push(p.id);
+      }
+    }
+
+    const fallbackList = fallbacks[plat] || ["12345"];
+    for (const fb of fallbackList) {
+      if (!candidateIds.includes(fb)) {
+        candidateIds.push(fb);
+      }
+    }
+
+    // Try up to 3 candidate IDs in sequence
+    let lastError = "";
+    const testCandidates = candidateIds.slice(0, 3);
+
+    for (const testId of testCandidates) {
+      const testUrl = proxy.urlTemplate.replace('{}', testId);
+      try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+        const start = Date.now();
+        
+        const response = await fetch(testUrl, {
+          method: 'GET',
+          signal: controller.signal,
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': '*/*'
+          }
+        });
+        clearTimeout(timeoutId);
+        const latency = Date.now() - start;
+
+        // Any 2xx or 3xx (redirect to stream CDN) is considered valid
+        if (response.ok || (response.status >= 200 && response.status < 400)) {
+          return { available: true, latency };
+        } else {
+          lastError = `HTTP 响应状态 ${response.status} ${response.statusText || ''}`.trim();
+        }
+      } catch (e: any) {
+        const isTimeout = e?.name === 'AbortError' || e?.message?.includes('aborted');
+        lastError = isTimeout ? `连接超时 (${Math.round(timeoutMs/1000)}秒未响应)` : (e?.message || '网络连接异常');
+      }
+    }
+
+    return { available: false, latency: null, error: lastError || '未获取到有效流媒体响应' };
+  } catch (e: any) {
+    return { available: false, latency: null, error: e?.message || '测活异常' };
+  }
+}
+
+function syncCarouselSources(): { createdCount: number; updatedCount: number; totalCount: number; channelsCount: number; activeProxiesCount: number; totalProxiesCount: number } {
+  let createdCount = 0;
+  let updatedCount = 0;
+  let totalCount = 0;
+
   const allProxies = db.prepare("SELECT * FROM carousel_proxies").all() as any[];
   const carouselChannels = db.prepare("SELECT * FROM carousel_channels").all() as any[];
-  
+  const enabledDiscoveryRules = getDiscoveryRules(false);
+  const enabledPlatforms = new Set(enabledDiscoveryRules.map((r: any) => (r.platform || '').toLowerCase()));
+  const hasDiscoveryRules = (db.prepare('SELECT COUNT(*) as count FROM carousel_discovery_rules').get() as any).count > 0;
+
+  // Make sure '轮播频道' group exists
+  let carouselGroup = groups.find(g => g.name === "轮播频道");
+  if (!carouselGroup) {
+    carouselGroup = {
+      id: "g_carousel",
+      name: "轮播频道"
+    };
+    groups.push(carouselGroup);
+    try {
+      const gExists = db.prepare("SELECT id FROM groups WHERE id = ?").get(carouselGroup.id);
+      if (!gExists) {
+        db.prepare("INSERT INTO groups (id, name) VALUES (?, ?)").run(carouselGroup.id, carouselGroup.name);
+      }
+    } catch (e) {}
+  }
+
+  const processedChannelIds = new Set<string>();
+
   for (const cc of carouselChannels) {
-    let mainChannel = db.prepare("SELECT * FROM channels WHERE id = ?").get(cc.channelId) as any;
-    if (!mainChannel && cc.name) {
-      mainChannel = db.prepare("SELECT * FROM channels WHERE name = ?").get(cc.name) as any;
-      if (mainChannel) { db.prepare("UPDATE carousel_channels SET channelId = ? WHERE id = ?").run(mainChannel.id, cc.id); }
+    if (!cc.name || !cc.platform || !cc.originalId) continue;
+    const plat = (cc.platform || '').toLowerCase();
+    const isPlatformDisabled = hasDiscoveryRules && !enabledPlatforms.has(plat);
+
+    let dbChannel = db.prepare("SELECT * FROM channels WHERE id = ?").get(cc.channelId) as any;
+    if (!dbChannel && cc.name) {
+      dbChannel = db.prepare("SELECT * FROM channels WHERE name = ?").get(cc.name) as any;
+      if (dbChannel) {
+        db.prepare("UPDATE carousel_channels SET channelId = ? WHERE id = ?").run(dbChannel.id, cc.id);
+      }
     }
-    if (!mainChannel) {
-       mainChannel = { id: crypto.randomUUID(), name: cc.name, groupIds: '[]', alias: '[]', logo: '', epgId: '' };
-       db.prepare("INSERT INTO channels (id, name, logo, groupIds, alias, epgId) VALUES (?, ?, ?, ?, ?, ?)").run(
-         mainChannel.id, mainChannel.name, mainChannel.logo, mainChannel.groupIds, mainChannel.alias, mainChannel.epgId
-       );
-       db.prepare("UPDATE carousel_channels SET channelId = ? WHERE id = ?").run(mainChannel.id, cc.id);
+    if (!dbChannel) {
+      const nid = crypto.randomUUID();
+      const defaultGroupIds = JSON.stringify([carouselGroup.id]);
+      dbChannel = { id: nid, name: cc.name, groupIds: defaultGroupIds, alias: '[]', logo: '', epgId: '' };
+      db.prepare("INSERT INTO channels (id, name, logo, groupIds, alias, epgId) VALUES (?, ?, ?, ?, ?, ?)").run(
+        dbChannel.id, dbChannel.name, dbChannel.logo, dbChannel.groupIds, dbChannel.alias, dbChannel.epgId
+      );
+      db.prepare("UPDATE carousel_channels SET channelId = ? WHERE id = ?").run(dbChannel.id, cc.id);
+    } else {
+      try {
+        let gIds = JSON.parse(dbChannel.groupIds || "[]");
+        if (!Array.isArray(gIds) || gIds.length === 0) {
+          gIds = [carouselGroup.id];
+          db.prepare("UPDATE channels SET groupIds = ? WHERE id = ?").run(JSON.stringify(gIds), dbChannel.id);
+        }
+      } catch (e) {}
     }
-    
-    for (const proxy of allProxies.filter(p => p.platform === cc.platform)) {
-      const targetUrl = proxy.urlTemplate.replace('{}', cc.originalId);
-      if (proxy.status === 'active') {
-         const exists = db.prepare("SELECT id FROM sources WHERE channelId = ? AND url = ?").get(mainChannel.id, targetUrl);
-         if (!exists) {
-            db.prepare("INSERT INTO sources (id, channelId, url, province, isp) VALUES (?, ?, ?, ?, ?)").run(
-              crypto.randomUUID(), mainChannel.id, targetUrl, '', ''
-            );
-         }
+
+    processedChannelIds.add(dbChannel.id);
+
+    const matchingProxies = allProxies.filter(p => (p.platform || '').toLowerCase() === plat);
+
+    for (const proxy of matchingProxies) {
+      const targetUrl = proxy.urlTemplate.replace(/\{\s*(?:id|roomid|channelid|cid|originalid)?\s*\}/gi, cc.originalId);
+      const isBlocked = isPlatformDisabled || isUrlBlockedByDisabledRules(proxy.urlTemplate, proxy.platform);
+      
+      if (proxy.status === 'active' && !isBlocked) {
+        const exists = db.prepare("SELECT id FROM sources WHERE channelId = ? AND url = ?").get(dbChannel.id, targetUrl);
+        if (!exists) {
+          db.prepare("INSERT INTO sources (id, channelId, url, province, isp, status) VALUES (?, ?, ?, ?, ?, ?)").run(
+            crypto.randomUUID(), dbChannel.id, targetUrl, '', '', 'active'
+          );
+          createdCount++;
+        }
+        totalCount++;
       } else {
-         db.prepare("DELETE FROM sources WHERE channelId = ? AND url = ?").run(mainChannel.id, targetUrl);
+        // Remove from SQLite sources
+        db.prepare("DELETE FROM sources WHERE channelId = ? AND url = ?").run(dbChannel.id, targetUrl);
       }
     }
   }
+
+  // Also migrate any other existing sources in the DB that match registry mapping to the proper channelId
+  const regMap = new Map();
+  for (const r of carouselChannels) {
+    if (r.platform && r.originalId) {
+      regMap.set(`${(r.platform || '').toLowerCase()}_${r.originalId}`, r);
+    }
+  }
+
+  const allSources = db.prepare(`
+    SELECT s.* 
+    FROM sources s 
+    LEFT JOIN channels c ON s.channelId = c.id 
+    WHERE (s.isolated = 0 OR s.isolated IS NULL) 
+      AND (c.isolated = 0 OR c.isolated IS NULL)
+  `).all() as any[];
+
+  for (const source of allSources) {
+    if (!source.url) continue;
+    const parsed = parseCarouselUrl(source.url);
+    if (parsed.platform && parsed.originalId) {
+      const key = `${(parsed.platform || '').toLowerCase()}_${parsed.originalId}`;
+      const registry = regMap.get(key);
+      if (registry) {
+        let targetChannel = db.prepare('SELECT * FROM channels WHERE id = ?').get(registry.channelId) as any;
+        if (!targetChannel && registry.name) {
+          targetChannel = db.prepare('SELECT * FROM channels WHERE name = ?').get(registry.name) as any;
+        }
+        if (targetChannel && source.channelId !== targetChannel.id) {
+          db.prepare('UPDATE sources SET channelId = ? WHERE id = ?').run(targetChannel.id, source.id);
+          updatedCount++;
+        }
+      }
+    }
+  }
+
+  // Cleanup empty channels (excluding registered channels)
+  db.exec("DELETE FROM channels WHERE id NOT IN (SELECT DISTINCT channelId FROM sources) AND id NOT IN (SELECT DISTINCT channelId FROM carousel_channels)");
+
+  // Reload memory state directly from SQLite
+  loadData();
+  saveDataSync();
+
+  const activeProxiesCount = allProxies.filter(p => p.status === 'active' && !isUrlBlockedByDisabledRules(p.urlTemplate, p.platform)).length;
+
+  return {
+    createdCount,
+    updatedCount,
+    totalCount,
+    channelsCount: processedChannelIds.size,
+    activeProxiesCount,
+    totalProxiesCount: allProxies.length
+  };
 }
 
 function matchesRuleKeyword(url: string, keyword: string, platform?: string): boolean {
   if (!url || !keyword) return false;
   
-  // Exclude official miguvideo domain for migu platform/rules
-  if (platform === "migu" || keyword.includes("migu")) {
-    if (url.toLowerCase().includes("miguvideo")) {
-      return false;
-    }
+  // Exclude all URLs matched by disabled discovery rules
+  if (isUrlBlockedByDisabledRules(url, platform)) {
+    return false;
   }
 
   if (keyword.startsWith("regex:") || keyword.includes("\\d") || keyword.includes(".*") || keyword.includes("[") || keyword.includes("^") || keyword.includes("$")) {
@@ -656,11 +1096,16 @@ function matchesRuleKeyword(url: string, keyword: string, platform?: string): bo
   return url.includes(keyword);
 }
 
-function parseCarouselUrl(url) {
-  let platform = null;
-  let originalId = null;
-  
-  const rules = typeof getDiscoveryRules === 'function' ? getDiscoveryRules() : [];
+function extractCarouselPlatformAndId(url: string): { platform: string | null; originalId: string | null; template: string | null } {
+  if (!url || typeof url !== 'string') return { platform: null, originalId: null, template: null };
+
+  // Exclude all URLs matched by disabled discovery rules
+  if (isUrlBlockedByDisabledRules(url)) {
+    return { platform: null, originalId: null, template: null };
+  }
+
+  let platform: string | null = null;
+  const rules = typeof getDiscoveryRules === 'function' ? getDiscoveryRules(false) : [];
   for (const rule of rules) {
     if (matchesRuleKeyword(url, rule.keyword, rule.platform)) {
       platform = rule.platform;
@@ -668,63 +1113,169 @@ function parseCarouselUrl(url) {
     }
   }
 
-  if (platform) {
-    const match1 = url.match(/[?&]id=([a-zA-Z0-9_]+)/i);
-    const match2 = url.match(/\/([a-zA-Z0-9_]+)(?:\.flv|\.m3u8)?(?:\?.*)?\/?$/i);
-    if (match1) originalId = match1[1];
-    else if (match2) originalId = match2[1];
+  // Heuristic fallbacks if no custom rule matched (do not include IPTV as it belongs to general TV streams)
+  if (!platform) {
+    if (/[?&/](?:migu|mg)[_./?]/i.test(url) || /\/migu\b/i.test(url) || /migu\.php/i.test(url)) {
+      platform = "migu";
+    } else if (/[?&/](?:yy)[_./?]/i.test(url) || /yy\.php/i.test(url)) {
+      platform = "yy";
+    } else if (/[?&/](?:douyu)[_./?]/i.test(url) || /douyu\.php/i.test(url)) {
+      platform = "douyu";
+    } else if (/[?&/](?:huya)[_./?]/i.test(url) || /huya\.php/i.test(url)) {
+      platform = "huya";
+    } else if (/[?&/](?:bilibili|bili)[_./?]/i.test(url) || /bilibili\.php/i.test(url)) {
+      platform = "bilibili";
+    } else if (/[?&/](?:kuaishou|ks)[_./?]/i.test(url) || /kuaishou\.php/i.test(url)) {
+      platform = "kuaishou";
+    } else if (/[?&/](?:douyin|dyin)[_./?]/i.test(url) || /douyin\.php/i.test(url)) {
+      platform = "douyin";
+    } else if (/[?&/](?:cntv)[_./?]/i.test(url) || /cntv\.php/i.test(url)) {
+      platform = "cntv";
+    }
+  }
 
-    // Correction rule: Migu live channel IDs are 8-10 digit numbers (e.g. 631780532).
-    // CCTV/CGTN identifiers (like cctv1, cctv2) belong to CNTV platform.
-    if (platform === 'migu' && originalId) {
+  if (!platform) return { platform: null, originalId: null, template: null };
+
+  let originalId: string | null = null;
+  let template: string | null = null;
+
+  if (platform === 'migu') {
+    // 1. Query parameter ?id=631780532
+    const qMatch = url.match(/[?&](?:id|cid|rid|channelId|roomId)=(\d{6,12})/i);
+    if (qMatch) {
+      originalId = qMatch[1];
+      template = url.replace(new RegExp(`([?&](?:id|cid|rid|channelId|roomId)=)${originalId}`, 'i'), '$1{}');
+    }
+
+    // 2. Path matching with /migu/ or /mg/: e.g. /migu/631780532/1.m3u8, /migu/631780532.m3u8, /migu/631780532
+    if (!originalId) {
+      const pathMatch = url.match(/\/(?:migu|mg|migu_live)\/(\d{6,12})(?:(?:\/|\.m3u8|\.flv)[^?#]*)?(?:\?.*)?$/i);
+      if (pathMatch) {
+        originalId = pathMatch[1];
+        template = url.replace(new RegExp(`(/+(?:migu|mg|migu_live)/+)${originalId}`, 'i'), '$1{}');
+      }
+    }
+
+    // 3. Port-level proxy: http://ip:3566/631780532
+    if (!originalId) {
+      const rootMatch = url.match(/:\d+\/+(6\d{7,9})(?:(?:\/|\.m3u8|\.flv)[^?#]*)?(?:\?.*)?$/i);
+      if (rootMatch) {
+        originalId = rootMatch[1];
+        template = url.replace(new RegExp(`(:\\d+/+)${originalId}`, 'i'), '$1{}');
+      }
+    }
+
+    // 4. Fallback numeric id
+    if (!originalId) {
+      const numMatch = url.match(/\b(6\d{7,9})\b/);
+      if (numMatch) {
+        originalId = numMatch[1];
+        template = url.replace(originalId, '{}');
+      }
+    }
+
+    if (originalId) {
       if (/^cctv|^cgtn/i.test(originalId)) {
         platform = 'cntv';
-      } else if (!/^\d+$/.test(originalId)) {
+      } else if (!/^\d{6,12}$/.test(originalId)) {
         platform = null;
         originalId = null;
+        template = null;
+      }
+    } else {
+      platform = null;
+    }
+  } else {
+    // Other platforms
+    const match1 = url.match(/[?&](?:id|cid|rid|channelId|roomId)=([a-zA-Z0-9_-]+)/i);
+    if (match1) {
+      originalId = match1[1];
+      template = url.replace(new RegExp(`([?&](?:id|cid|rid|channelId|roomId)=)${originalId}`, 'i'), '$1{}');
+    }
+
+    if (!originalId) {
+      const match2 = url.match(/\/(?:yy|douyu|huya|bilibili|bili|kuaishou|ks|douyin|cntv)\/([a-zA-Z0-9_-]+)(?:(?:\/|\.m3u8|\.flv)[^?#]*)?(?:\?.*)?$/i);
+      if (match2) {
+        originalId = match2[1];
+        template = url.replace(new RegExp(`(/+(?:yy|douyu|huya|bilibili|bili|kuaishou|ks|douyin|cntv)/+)${originalId}`, 'i'), '$1{}');
+      }
+    }
+
+    if (!originalId) {
+      const match3 = url.match(/\/([a-zA-Z0-9_-]+)(?:\.flv|\.m3u8)?(?:\?.*)?\/?$/i);
+      if (match3 && match3[1] && !/^(?:index|live|playlist|video|chunk|stream|stream\d+|1|\d)$/i.test(match3[1])) {
+        originalId = match3[1];
+        template = url.replace(new RegExp(`(/+)${originalId}(?=[/.?#]|$)`, 'i'), '$1{}');
       }
     }
   }
+
+  if (template && !template.includes('{}')) {
+    template = null;
+  }
+
+  return { platform, originalId, template };
+}
+
+function parseCarouselUrl(url: string) {
+  const { platform, originalId } = extractCarouselPlatformAndId(url);
   return { platform, originalId };
 }
 
-function detectAndRegisterCarouselProxy(url) {
+function detectAndRegisterCarouselProxy(url: string) {
   try {
-    let platform = null;
-    let channelId = null;
-    let template = null;
+    if (!url || typeof url !== 'string') return;
+    if (isUrlBlockedByDisabledRules(url)) return;
+    const { platform, template } = extractCarouselPlatformAndId(url);
 
-    const rules = typeof getDiscoveryRules === 'function' ? getDiscoveryRules() : [];
-    for (const rule of rules) {
-      if (matchesRuleKeyword(url, rule.keyword, rule.platform)) {
-        platform = rule.platform;
-        break;
-      }
-    }
+    if (platform && template && template.includes('{}') && !isUrlBlockedByDisabledRules(template, platform)) {
+      // Check if user has explicitly deleted this proxy template
+      try {
+        const isDeleted = db.prepare('SELECT 1 FROM deleted_carousel_proxies WHERE urlTemplate = ?').get(template);
+        if (isDeleted) return;
+      } catch (e) {}
 
-    if (platform) {
-      // Try to extract ID
-    const match1 = url.match(/[?&]id=([a-zA-Z0-9_]+)/i);
-    const match2 = url.match(/\/([a-zA-Z0-9_]+)(?:\.flv|\.m3u8)?(?:\?.*)?\/?$/i);
-      
-      if (match1) {
-        channelId = match1[1];
-        template = url.replace('id=' + channelId, 'id={}');
-      } else if (match2) {
-        channelId = match2[1];
-        template = url.replace('/' + channelId, '/{}');
-      }
-
-      if (template && channelId && channelId.length > 2) {
-        // Check if template exists
-        const exists = db.prepare('SELECT id FROM carousel_proxies WHERE urlTemplate = ?').get(template);
-        if (!exists) {
-          db.prepare('INSERT INTO carousel_proxies (id, platform, urlTemplate, status) VALUES (?, ?, ?, ?)').run(crypto.randomUUID(), platform, template, 'active');
-        }
+      const exists = db.prepare('SELECT id FROM carousel_proxies WHERE urlTemplate = ?').get(template);
+      if (!exists) {
+        db.prepare('INSERT INTO carousel_proxies (id, platform, urlTemplate, status) VALUES (?, ?, ?, ?)').run(
+          crypto.randomUUID(),
+          platform,
+          template,
+          'active'
+        );
       }
     }
   } catch (e) {
     console.error('Error detecting carousel proxy:', e);
+  }
+}
+
+function scanAndRegisterAllCarouselProxies(): number {
+  try {
+    cleanupBlockedCarouselProxies();
+    let addedCount = 0;
+    // Exclude isolated sources and sources belonging to isolated channels
+    const allSources = db.prepare(`
+      SELECT s.url 
+      FROM sources s 
+      LEFT JOIN channels c ON s.channelId = c.id 
+      WHERE (s.isolated = 0 OR s.isolated IS NULL) 
+        AND (c.isolated = 0 OR c.isolated IS NULL)
+    `).all() as any[];
+    for (const row of allSources) {
+      if (row.url && !isUrlBlockedByDisabledRules(row.url)) {
+        const prevCount = (db.prepare('SELECT COUNT(*) as count FROM carousel_proxies').get() as any).count;
+        detectAndRegisterCarouselProxy(row.url);
+        const newCount = (db.prepare('SELECT COUNT(*) as count FROM carousel_proxies').get() as any).count;
+        if (newCount > prevCount) {
+          addedCount += (newCount - prevCount);
+        }
+      }
+    }
+    return addedCount;
+  } catch (e) {
+    console.error('Error scanning carousel proxies from sources:', e);
+    return 0;
   }
 }
 
@@ -1897,12 +2448,14 @@ function parseResolution(url: string, textOrHeader?: string): string | undefined
 }
 
 // Stream Resolution probe using ffprobe
-async function probeStreamResolutionWithFfprobe(url: string, timeoutMs = 2500): Promise<string | undefined> {
+async function probeStreamResolutionWithFfprobe(url: string, timeoutMs = 1000): Promise<string | undefined> {
   if (isPrivateOrIntranetUrl(url)) return undefined;
 
   try {
     const { stdout } = await execFileAsync("ffprobe", [
       "-v", "error",
+      "-probesize", "500000",
+      "-analyzeduration", "500000",
       "-rw_timeout", `${timeoutMs * 1000}`,
       "-timeout", `${timeoutMs * 1000}`,
       "-select_streams", "v:0",
@@ -1910,7 +2463,7 @@ async function probeStreamResolutionWithFfprobe(url: string, timeoutMs = 2500): 
       "-of", "json",
       "-user_agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
       url
-    ], { timeout: timeoutMs + 500 });
+    ], { timeout: timeoutMs + 300 });
 
     const data = JSON.parse(stdout);
     if (data && data.streams && data.streams.length > 0) {
@@ -1980,7 +2533,7 @@ async function testSingleUrl(url: string, timeoutMs: number = 3000): Promise<{ s
         return { status: "active", latency: 60, resolution: parseResolution(url) };
       }
 
-      const socketTimeout = Math.max(timeoutMs, 6000);
+      const socketTimeout = Math.max(timeoutMs, 4000);
       return new Promise((resolve) => {
         const socket = net.connect({
           host,
@@ -1994,8 +2547,9 @@ async function testSingleUrl(url: string, timeoutMs: number = 3000): Promise<{ s
             }
           } catch (e) {}
           socket.destroy();
-          const probedRes = await probeStreamResolutionWithFfprobe(url, 2500).catch(() => undefined);
-          resolve({ status: "active", latency, resolution: probedRes || parseResolution(url) });
+          const fastRes = parseResolution(url);
+          const probedRes = fastRes ? fastRes : await probeStreamResolutionWithFfprobe(url, 1000).catch(() => undefined);
+          resolve({ status: "active", latency, resolution: probedRes || fastRes });
         });
         socket.on("error", () => {
           socket.destroy();
@@ -2038,36 +2592,33 @@ async function testSingleUrl(url: string, timeoutMs: number = 3000): Promise<{ s
     
     if (response.ok) {
       const latency = Date.now() - startTime;
-      let resolution: string | undefined = undefined;
+      let resolution: string | undefined = parseResolution(url);
 
       try {
         const contentType = response.headers.get("content-type") || "";
         if (contentType.includes("mpegurl") || urlLower.endsWith(".m3u8") || contentType.includes("text")) {
           const text = await response.text();
-          resolution = parseResolution(url, text);
+          const parsed = parseResolution(url, text);
+          if (parsed) resolution = parsed;
         } else if (response.body) {
           const reader = response.body.getReader();
           const { value } = await reader.read();
           if (value && value.length > 0) {
             const buf = Buffer.from(value);
-            resolution = parseH264Sps(buf) || parseResolution(url);
+            const spsRes = parseH264Sps(buf);
+            if (spsRes) resolution = spsRes;
           }
           try { await reader.cancel(); } catch (_) {}
         }
       } catch (err) {
-        resolution = parseResolution(url);
       }
 
-      // Execute probe instruction with ffprobe if fast parsing didn't find exact stream dimensions
-      if (!resolution || resolution === parseResolution(url)) {
-        const probedRes = await probeStreamResolutionWithFfprobe(url, 2500).catch(() => undefined);
+      // ONLY execute ffprobe if fast parsing (URL regex / M3U8 tags / H264 SPS) produced NO resolution at all
+      if (!resolution) {
+        const probedRes = await probeStreamResolutionWithFfprobe(url, 1000).catch(() => undefined);
         if (probedRes) {
           resolution = probedRes;
         }
-      }
-
-      if (!resolution) {
-        resolution = parseResolution(url);
       }
 
       return { status: "active", latency, resolution };
@@ -3129,8 +3680,10 @@ async function performSync(config: SyncConfig, force = false) {
                 status: "unknown",
               });
               importedSourcesCount++;
+              detectAndRegisterCarouselProxy(url);
             } else if (config.isp) {
               existingSrc.isp = config.isp;
+              detectAndRegisterCarouselProxy(url);
             }
           }
         }
@@ -4275,6 +4828,7 @@ app.get("/api/channels", async (req, res) => {
     };
 
     channel.sources.push(newSource);
+    detectAndRegisterCarouselProxy(url);
     saveData();
     res.status(201).json(newSource);
   });
@@ -4293,7 +4847,10 @@ app.get("/api/channels", async (req, res) => {
       return res.status(404).json({ error: "未找到直播源" });
     }
 
-    if (url) source.url = url;
+    if (url) {
+      source.url = url;
+      detectAndRegisterCarouselProxy(url);
+    }
     if (province) source.province = province;
     if (isp) source.isp = isp;
     if (status) source.status = status;
@@ -5212,7 +5769,7 @@ app.get("/api/channels", async (req, res) => {
   
   app.get("/api/carousel-discovery-rules", (req, res) => {
     try {
-      res.json(getDiscoveryRules());
+      res.json(getDiscoveryRules(true));
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }
@@ -5223,7 +5780,7 @@ app.get("/api/channels", async (req, res) => {
       const { mode } = req.body || {};
       const overwrite = mode === "reset";
       const added = seedKnownRules(overwrite);
-      const totalRules = getDiscoveryRules();
+      const totalRules = getDiscoveryRules(true);
       res.json({
         success: true,
         addedCount: added,
@@ -5239,14 +5796,59 @@ app.get("/api/channels", async (req, res) => {
   });
 
   app.post("/api/carousel-discovery-rules", (req, res) => {
-    const { platform, keyword } = req.body;
+    const { platform, keyword, enabled = 1 } = req.body;
     if (!platform || !keyword) return res.status(400).json({ error: "Missing fields" });
     try {
       const id = crypto.randomUUID();
-      db.prepare('INSERT INTO carousel_discovery_rules (id, platform, keyword) VALUES (?, ?, ?)').run(id, platform, keyword);
+      db.prepare('INSERT INTO carousel_discovery_rules (id, platform, keyword, enabled) VALUES (?, ?, ?, ?)').run(
+        id,
+        platform.trim().toLowerCase(),
+        keyword.trim(),
+        enabled !== undefined ? (enabled ? 1 : 0) : 1
+      );
       discoveryRulesCache = null; // Invalidate cache
-      res.json({ id, platform, keyword });
-    } catch (e) {
+      res.json({ id, platform: platform.trim().toLowerCase(), keyword: keyword.trim(), enabled: enabled ? 1 : 0 });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.put("/api/carousel-discovery-rules/:id", (req, res) => {
+    const { id } = req.params;
+    const { platform, keyword, enabled } = req.body;
+    try {
+      const current = db.prepare('SELECT * FROM carousel_discovery_rules WHERE id = ?').get(id) as any;
+      if (!current) {
+        return res.status(404).json({ error: "未找到该发现规则" });
+      }
+      db.prepare(`
+        UPDATE carousel_discovery_rules
+        SET platform = ?, keyword = ?, enabled = ?
+        WHERE id = ?
+      `).run(
+        platform !== undefined ? platform.trim().toLowerCase() : current.platform,
+        keyword !== undefined ? keyword.trim() : current.keyword,
+        enabled !== undefined ? (enabled ? 1 : 0) : (current.enabled ?? 1),
+        id
+      );
+      discoveryRulesCache = null;
+      res.json({ success: true });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/carousel-discovery-rules/batch-delete", (req, res) => {
+    const { ids } = req.body;
+    if (!Array.isArray(ids) || ids.length === 0) {
+      return res.status(400).json({ error: "未选择要删除的规则" });
+    }
+    try {
+      const placeholders = ids.map(() => '?').join(',');
+      db.prepare(`DELETE FROM carousel_discovery_rules WHERE id IN (${placeholders})`).run(...ids);
+      discoveryRulesCache = null;
+      res.json({ success: true, count: ids.length });
+    } catch (e: any) {
       res.status(500).json({ error: e.message });
     }
   });
@@ -5256,7 +5858,130 @@ app.get("/api/channels", async (req, res) => {
       db.prepare('DELETE FROM carousel_discovery_rules WHERE id = ?').run(req.params.id);
       discoveryRulesCache = null; // Invalidate cache
       res.json({ success: true });
-    } catch (e) {
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // --- Disabled Discovery Rules API (禁用代理发现规则 / 黑名单) ---
+
+  app.get("/api/carousel-disabled-rules", (req, res) => {
+    try {
+      res.json(getDisabledRules());
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/carousel-disabled-rules", (req, res) => {
+    const { pattern, type = 'contains', platform = '', description = '', enabled = 1 } = req.body;
+    if (!pattern || !pattern.trim()) {
+      return res.status(400).json({ error: "规则匹配内容为必填项" });
+    }
+    try {
+      const id = crypto.randomUUID();
+      db.prepare(`
+        INSERT INTO carousel_disabled_rules (id, pattern, type, platform, description, enabled)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `).run(id, pattern.trim(), type || 'contains', platform || '', description || '', enabled !== undefined ? (enabled ? 1 : 0) : 1);
+      disabledRulesCache = null;
+      cleanupBlockedCarouselProxies();
+      res.json({ id, pattern: pattern.trim(), type, platform, description, enabled: enabled ? 1 : 0 });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.put("/api/carousel-disabled-rules/:id", (req, res) => {
+    const { id } = req.params;
+    const { pattern, type, platform, description, enabled } = req.body;
+    try {
+      const current = db.prepare('SELECT * FROM carousel_disabled_rules WHERE id = ?').get(id) as any;
+      if (!current) {
+        return res.status(404).json({ error: "未找到该禁用规则" });
+      }
+      db.prepare(`
+        UPDATE carousel_disabled_rules
+        SET pattern = ?, type = ?, platform = ?, description = ?, enabled = ?
+        WHERE id = ?
+      `).run(
+        pattern !== undefined ? pattern.trim() : current.pattern,
+        type !== undefined ? type : current.type,
+        platform !== undefined ? platform : current.platform,
+        description !== undefined ? description : current.description,
+        enabled !== undefined ? (enabled ? 1 : 0) : current.enabled,
+        id
+      );
+      disabledRulesCache = null;
+      cleanupBlockedCarouselProxies();
+      res.json({ success: true });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.delete("/api/carousel-disabled-rules/:id", (req, res) => {
+    try {
+      db.prepare('DELETE FROM carousel_disabled_rules WHERE id = ?').run(req.params.id);
+      disabledRulesCache = null;
+      res.json({ success: true });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/carousel-disabled-rules/preset", (req, res) => {
+    try {
+      const { mode } = req.body || {};
+      const overwrite = mode === "reset";
+      const added = seedDisabledRules(overwrite);
+      const rules = getDisabledRules();
+      const purged = cleanupBlockedCarouselProxies();
+      res.json({
+        success: true,
+        addedCount: added,
+        purgedCount: purged,
+        total: rules.length,
+        rules,
+        message: overwrite
+          ? `重置并预置禁用发现规则成功！共加载 ${rules.length} 条内置忽略规则，并清理了 ${purged} 个违规代理模板。`
+          : `内置忽略规则增量补充成功！补充新增 ${added} 条规则，当前共 ${rules.length} 条规则。`
+      });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/carousel-disabled-rules/batch", (req, res) => {
+    const { lines, type = 'contains', platform = '', description = '' } = req.body;
+    if (!lines || typeof lines !== 'string') {
+      return res.status(400).json({ error: "请提供多行规则文本" });
+    }
+    try {
+      const rawPatterns = lines.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+      let added = 0;
+      const stmt = db.prepare(`
+        INSERT OR IGNORE INTO carousel_disabled_rules (id, pattern, type, platform, description, enabled)
+        VALUES (?, ?, ?, ?, ?, 1)
+      `);
+      for (const pat of rawPatterns) {
+        const info = stmt.run(crypto.randomUUID(), pat, type || 'contains', platform || '', description || '');
+        if (info.changes > 0) added++;
+      }
+      disabledRulesCache = null;
+      const purged = cleanupBlockedCarouselProxies();
+      res.json({ success: true, addedCount: added, purgedCount: purged, total: getDisabledRules().length });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/carousel-disabled-rules/apply-cleanup", (req, res) => {
+    try {
+      const purged = cleanupBlockedCarouselProxies();
+      const remaining = (db.prepare('SELECT COUNT(*) as count FROM carousel_proxies').get() as any).count;
+      res.json({ success: true, purgedCount: purged, remainingCount: remaining });
+    } catch (e: any) {
       res.status(500).json({ error: e.message });
     }
   });
@@ -5277,8 +6002,14 @@ app.get("/api/channels", async (req, res) => {
     if (!name || !platform || !originalId) return res.status(400).json({ error: "Missing required fields" });
     const id = crypto.randomUUID();
     try {
-      let ch = db.prepare('SELECT id FROM channels WHERE id = ?').get(req.body.channelId); if(!ch && name) { const nid = crypto.randomUUID(); db.prepare('INSERT INTO channels (id, name, logo, groupIds, alias, epgId) VALUES (?, ?, ?, ?, ?, ?)').run(nid, name, '', '[]', '[]', ''); req.body.channelId = nid; }
-db.prepare('INSERT INTO carousel_channels (id, channelId, name, platform, originalId) VALUES (?, ?, ?, ?, ?)').run(id, req.body.channelId || '', name || '', platform, originalId);
+      let ch = db.prepare('SELECT id FROM channels WHERE id = ?').get(req.body.channelId);
+      if (!ch && name) {
+        const nid = crypto.randomUUID();
+        db.prepare('INSERT INTO channels (id, name, logo, groupIds, alias, epgId) VALUES (?, ?, ?, ?, ?, ?)').run(nid, name, '', '[]', '[]', '');
+        req.body.channelId = nid;
+      }
+      db.prepare('INSERT INTO carousel_channels (id, channelId, name, platform, originalId) VALUES (?, ?, ?, ?, ?)').run(id, req.body.channelId || '', name || '', platform, originalId);
+      syncCarouselSources();
       res.json({ id, name, platform, originalId });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
@@ -5290,6 +6021,7 @@ db.prepare('INSERT INTO carousel_channels (id, channelId, name, platform, origin
     const { name, platform, originalId } = req.body;
     try {
       db.prepare('UPDATE carousel_channels SET name = ?, channelId = ?, platform = ?, originalId = ? WHERE id = ?').run(name || '', req.body.channelId || '', platform, originalId, id);
+      syncCarouselSources();
       res.json({ success: true });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
@@ -5300,20 +6032,44 @@ db.prepare('INSERT INTO carousel_channels (id, channelId, name, platform, origin
     const { id } = req.params;
     try {
       db.prepare('DELETE FROM carousel_channels WHERE id = ?').run(id);
+      syncCarouselSources();
       res.json({ success: true });
-    } catch (e) {
+    } catch (e: any) {
       res.status(500).json({ error: e.message });
     }
   });
 
   app.get("/api/carousel-channels-unregistered", (req, res) => {
     try {
-      const allSources = db.prepare('SELECT s.url, c.name as channelName FROM sources s JOIN channels c ON s.channelId = c.id').all() as any[];
+      // Exclude isolated sources and sources belonging to isolated channels
+      const allSources = db.prepare(`
+        SELECT s.url, c.name as channelName 
+        FROM sources s 
+        JOIN channels c ON s.channelId = c.id 
+        WHERE (s.isolated = 0 OR s.isolated IS NULL) 
+          AND (c.isolated = 0 OR c.isolated IS NULL)
+      `).all() as any[];
       const existingChannels = db.prepare('SELECT platform, originalId FROM carousel_channels').all() as any[];
       const existingSet = new Set(existingChannels.map((c: any) => `${c.platform}_${c.originalId}`));
 
+      // Also gather from in-memory channels (skipping isolated)
+      const inMemorySources: { url: string; channelName: string }[] = [];
+      for (const ch of channels) {
+        if (ch.isolated) continue;
+        if (ch.sources) {
+          for (const s of ch.sources) {
+            if (s.isolated) continue;
+            if (s.url) {
+              inMemorySources.push({ url: s.url, channelName: ch.name });
+            }
+          }
+        }
+      }
+      const combinedSources = allSources.length > 0 ? allSources : inMemorySources;
+
       const map = new Map();
-      for (const row of allSources) {
+      for (const row of combinedSources) {
+        if (!row.url || isUrlBlockedByDisabledRules(row.url)) continue;
         const parsed = parseCarouselUrl(row.url);
         if (parsed.platform && parsed.originalId) {
           const key = `${parsed.platform}_${parsed.originalId}`;
@@ -5344,14 +6100,20 @@ db.prepare('INSERT INTO carousel_channels (id, channelId, name, platform, origin
         for (const item of itemsToInsert) {
            const exists = db.prepare('SELECT id FROM carousel_channels WHERE platform = ? AND originalId = ?').get(item.platform, item.originalId);
            if (!exists) {
-             let ch = db.prepare('SELECT id FROM channels WHERE name = ?').get(item.name) as any; if(!ch) { const nid = crypto.randomUUID(); db.prepare('INSERT INTO channels (id, name, logo, groupIds, alias, epgId) VALUES (?, ?, ?, ?, ?, ?)').run(nid, item.name, '', '[]', '[]', ''); ch = { id: nid }; }
-stmt.run(crypto.randomUUID(), ch.id, item.name, item.platform, item.originalId);
+             let ch = db.prepare('SELECT id FROM channels WHERE name = ?').get(item.name) as any;
+             if (!ch) {
+               const nid = crypto.randomUUID();
+               db.prepare('INSERT INTO channels (id, name, logo, groupIds, alias, epgId) VALUES (?, ?, ?, ?, ?, ?)').run(nid, item.name, '', '[]', '[]', '');
+               ch = { id: nid };
+             }
+             stmt.run(crypto.randomUUID(), ch.id, item.name, item.platform, item.originalId);
            }
         }
       });
       insertMany(items);
+      syncCarouselSources();
       res.json({ success: true });
-    } catch(e) {
+    } catch (e: any) {
       res.status(500).json({ error: e.message });
     }
   });
@@ -5365,49 +6127,54 @@ stmt.run(crypto.randomUUID(), ch.id, item.name, item.platform, item.originalId);
         for (const id of idsToDelete) stmt.run(id);
       });
       deleteMany(ids);
+      syncCarouselSources();
       res.json({ success: true });
-    } catch(e) {
+    } catch (e: any) {
       res.status(500).json({ error: e.message });
     }
   });
 
   app.post("/api/carousel-channels-apply", (req, res) => {
     try {
-      const registries = db.prepare('SELECT * FROM carousel_channels').all() as any[];
-      const allSources = db.prepare('SELECT * FROM sources').all() as any[];
-      let updatedCount = 0;
-      
-      const regMap = new Map();
-      for (const r of registries) regMap.set(`${r.platform}_${r.originalId}`, r);
+      // 1. Scan and register any proxy templates discovered in current sources if any
+      try {
+        scanAndRegisterAllCarouselProxies();
+      } catch (e) {}
 
-      for (const source of allSources) {
-        const parsed = parseCarouselUrl(source.url);
-        if (parsed.platform && parsed.originalId) {
-          const key = `${parsed.platform}_${parsed.originalId}`;
-          const registry = regMap.get(key);
-          if (registry) {
-            let targetChannel = db.prepare('SELECT * FROM channels WHERE name = ?').get(registry.name) as any;
-            if (!targetChannel) {
-              targetChannel = { id: crypto.randomUUID(), name: registry.name, groupIds: '[]', alias: '[]', logo: '', epgId: '' };
-              db.prepare('INSERT INTO channels (id, name, logo, groupIds, alias, epgId) VALUES (?, ?, ?, ?, ?, ?)').run(
-                targetChannel.id, targetChannel.name, targetChannel.logo, targetChannel.groupIds, targetChannel.alias, targetChannel.epgId
-              );
-            }
-            if (source.channelId !== targetChannel.id) {
-              db.prepare('UPDATE sources SET channelId = ? WHERE id = ?').run(targetChannel.id, source.id);
-              updatedCount++;
-            }
-          }
-        }
+      // 2. Perform carousel sources synchronization
+      const stats = syncCarouselSources();
+
+      const registriesCount = (db.prepare('SELECT COUNT(*) as count FROM carousel_channels').get() as any).count;
+      const proxiesCount = (db.prepare('SELECT COUNT(*) as count FROM carousel_proxies').get() as any).count;
+      const activeProxiesCount = (db.prepare("SELECT COUNT(*) as count FROM carousel_proxies WHERE status = 'active'").get() as any).count;
+
+      let message = "";
+      if (stats.createdCount > 0 || stats.updatedCount > 0) {
+        message = `已成功同步生成 ${stats.createdCount} 个新直播源，归类 ${stats.updatedCount} 条现有源（当前共 ${stats.totalCount} 个有效轮播源，覆盖 ${stats.channelsCount} 个频道）！`;
+      } else if (stats.totalCount > 0) {
+        message = `所有 ${stats.channelsCount} 个轮播频道的直播源（共 ${stats.totalCount} 条线路）均已处于最新同步状态，无需重复生成。`;
+      } else if (activeProxiesCount === 0) {
+        message = `已同步 ${registriesCount} 个频道映射，但系统当前没有启用的轮播代理模板（可用代理: 0/${proxiesCount}）。请先前往【轮播代理】配置并启用可用代理，或点击【从现有源自动提取】！`;
+      } else if (registriesCount === 0) {
+        message = `当前映射列表为空，请先在【未识别项发现】中添加频道映射或手动添加映射！`;
+      } else {
+        message = `已同步 ${registriesCount} 个频道映射，未匹配到对应平台的可用代理模板。`;
       }
 
-      // Cleanup empty channels
-      db.exec('DELETE FROM channels WHERE id NOT IN (SELECT DISTINCT channelId FROM sources)');
-
-      res.json({ success: true, updatedCount });
-    } catch (e) {
-      console.error(e);
-      res.status(500).json({ error: e.message });
+      res.json({
+        success: true,
+        createdSourcesCount: stats.createdCount,
+        updatedCount: stats.updatedCount,
+        totalSourcesCount: stats.totalCount,
+        channelsCount: stats.channelsCount,
+        activeProxiesCount,
+        totalProxiesCount: proxiesCount,
+        registriesCount,
+        message
+      });
+    } catch (e: any) {
+      console.error("[carousel-channels-apply error]", e);
+      res.status(500).json({ error: e.message || "应用生成频道源失败" });
     }
   });
 
@@ -5415,9 +6182,63 @@ stmt.run(crypto.randomUUID(), ch.id, item.name, item.platform, item.originalId);
   
   app.get("/api/carousel-proxies", (req, res) => {
     try {
+      cleanupBlockedCarouselProxies();
+      const proxies = db.prepare('SELECT * FROM carousel_proxies').all() as any[];
+      const enabledRules = getDiscoveryRules(false);
+      const enabledPlatforms = new Set(enabledRules.map((r: any) => (r.platform || '').toLowerCase()));
+      const hasDiscoveryRules = (db.prepare('SELECT COUNT(*) as count FROM carousel_discovery_rules').get() as any).count > 0;
+
+      const annotated = proxies.map((p: any) => {
+        const plat = (p.platform || '').toLowerCase();
+        let isBlocked = isUrlBlockedByDisabledRules(p.urlTemplate, p.platform);
+        let blockedReason = isBlocked ? "命中禁用发现规则 (黑名单)" : "";
+
+        if (!isBlocked && hasDiscoveryRules && !enabledPlatforms.has(plat)) {
+          isBlocked = true;
+          blockedReason = `所属平台 [${plat.toUpperCase()}] 特征发现规则已停用`;
+        }
+
+        return {
+          ...p,
+          isBlocked: Boolean(isBlocked),
+          blockedReason
+        };
+      });
+
+      res.json(annotated);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/carousel-proxies/scan-sources", (req, res) => {
+    try {
+      cleanupBlockedCarouselProxies();
+      let added = 0;
+      // Scan sources in memory (ignoring isolated channels and sources)
+      for (const ch of channels) {
+        if (ch.isolated) continue;
+        if (ch && ch.sources) {
+          for (const s of ch.sources) {
+            if (s.isolated) continue;
+            if (s && s.url && !isUrlBlockedByDisabledRules(s.url)) {
+              const beforeCount = (db.prepare('SELECT COUNT(*) as count FROM carousel_proxies').get() as any).count;
+              detectAndRegisterCarouselProxy(s.url);
+              const afterCount = (db.prepare('SELECT COUNT(*) as count FROM carousel_proxies').get() as any).count;
+              if (afterCount > beforeCount) {
+                added += (afterCount - beforeCount);
+              }
+            }
+          }
+        }
+      }
+      // Scan sources in SQLite if any (ignoring isolated sources and channels)
+      const sqlAdded = scanAndRegisterAllCarouselProxies();
+      added += sqlAdded;
+
       const proxies = db.prepare('SELECT * FROM carousel_proxies').all();
-      res.json(proxies);
-    } catch (e) {
+      res.json({ success: true, count: added, total: proxies.length, proxies });
+    } catch (e: any) {
       res.status(500).json({ error: e.message });
     }
   });
@@ -5429,20 +6250,230 @@ stmt.run(crypto.randomUUID(), ch.id, item.name, item.platform, item.originalId);
     }
     const id = crypto.randomUUID();
     try {
+      // If previously marked as deleted, unmark it
+      try {
+        db.prepare('DELETE FROM deleted_carousel_proxies WHERE urlTemplate = ?').run(urlTemplate);
+      } catch (e) {}
+
       db.prepare('INSERT INTO carousel_proxies (id, platform, urlTemplate, status) VALUES (?, ?, ?, ?)').run(id, platform, urlTemplate, status);
+      if (status === 'active') {
+        syncCarouselSources();
+      }
       res.json({ id, platform, urlTemplate, status });
-    } catch (e) {
+    } catch (e: any) {
       res.status(500).json({ error: e.message });
     }
   });
 
-  app.put("/api/carousel-proxies/:id", (req, res) => {
+  app.put("/api/carousel-proxies/:id", async (req, res) => {
     const { id } = req.params;
-    const { platform, urlTemplate, status } = req.body;
+    const { platform, urlTemplate, status, test } = req.body;
     try {
-      db.prepare('UPDATE carousel_proxies SET platform = ?, urlTemplate = ?, status = ? WHERE id = ?').run(platform, urlTemplate, status, id);
-      res.json({ success: true });
-    } catch (e) {
+      const existing = db.prepare('SELECT * FROM carousel_proxies WHERE id = ?').get(id) as any;
+      if (!existing) {
+        return res.status(404).json({ error: "未找到该代理" });
+      }
+
+      const nextPlatform = platform || existing.platform;
+      const nextUrl = urlTemplate || existing.urlTemplate;
+      const nextStatus = status !== undefined ? status : existing.status;
+
+      if (nextUrl) {
+        try {
+          db.prepare('DELETE FROM deleted_carousel_proxies WHERE urlTemplate = ?').run(nextUrl);
+        } catch (e) {}
+      }
+
+      // If enabling or restoring (status === 'active')
+      if (nextStatus === 'active') {
+        if (test !== false) {
+          const testRes = await testCarouselProxyAvailability({ platform: nextPlatform, urlTemplate: nextUrl });
+          if (!testRes.available) {
+            db.prepare('UPDATE carousel_proxies SET platform = ?, urlTemplate = ?, status = ? WHERE id = ?').run(nextPlatform, nextUrl, 'inactive', id);
+            removeSourcesForProxyTemplates([existing, { platform: nextPlatform, urlTemplate: nextUrl }]);
+            syncCarouselSources();
+            return res.json({
+              success: false,
+              available: false,
+              status: 'inactive',
+              error: `代理测试不可用: ${testRes.error || '连接失败'}，未恢复直播源`
+            });
+          }
+
+          db.prepare('UPDATE carousel_proxies SET platform = ?, urlTemplate = ?, status = ? WHERE id = ?').run(nextPlatform, nextUrl, 'active', id);
+          syncCarouselSources();
+          return res.json({
+            success: true,
+            available: true,
+            status: 'active',
+            latency: testRes.latency,
+            message: `代理测试可用 (${testRes.latency}ms)，已恢复并同步添加直播源`
+          });
+        } else {
+          db.prepare('UPDATE carousel_proxies SET platform = ?, urlTemplate = ?, status = ? WHERE id = ?').run(nextPlatform, nextUrl, 'active', id);
+          syncCarouselSources();
+          return res.json({ success: true, status: 'active', message: '已强制启用并添加对应直播源' });
+        }
+      } else {
+        // Disabling proxy ('inactive' or 'disabled')
+        db.prepare('UPDATE carousel_proxies SET platform = ?, urlTemplate = ?, status = ? WHERE id = ?').run(nextPlatform, nextUrl, 'inactive', id);
+        removeSourcesForProxyTemplates([existing, { platform: nextPlatform, urlTemplate: nextUrl }]);
+        syncCarouselSources();
+        return res.json({ success: true, status: 'inactive', message: '代理已禁用，对应直播源已移除' });
+      }
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // Single proxy toggle status
+  app.post("/api/carousel-proxies/:id/toggle-status", async (req, res) => {
+    const { id } = req.params;
+    const { status, test = true } = req.body;
+    try {
+      const proxy = db.prepare('SELECT * FROM carousel_proxies WHERE id = ?').get(id) as any;
+      if (!proxy) return res.status(404).json({ error: "代理不存在" });
+
+      const targetStatus = status || (proxy.status === 'active' ? 'inactive' : 'active');
+
+      if (targetStatus === 'active') {
+        if (test !== false) {
+          const testRes = await testCarouselProxyAvailability(proxy);
+          if (!testRes.available) {
+            db.prepare('UPDATE carousel_proxies SET status = ? WHERE id = ?').run('inactive', id);
+            removeSourcesForProxyTemplates([proxy]);
+            syncCarouselSources();
+            return res.json({
+              success: false,
+              available: false,
+              status: 'inactive',
+              error: `代理测试不可用: ${testRes.error || '连接失败'}，未恢复直播源`
+            });
+          }
+
+          db.prepare('UPDATE carousel_proxies SET status = ? WHERE id = ?').run('active', id);
+          syncCarouselSources();
+          return res.json({
+            success: true,
+            available: true,
+            status: 'active',
+            latency: testRes.latency,
+            message: `代理测试可用 (${testRes.latency}ms)，已恢复启用并添加对应直播源`
+          });
+        } else {
+          db.prepare('UPDATE carousel_proxies SET status = ? WHERE id = ?').run('active', id);
+          syncCarouselSources();
+          return res.json({ success: true, status: 'active', message: '已启用代理并添加对应直播源' });
+        }
+      } else {
+        // Disabling
+        db.prepare('UPDATE carousel_proxies SET status = ? WHERE id = ?').run('inactive', id);
+        removeSourcesForProxyTemplates([proxy]);
+        syncCarouselSources();
+        return res.json({ success: true, status: 'inactive', message: '代理已禁用，对应直播源已移除' });
+      }
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // Single proxy test availability
+  app.post("/api/carousel-proxies/:id/test", async (req, res) => {
+    const { id } = req.params;
+    try {
+      const proxy = db.prepare('SELECT * FROM carousel_proxies WHERE id = ?').get(id) as any;
+      if (!proxy) return res.status(404).json({ error: "代理不存在" });
+
+      const testRes = await testCarouselProxyAvailability(proxy);
+      if (testRes.available) {
+        db.prepare('UPDATE carousel_proxies SET status = ? WHERE id = ?').run('active', id);
+        syncCarouselSources();
+      } else {
+        db.prepare('UPDATE carousel_proxies SET status = ? WHERE id = ?').run('inactive', id);
+        removeSourcesForProxyTemplates([proxy]);
+        syncCarouselSources();
+      }
+      res.json({
+        success: true,
+        ...testRes,
+        status: testRes.available ? 'active' : 'inactive'
+      });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // Batch toggle status (Batch Enable / Batch Disable)
+  app.post("/api/carousel-proxies/batch-status", async (req, res) => {
+    const { ids, status, test = true } = req.body;
+    if (!Array.isArray(ids) || ids.length === 0) {
+      return res.status(400).json({ error: "Missing ids array" });
+    }
+    if (status !== 'active' && status !== 'inactive' && status !== 'disabled') {
+      return res.status(400).json({ error: "Invalid status value" });
+    }
+
+    try {
+      const placeholders = ids.map(() => '?').join(',');
+      const proxies = db.prepare(`SELECT * FROM carousel_proxies WHERE id IN (${placeholders})`).all(...ids) as any[];
+
+      if (status === 'inactive' || status === 'disabled') {
+        // Batch disable: set status to inactive and remove corresponding live sources
+        db.prepare(`UPDATE carousel_proxies SET status = 'inactive' WHERE id IN (${placeholders})`).run(...ids);
+        removeSourcesForProxyTemplates(proxies);
+        syncCarouselSources();
+        return res.json({
+          success: true,
+          status: 'inactive',
+          count: proxies.length,
+          message: `已批量禁用 ${proxies.length} 个代理，对应直播源已全部移除`
+        });
+      }
+
+      // Batch enable (restore): test availability for each unless test === false
+      if (test === false) {
+        db.prepare(`UPDATE carousel_proxies SET status = 'active' WHERE id IN (${placeholders})`).run(...ids);
+        syncCarouselSources();
+        return res.json({
+          success: true,
+          status: 'active',
+          activatedCount: proxies.length,
+          failedCount: 0,
+          message: `已强制启用选中的 ${proxies.length} 个代理并添加直播源`
+        });
+      }
+
+      const results: any[] = [];
+      let activatedCount = 0;
+      let failedCount = 0;
+
+      await Promise.all(proxies.map(async (proxy) => {
+        const testRes = await testCarouselProxyAvailability(proxy);
+        if (testRes.available) {
+          db.prepare('UPDATE carousel_proxies SET status = ? WHERE id = ?').run('active', proxy.id);
+          activatedCount++;
+          results.push({ id: proxy.id, platform: proxy.platform, available: true, latency: testRes.latency });
+        } else {
+          db.prepare('UPDATE carousel_proxies SET status = ? WHERE id = ?').run('inactive', proxy.id);
+          failedCount++;
+          results.push({ id: proxy.id, platform: proxy.platform, available: false, error: testRes.error });
+        }
+      }));
+
+      // Sync sources (will add for active and remove for inactive)
+      syncCarouselSources();
+
+      return res.json({
+        success: true,
+        activatedCount,
+        failedCount,
+        total: proxies.length,
+        results,
+        message: activatedCount > 0
+          ? `恢复测试完成: ${activatedCount} 个代理可用已恢复并添加直播源` + (failedCount > 0 ? ` (${failedCount} 个不可用保持禁用)` : '')
+          : `选中的 ${failedCount} 个代理测试均不可用，已保持禁用且未添加直播源`
+      });
+    } catch (e: any) {
       res.status(500).json({ error: e.message });
     }
   });
@@ -5450,9 +6481,56 @@ stmt.run(crypto.randomUUID(), ch.id, item.name, item.platform, item.originalId);
   app.delete("/api/carousel-proxies/:id", (req, res) => {
     const { id } = req.params;
     try {
+      const proxy = db.prepare('SELECT id, platform, urlTemplate FROM carousel_proxies WHERE id = ?').get(id) as any;
+      if (proxy && proxy.urlTemplate) {
+        try {
+          db.prepare('INSERT OR REPLACE INTO deleted_carousel_proxies (urlTemplate, deletedAt) VALUES (?, ?)').run(
+            proxy.urlTemplate,
+            new Date().toISOString()
+          );
+        } catch (e) {}
+        // Remove all corresponding live stream sources
+        removeSourcesForProxyTemplates([proxy]);
+      }
       db.prepare('DELETE FROM carousel_proxies WHERE id = ?').run(id);
-      res.json({ success: true });
-    } catch (e) {
+      syncCarouselSources();
+      res.json({ success: true, message: "代理已删除，对应直播源已移除" });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/carousel-proxies/batch-delete", (req, res) => {
+    const { ids } = req.body;
+    if (!Array.isArray(ids) || ids.length === 0) {
+      return res.status(400).json({ error: "Missing ids array" });
+    }
+    try {
+      const placeholders = ids.map(() => '?').join(',');
+      const proxies = db.prepare(`SELECT id, platform, urlTemplate FROM carousel_proxies WHERE id IN (${placeholders})`).all(...ids) as any[];
+      const nowStr = new Date().toISOString();
+      const insertDeleted = db.prepare('INSERT OR REPLACE INTO deleted_carousel_proxies (urlTemplate, deletedAt) VALUES (?, ?)');
+      const deleteStmt = db.prepare('DELETE FROM carousel_proxies WHERE id = ?');
+      
+      const tx = db.transaction((idList: string[]) => {
+        for (const id of idList) {
+          const proxy = proxies.find(p => p.id === id);
+          if (proxy && proxy.urlTemplate) {
+            try {
+              insertDeleted.run(proxy.urlTemplate, nowStr);
+            } catch (e) {}
+          }
+          deleteStmt.run(id);
+        }
+      });
+      tx(ids);
+
+      // Remove all corresponding live stream sources
+      removeSourcesForProxyTemplates(proxies);
+      syncCarouselSources();
+
+      res.json({ success: true, count: ids.length, message: `已批量删除 ${ids.length} 个代理，对应直播源已移除` });
+    } catch (e: any) {
       res.status(500).json({ error: e.message });
     }
   });
@@ -5461,50 +6539,19 @@ stmt.run(crypto.randomUUID(), ch.id, item.name, item.platform, item.originalId);
     try {
       const proxies = db.prepare('SELECT * FROM carousel_proxies').all() as any[];
       if (proxies.length === 0) {
-         return res.json({ success: true, count: 0 });
+        return res.json({ success: true, count: 0, results: [] });
       }
       
-      const fallbacks: Record<string, string> = {
-        "yy": "12345",
-        "douyu": "9999",
-        "huya": "lpl",
-        "bilibili": "1129",
-        "kuaishou": "3x876g5g6f7",
-        "douyin": "123456",
-        "cntv": "cctv1",
-        "migu": "608807420",
-        "iptv": "live"
-      };
-      const channels = db.prepare('SELECT platform, originalId FROM carousel_channels GROUP BY platform').all() as any[];
-      for (const c of channels) {
-         fallbacks[c.platform] = c.originalId;
-      }
-      
-      const results = [];
+      const results: any[] = [];
       const fetchPromises = proxies.map(async (proxy) => {
-         const originalId = fallbacks[proxy.platform];
-         if (!originalId) return;
-         
-         const url = proxy.urlTemplate.replace('{}', originalId);
-         try {
-            const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 4000);
-            const start = Date.now();
-            const response = await fetch(url, { method: 'GET', signal: controller.signal, headers: { 'User-Agent': 'Mozilla/5.0' } });
-            clearTimeout(timeoutId);
-            const latency = Date.now() - start;
-            
-            if (response.ok) {
-               results.push({ templateId: proxy.id, url, status: 'active', latency });
-               db.prepare('UPDATE carousel_proxies SET status = ? WHERE id = ?').run('active', proxy.id);
-            } else {
-               results.push({ templateId: proxy.id, url, status: 'inactive', latency: null });
-               db.prepare('UPDATE carousel_proxies SET status = ? WHERE id = ?').run('inactive', proxy.id);
-            }
-         } catch(e) {
-            results.push({ templateId: proxy.id, url, status: 'inactive', latency: null });
-            db.prepare('UPDATE carousel_proxies SET status = ? WHERE id = ?').run('inactive', proxy.id);
-         }
+        const testRes = await testCarouselProxyAvailability(proxy);
+        if (testRes.available) {
+          results.push({ templateId: proxy.id, platform: proxy.platform, url: proxy.urlTemplate, status: 'active', latency: testRes.latency });
+          db.prepare('UPDATE carousel_proxies SET status = ? WHERE id = ?').run('active', proxy.id);
+        } else {
+          results.push({ templateId: proxy.id, platform: proxy.platform, url: proxy.urlTemplate, status: 'inactive', latency: null, error: testRes.error });
+          db.prepare('UPDATE carousel_proxies SET status = ? WHERE id = ?').run('inactive', proxy.id);
+        }
       });
       
       await Promise.all(fetchPromises);
@@ -5627,7 +6674,7 @@ stmt.run(crypto.randomUUID(), ch.id, item.name, item.platform, item.originalId);
     res.json({ ...testStatus, lastDataUpdate: globalLastDataUpdate });
   });
 
-  // Detect client IP information (ISP and Province)
+  // Detect client IP information (ISP and Province) with robust multi-source fallbacks
   app.get("/api/sources/detect-ip", async (req, res) => {
     try {
       let clientIp = req.headers["x-forwarded-for"] || req.socket.remoteAddress || "127.0.0.1";
@@ -5646,33 +6693,89 @@ stmt.run(crypto.randomUUID(), ch.id, item.name, item.platform, item.originalId);
       let province = "北京";
       let isp = "电信";
 
-      const queryIp = detectedIp === "127.0.0.1" ? "" : detectedIp;
-      const url = `http://ip-api.com/json/${queryIp}?lang=zh-CN`;
-      const response = await fetch(url);
-      if (response.ok) {
-        const data = await response.json() as any;
-        if (data && data.status === "success") {
-          detectedIp = data.query || detectedIp;
-          if (data.regionName) {
-            province = data.regionName.replace(/(省|市|特别行政区|自治区|壮族自治区|回族自治区|维吾尔自治区|盟)/g, "");
+      // 1. If it's a valid public IP, try getClientIpGeo first
+      if (detectedIp && detectedIp !== "127.0.0.1") {
+        try {
+          const geo = await getClientIpGeo(detectedIp);
+          if (geo && (geo.province || geo.isp)) {
+            return res.json({
+              ip: detectedIp,
+              province: geo.province || "北京",
+              isp: geo.isp || "电信"
+            });
           }
-          const rawIsp = (data.isp || data.org || "").toLowerCase();
-          if (rawIsp.includes("telecom") || rawIsp.includes("chinanet") || rawIsp.includes("电信")) {
-            isp = "电信";
-          } else if (rawIsp.includes("unicom") || rawIsp.includes("联通")) {
-            isp = "联通";
-          } else if (rawIsp.includes("mobile") || rawIsp.includes("cmcc") || rawIsp.includes("移动")) {
-            isp = "移动";
-          } else if (rawIsp.includes("broadband") || rawIsp.includes("cable") || rawIsp.includes("广电") || rawIsp.includes("wasu")) {
-            isp = "广电";
-          } else {
-            // Check for names like 'china mobile' directly
-            if (rawIsp.includes("china mobile")) isp = "移动";
-            else if (rawIsp.includes("china unicom")) isp = "联通";
-            else if (rawIsp.includes("china telecom")) isp = "电信";
-            else isp = "其它";
+        } catch (e) {
+          // ignore
+        }
+      }
+
+      // 2. Try external services with safe text/json parsing (pconline, ip-api, bilibili, cip.cc)
+      const queryIp = detectedIp === "127.0.0.1" ? "" : detectedIp;
+      
+      // Try pconline (stable in CN, no strict rate limit)
+      try {
+        const pcRes = await fetch(`https://whois.pconline.com.cn/ipJson.jsp?ip=${queryIp}&json=true`, {
+          signal: AbortSignal.timeout(3000)
+        });
+        if (pcRes.ok) {
+          const rawBuffer = await pcRes.arrayBuffer();
+          let rawText = "";
+          try {
+            rawText = new TextDecoder("gbk").decode(rawBuffer);
+          } catch {
+            rawText = new TextDecoder("utf-8").decode(rawBuffer);
+          }
+          if (rawText && rawText.includes("{")) {
+            const data = JSON.parse(rawText.trim());
+            if (data && data.ip) detectedIp = data.ip;
+            if (data && data.pro) {
+              province = data.pro.replace(/(省|市|特别行政区|自治区|壮族自治区|回族自治区|维吾尔自治区|盟)/g, "");
+            }
+            const addr = (data.addr || "").toLowerCase();
+            if (addr.includes("电信")) isp = "电信";
+            else if (addr.includes("联通")) isp = "联通";
+            else if (addr.includes("移动")) isp = "移动";
+            else if (addr.includes("广电")) isp = "广电";
+            else if (addr.includes("铁通")) isp = "铁通";
+            return res.json({ ip: detectedIp, province, isp });
           }
         }
+      } catch (e) {
+        // continue to next provider
+      }
+
+      // Try ip-api.com safely (checking content-type / rate limits)
+      try {
+        const url = `http://ip-api.com/json/${queryIp}?lang=zh-CN`;
+        const response = await fetch(url, { signal: AbortSignal.timeout(3000) });
+        const rawText = await response.text();
+        if (rawText && !rawText.includes("Rate exceeded") && rawText.trim().startsWith("{")) {
+          const data = JSON.parse(rawText);
+          if (data && data.status === "success") {
+            detectedIp = data.query || detectedIp;
+            if (data.regionName) {
+              province = data.regionName.replace(/(省|市|特别行政区|自治区|壮族自治区|回族自治区|维吾尔自治区|盟)/g, "");
+            }
+            const rawIsp = (data.isp || data.org || "").toLowerCase();
+            if (rawIsp.includes("telecom") || rawIsp.includes("chinanet") || rawIsp.includes("电信")) {
+              isp = "电信";
+            } else if (rawIsp.includes("unicom") || rawIsp.includes("联通")) {
+              isp = "联通";
+            } else if (rawIsp.includes("mobile") || rawIsp.includes("cmcc") || rawIsp.includes("移动")) {
+              isp = "移动";
+            } else if (rawIsp.includes("broadband") || rawIsp.includes("cable") || rawIsp.includes("广电") || rawIsp.includes("wasu")) {
+              isp = "广电";
+            } else {
+              if (rawIsp.includes("china mobile")) isp = "移动";
+              else if (rawIsp.includes("china unicom")) isp = "联通";
+              else if (rawIsp.includes("china telecom")) isp = "电信";
+              else isp = "其它";
+            }
+            return res.json({ ip: detectedIp, province, isp });
+          }
+        }
+      } catch (e) {
+        // continue to fallback
       }
       
       res.json({ ip: detectedIp, province, isp });

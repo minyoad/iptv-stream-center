@@ -151,17 +151,17 @@ export const SortableChannelItem: React.FC<SortableChannelItemProps> = ({
         </span>
 
         {/* Button Actions */}
-        <div className="flex items-center gap-0 shrink-0">
+        <div className="flex items-center gap-0.5 sm:gap-0 shrink-0">
           {onToggleIsolateChannel && (
             <button
               onClick={(e) => {
                 e.stopPropagation();
                 onToggleIsolateChannel(channel.id, !channel.isolated);
               }}
-              className={`p-1 rounded transition ${
+              className={`p-1.5 sm:p-1 rounded transition touch-press ${
                 channel.isolated
-                  ? "text-emerald-600 hover:text-emerald-800 hover:bg-emerald-50"
-                  : "text-slate-400 hover:text-orange-600 hover:bg-orange-50"
+                  ? "text-emerald-600 hover:text-emerald-800 hover:bg-emerald-50 active:bg-emerald-100"
+                  : "text-slate-400 hover:text-orange-600 hover:bg-orange-50 active:bg-orange-100"
               }`}
               title={channel.isolated ? "解除隔离频道" : "隔离此频道 (防导出)"}
             >
@@ -178,10 +178,10 @@ export const SortableChannelItem: React.FC<SortableChannelItemProps> = ({
               e.stopPropagation();
               onEditChannel(channel);
             }}
-            className="p-1 text-slate-400 hover:text-slate-800 hover:bg-slate-100 rounded transition"
+            className="p-1.5 sm:p-1 text-slate-400 hover:text-slate-800 hover:bg-slate-100 active:bg-slate-200 rounded transition touch-press"
             title="编辑"
           >
-            <Edit2 className="w-3 h-3" />
+            <Edit2 className="w-3.5 h-3.5 sm:w-3 sm:h-3" />
           </button>
 
           <button
@@ -189,10 +189,10 @@ export const SortableChannelItem: React.FC<SortableChannelItemProps> = ({
               e.stopPropagation();
               onDeleteChannel(channel.id);
             }}
-            className="p-1 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded transition"
+            className="p-1.5 sm:p-1 text-slate-400 hover:text-rose-600 hover:bg-rose-50 active:bg-rose-100 rounded transition touch-press"
             title="删除"
           >
-            <Trash2 className="w-3 h-3" />
+            <Trash2 className="w-3.5 h-3.5 sm:w-3 sm:h-3" />
           </button>
         </div>
       </div>

@@ -899,9 +899,14 @@ export default function App() {
     try {
       const res = await fetch("/api/sources/detect-ip");
       if (res.ok) {
-        const info = await res.json();
-        if (info.ip) setDetectedIp(info.ip);
-        if (info.isp) {
+        let info: any = null;
+        try {
+          info = await res.json();
+        } catch {
+          // ignore non-json
+        }
+        if (info && info.ip) setDetectedIp(info.ip);
+        if (info && info.isp) {
           const recognizedIsps = ["电信", "联通", "移动", "广电", "BGP"];
           if (recognizedIsps.includes(info.isp)) {
             setClientTestIsp(info.isp);
@@ -909,14 +914,14 @@ export default function App() {
             setClientTestIsp("其它");
           }
         }
-        if (info.province) {
+        if (info && info.province) {
           setClientTestProvince(info.province);
         }
-        if (!silent) {
-          showFeedback("success", `智能识别本地网络成功！检测到 IP: ${info.ip}，网络归属 [${info.province || ""}${info.isp || ""}]`);
+        if (!silent && info && (info.province || info.isp)) {
+          showFeedback("success", `智能识别本地网络成功！检测到 IP: ${info.ip || "本地"}，网络归属 [${info.province || ""}${info.isp || ""}]`);
         }
       } else {
-        if (!silent) showFeedback("error", "智能网络感探测接口被拒绝");
+        if (!silent) showFeedback("error", "网络线路探测未响应，请手动选择省份/运营商");
       }
     } catch (e) {
       if (!silent) showFeedback("error", "无法自动匹配当前设备本地的省份/运营商线路，本轮请手动选择");
@@ -2939,10 +2944,10 @@ export default function App() {
 
   return (
     <div className="w-full min-h-screen bg-slate-50 flex overflow-hidden font-sans text-slate-800" id="app_frame">
-      {/* Dynamic Slide-in Status / Info Feedback Banner */}
+      {/* Dynamic Slide-in Status / Info Feedback Banner with iOS Safe Area */}
       {feedbackMsg && (
         <div 
-          className={`fixed top-4 right-4 z-50 p-4 rounded-xl shadow-lg border flex items-center gap-3 animate-slide-in max-w-sm transition-all duration-300 ${
+          className={`fixed top-[calc(env(safe-area-inset-top,0px)+1rem)] right-4 z-50 p-4 rounded-xl shadow-lg border flex items-center gap-3 animate-slide-in max-w-sm transition-all duration-300 ${
             feedbackMsg.type === "success" 
             ? "bg-emerald-50 border-emerald-100 text-emerald-800" 
             : feedbackMsg.type === "error" 
@@ -2962,13 +2967,13 @@ export default function App() {
       {isMobileMenuOpen && (
         <div 
           onClick={() => setIsMobileMenuOpen(false)} 
-          className="fixed inset-0 bg-slate-900/50 backdrop-blur-xs z-30 md:hidden"
+          className="fixed inset-0 bg-slate-900/50 backdrop-blur-xs z-40 md:hidden"
         />
       )}
 
       {/* Primary Sidebar - Styled around Clean Minimalism pattern */}
       <aside 
-        className={`fixed inset-y-0 left-0 z-40 w-64 bg-white border-r border-slate-200 flex flex-col flex-shrink-0 transition-transform duration-300 transform md:static md:translate-x-0 ${
+        className={`fixed inset-y-0 left-0 z-50 w-64 bg-white border-r border-slate-200 flex flex-col flex-shrink-0 transition-transform duration-300 transform md:static md:translate-x-0 pt-[env(safe-area-inset-top,0px)] pb-[env(safe-area-inset-bottom,0px)] ${
           isMobileMenuOpen ? "translate-x-0 shadow-2xl" : "-translate-x-full md:translate-x-0"
         }`} 
         id="premium_sidebar"
@@ -2986,7 +2991,7 @@ export default function App() {
           </div>
           <button 
             onClick={() => setIsMobileMenuOpen(false)}
-            className="md:hidden text-slate-400 hover:text-slate-600 p-1"
+            className="md:hidden text-slate-400 hover:text-slate-600 p-2 touch-press rounded-lg"
           >
             <X className="w-5 h-5" />
           </button>
@@ -3145,12 +3150,12 @@ export default function App() {
 
       {/* Main Content Pane */}
       <main className="flex-1 flex flex-col h-screen overflow-hidden">
-        {/* Top Header - Structured according to Clean Minimalism Design mockup */}
-        <header className="h-auto min-h-16 bg-white border-b border-slate-200 px-3 sm:px-6 md:px-8 py-3 flex flex-wrap items-center justify-between gap-3 flex-shrink-0" id="top_header">
+        {/* Top Header - Structured according to Clean Minimalism Design mockup with iOS Safe Area */}
+        <header className="h-auto min-h-16 bg-white/95 backdrop-blur-md border-b border-slate-200 px-3 sm:px-6 md:px-8 py-3 pt-[calc(0.75rem+env(safe-area-inset-top,0px))] flex flex-wrap items-center justify-between gap-3 flex-shrink-0" id="top_header">
           <div className="flex items-center gap-2 sm:gap-3 min-w-0">
             <button 
               onClick={() => setIsMobileMenuOpen(prev => !prev)} 
-              className="p-2 -ml-1 text-slate-600 hover:text-slate-900 md:hidden rounded-xl hover:bg-slate-100 transition cursor-pointer"
+              className="p-2 -ml-1 text-slate-600 hover:text-slate-900 md:hidden rounded-xl hover:bg-slate-100 transition cursor-pointer touch-press"
               title="切换菜单"
             >
               <Menu className="w-5 h-5" />
@@ -3174,7 +3179,7 @@ export default function App() {
                 <span className="truncate max-w-[200px] sm:max-w-none">检测中: {testingStatus.checked} / {testingStatus.total}</span>
                 <button 
                   onClick={cancelTest}
-                  className="bg-rose-100 hover:bg-rose-200 text-rose-700 text-[10px] font-bold px-2 py-0.5 rounded-full transition shrink-0"
+                  className="bg-rose-100 hover:bg-rose-200 text-rose-700 text-[10px] font-bold px-2 py-0.5 rounded-full transition shrink-0 touch-press"
                 >
                   放弃
                 </button>
@@ -3188,8 +3193,8 @@ export default function App() {
           </div>
         </header>
 
-        {/* Dynamic Content Outlet with custom vertical scrolling limits */}
-        <div className="flex-1 overflow-y-auto p-3 sm:p-5 md:p-8" id="content_canvas_outer">
+        {/* Dynamic Content Outlet with iOS bottom bar padding */}
+        <div className="flex-1 overflow-y-auto p-3 sm:p-5 md:p-8 pb-24 md:pb-8" id="content_canvas_outer">
           
           {/* VIEW: DASHBOARD */}
           {activeTab === "dashboard" && (
@@ -3204,63 +3209,92 @@ export default function App() {
           {activeTab === "channels" && (
             <div className="space-y-6 animate-fade-in" id="tab_channels_view">
               
-              {/* Inner sub-tab selection */}
-              <div className="flex flex-wrap items-center gap-2 sm:gap-2.5 pb-1">
-                <button
-                  onClick={() => setChannelSubTab("channels")}
-                  className={`px-3.5 sm:px-4 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 shrink-0 cursor-pointer ${
-                    channelSubTab === "channels"
-                    ? "bg-slate-800 text-white shadow-md shadow-slate-900/10"
-                    : "bg-white text-slate-500 hover:text-slate-800 hover:bg-slate-50 border border-slate-200"
-                  }`}
+              {/* Inner sub-tab selection with enhanced horizontal smooth scroll and mobile-adaptive labels */}
+              <div className="relative -mx-3 sm:mx-0 px-3 sm:px-0">
+                <div 
+                  className="flex items-center gap-1.5 sm:gap-2 pb-1.5 overflow-x-auto no-scrollbar scroll-smooth whitespace-nowrap"
+                  style={{ WebkitOverflowScrolling: 'touch' }}
                 >
-                  <Tv className="w-3.5 h-3.5" />
-                  频道与线路维护
-                </button>
-                <button
-                  onClick={() => setChannelSubTab("groups")}
-                  className={`px-3.5 sm:px-4 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 shrink-0 cursor-pointer ${
-                    channelSubTab === "groups"
-                    ? "bg-slate-800 text-white shadow-md shadow-slate-900/10"
-                    : "bg-white text-slate-500 hover:text-slate-800 hover:bg-slate-50 border border-slate-200"
-                  }`}
-                >
-                  <Layers className="w-3.5 h-3.5" />
-                  分组/分类管理
-                </button>
-                <button
-                  onClick={() => setChannelSubTab("sources")}
-                  className={`px-3.5 sm:px-4 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 shrink-0 cursor-pointer ${
-                    channelSubTab === "sources"
-                    ? "bg-slate-800 text-white shadow-md shadow-slate-900/10"
-                    : "bg-white text-slate-500 hover:text-slate-800 hover:bg-slate-50 border border-slate-200"
-                  }`}
-                >
-                  <Compass className="w-3.5 h-3.5" />
-                  全局线路与批量管理
-                </button>
-                <button
-                  onClick={() => setChannelSubTab("carousel")}
-                  className={`px-3.5 sm:px-4 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 shrink-0 cursor-pointer ${
-                    channelSubTab === "carousel"
-                    ? "bg-slate-800 text-white shadow-md shadow-slate-900/10"
-                    : "bg-white text-slate-500 hover:text-slate-800 hover:bg-slate-50 border border-slate-200"
-                  }`}
-                >
-                  <RefreshCw className="w-3.5 h-3.5" />
-                  轮播代理配置
-                </button>
-                <button
-                  onClick={() => setChannelSubTab("carousel_channels" as any)}
-                  className={`px-3.5 sm:px-4 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 shrink-0 cursor-pointer ${
-                    channelSubTab === ("carousel_channels" as any)
-                    ? "bg-slate-800 text-white shadow-md shadow-slate-900/10"
-                    : "bg-white text-slate-500 hover:text-slate-800 hover:bg-slate-50 border border-slate-200"
-                  }`}
-                >
-                  <RefreshCw className="w-3.5 h-3.5" />
-                  轮播频道管理
-                </button>
+                  <button
+                    onClick={(e) => {
+                      setChannelSubTab("channels");
+                      e.currentTarget.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
+                    }}
+                    className={`px-3 sm:px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 shrink-0 cursor-pointer touch-press ${
+                      channelSubTab === "channels"
+                      ? "bg-slate-800 text-white shadow-md shadow-slate-900/15 ring-2 ring-slate-800/10"
+                      : "bg-white text-slate-600 hover:text-slate-900 hover:bg-slate-50 border border-slate-200"
+                    }`}
+                  >
+                    <Tv className="w-3.5 h-3.5 shrink-0" />
+                    <span className="sm:hidden">频道维护</span>
+                    <span className="hidden sm:inline">频道与线路维护</span>
+                  </button>
+
+                  <button
+                    onClick={(e) => {
+                      setChannelSubTab("groups");
+                      e.currentTarget.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
+                    }}
+                    className={`px-3 sm:px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 shrink-0 cursor-pointer touch-press ${
+                      channelSubTab === "groups"
+                      ? "bg-slate-800 text-white shadow-md shadow-slate-900/15 ring-2 ring-slate-800/10"
+                      : "bg-white text-slate-600 hover:text-slate-900 hover:bg-slate-50 border border-slate-200"
+                    }`}
+                  >
+                    <Layers className="w-3.5 h-3.5 shrink-0" />
+                    <span className="sm:hidden">分组管理</span>
+                    <span className="hidden sm:inline">分组/分类管理</span>
+                  </button>
+
+                  <button
+                    onClick={(e) => {
+                      setChannelSubTab("sources");
+                      e.currentTarget.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
+                    }}
+                    className={`px-3 sm:px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 shrink-0 cursor-pointer touch-press ${
+                      channelSubTab === "sources"
+                      ? "bg-slate-800 text-white shadow-md shadow-slate-900/15 ring-2 ring-slate-800/10"
+                      : "bg-white text-slate-600 hover:text-slate-900 hover:bg-slate-50 border border-slate-200"
+                    }`}
+                  >
+                    <Compass className="w-3.5 h-3.5 shrink-0" />
+                    <span className="sm:hidden">全局线路</span>
+                    <span className="hidden sm:inline">全局线路与批量管理</span>
+                  </button>
+
+                  <button
+                    onClick={(e) => {
+                      setChannelSubTab("carousel");
+                      e.currentTarget.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
+                    }}
+                    className={`px-3 sm:px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 shrink-0 cursor-pointer touch-press ${
+                      channelSubTab === "carousel"
+                      ? "bg-slate-800 text-white shadow-md shadow-slate-900/15 ring-2 ring-slate-800/10"
+                      : "bg-white text-slate-600 hover:text-slate-900 hover:bg-slate-50 border border-slate-200"
+                    }`}
+                  >
+                    <RefreshCw className="w-3.5 h-3.5 shrink-0" />
+                    <span className="sm:hidden">轮播代理</span>
+                    <span className="hidden sm:inline">轮播代理配置</span>
+                  </button>
+
+                  <button
+                    onClick={(e) => {
+                      setChannelSubTab("carousel_channels" as any);
+                      e.currentTarget.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
+                    }}
+                    className={`px-3 sm:px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 shrink-0 cursor-pointer touch-press ${
+                      channelSubTab === ("carousel_channels" as any)
+                      ? "bg-slate-800 text-white shadow-md shadow-slate-900/15 ring-2 ring-slate-800/10"
+                      : "bg-white text-slate-600 hover:text-slate-900 hover:bg-slate-50 border border-slate-200"
+                    }`}
+                  >
+                    <RefreshCw className="w-3.5 h-3.5 shrink-0" />
+                    <span className="sm:hidden">轮播频道</span>
+                    <span className="hidden sm:inline">轮播频道管理</span>
+                  </button>
+                </div>
               </div>
 
               <div className={channelSubTab === "carousel" ? "block animate-fade-in" : "hidden"}>
@@ -3513,7 +3547,7 @@ export default function App() {
               <div className="grid grid-cols-1 lg:grid-cols-12 gap-6" id="channels_editor_grid">
                 
                 {/* Left side list of channels */}
-                <div className="lg:col-span-5 bg-white rounded-2xl border border-slate-200 flex flex-col h-[750px] overflow-hidden" id="channels_list_card">
+                <div className="lg:col-span-5 bg-white rounded-2xl border border-slate-200 flex flex-col h-[520px] sm:h-[620px] lg:h-[750px] overflow-hidden" id="channels_list_card">
                   <div className="p-4 border-b border-slate-100 bg-slate-50/50 flex flex-col gap-2.5">
                     <div className="flex justify-between items-center">
                       <div className="flex items-center gap-2">
@@ -3699,7 +3733,7 @@ export default function App() {
                 </div>
 
                 {/* Right side playback playline items details view */}
-                <div className="lg:col-span-7 space-y-4 h-[750px]" id="stream_lines_control_container">
+                <div className="lg:col-span-7 space-y-4 h-[520px] sm:h-[620px] lg:h-[750px]" id="stream_lines_control_container">
                   {selectedChannel ? (
                     <div className="bg-white rounded-2xl border border-slate-200 p-6 flex flex-col h-full gap-5" id="line_manager_main">
                       
@@ -5262,9 +5296,9 @@ export default function App() {
 
               
               {/* IP Geo Settings */}
-              <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm space-y-4 mb-4" id="ip_geo_settings_card">
-                <div className="flex items-center gap-3 mb-4">
-                  <div className="p-2 bg-indigo-50 text-indigo-600 rounded-xl">
+              <div className="bg-white p-4 sm:p-6 rounded-2xl border border-slate-200 shadow-sm space-y-4 mb-4" id="ip_geo_settings_card">
+                <div className="flex items-center gap-3 mb-2 sm:mb-4">
+                  <div className="p-2 bg-indigo-50 text-indigo-600 rounded-xl shrink-0">
                     <Globe className="w-5 h-5" />
                   </div>
                   <div>
@@ -5285,7 +5319,7 @@ export default function App() {
                     <button
                       onClick={saveNetworkSettings}
                       disabled={isSavingNetwork}
-                      className="px-6 py-2.5 bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-400 text-white font-bold text-xs rounded-xl shadow transition duration-150 cursor-pointer"
+                      className="w-full sm:w-auto px-6 py-2.5 bg-indigo-600 hover:bg-indigo-700 active:bg-indigo-800 disabled:bg-indigo-400 text-white font-bold text-xs rounded-xl shadow transition duration-150 cursor-pointer touch-press"
                     >
                       {isSavingNetwork ? "正在保存..." : "保存网络设置"}
                     </button>
@@ -6206,8 +6240,8 @@ export default function App() {
                               编辑配置
                             </button>
                             <button
-                              onClick={async () => {
-                                if (window.confirm("确定删除该 EPG 源及对应缓存吗？")) {
+                              onClick={() => {
+                                triggerConfirm("删除 EPG 来源", "确定删除该 EPG 源及对应缓存吗？", async () => {
                                   try {
                                     const res = await fetch(`/api/epg-sources/${source.id}`, { method: "DELETE" });
                                     if (res.ok) {
@@ -6217,7 +6251,7 @@ export default function App() {
                                   } catch (_) {
                                     showFeedback("error", "删除失败");
                                   }
-                                }
+                                });
                               }}
                               className="px-2.5 py-1.5 text-rose-600 hover:text-rose-800 bg-rose-50 hover:bg-rose-100 text-[10px] font-bold rounded-lg cursor-pointer transition"
                             >
@@ -6742,6 +6776,89 @@ export default function App() {
           )}
 
         </div>
+
+        {/* iOS Mobile Bottom Navigation Bar (Fixed with Safe Area) */}
+        <nav className="md:hidden fixed bottom-0 left-0 right-0 z-30 bg-white/90 backdrop-blur-lg border-t border-slate-200/80 px-2 py-1.5 pb-[max(0.5rem,env(safe-area-inset-bottom))] shadow-[0_-4px_20px_rgba(0,0,0,0.05)] flex items-center justify-around" id="mobile_bottom_nav">
+          <button
+            onClick={() => {
+              setActiveTab("dashboard");
+              const el = document.getElementById("content_canvas_outer");
+              if (el) el.scrollTo({ top: 0, behavior: 'smooth' });
+            }}
+            className={`flex flex-col items-center justify-center py-1 px-3 rounded-xl transition touch-press ${
+              activeTab === "dashboard" ? "text-blue-600 font-bold" : "text-slate-500 hover:text-slate-800"
+            }`}
+            id="mobile_tab_dashboard"
+          >
+            <div className={`p-1 rounded-xl transition ${activeTab === "dashboard" ? "bg-blue-50 text-blue-600" : ""}`}>
+              <Layers className="w-5 h-5" />
+            </div>
+            <span className="text-[10px] mt-0.5 tracking-tight font-medium">概览</span>
+          </button>
+
+          <button
+            onClick={async () => {
+              setActiveTab("channels");
+              await fetchData();
+              const el = document.getElementById("content_canvas_outer");
+              if (el) el.scrollTo({ top: 0, behavior: 'smooth' });
+            }}
+            className={`flex flex-col items-center justify-center py-1 px-3 rounded-xl transition touch-press ${
+              activeTab === "channels" ? "text-blue-600 font-bold" : "text-slate-500 hover:text-slate-800"
+            }`}
+            id="mobile_tab_channels"
+          >
+            <div className={`p-1 rounded-xl transition ${activeTab === "channels" ? "bg-blue-50 text-blue-600" : ""}`}>
+              <Tv className="w-5 h-5" />
+            </div>
+            <span className="text-[10px] mt-0.5 tracking-tight font-medium">频道</span>
+          </button>
+
+          <button
+            onClick={() => {
+              setActiveTab("sync");
+              const el = document.getElementById("content_canvas_outer");
+              if (el) el.scrollTo({ top: 0, behavior: 'smooth' });
+            }}
+            className={`flex flex-col items-center justify-center py-1 px-3 rounded-xl transition touch-press ${
+              activeTab === "sync" ? "text-blue-600 font-bold" : "text-slate-500 hover:text-slate-800"
+            }`}
+            id="mobile_tab_sync"
+          >
+            <div className={`p-1 rounded-xl transition ${activeTab === "sync" ? "bg-blue-50 text-blue-600" : ""}`}>
+              <UploadCloud className="w-5 h-5" />
+            </div>
+            <span className="text-[10px] mt-0.5 tracking-tight font-medium">订阅</span>
+          </button>
+
+          <button
+            onClick={() => {
+              setActiveTab("export");
+              const el = document.getElementById("content_canvas_outer");
+              if (el) el.scrollTo({ top: 0, behavior: 'smooth' });
+            }}
+            className={`flex flex-col items-center justify-center py-1 px-3 rounded-xl transition touch-press ${
+              activeTab === "export" ? "text-blue-600 font-bold" : "text-slate-500 hover:text-slate-800"
+            }`}
+            id="mobile_tab_export"
+          >
+            <div className={`p-1 rounded-xl transition ${activeTab === "export" ? "bg-blue-50 text-blue-600" : ""}`}>
+              <Download className="w-5 h-5" />
+            </div>
+            <span className="text-[10px] mt-0.5 tracking-tight font-medium">接口</span>
+          </button>
+
+          <button
+            onClick={() => setIsMobileMenuOpen(true)}
+            className="flex flex-col items-center justify-center py-1 px-3 rounded-xl text-slate-500 hover:text-slate-800 transition touch-press"
+            id="mobile_tab_more"
+          >
+            <div className="p-1 rounded-xl">
+              <Menu className="w-5 h-5" />
+            </div>
+            <span className="text-[10px] mt-0.5 tracking-tight font-medium">更多</span>
+          </button>
+        </nav>
       </main>
 
       {/* ──────────────────────────────────────────────────────── */}

@@ -15,8 +15,7 @@ export const PRESET_CAROUSEL_PLATFORMS: CarouselPlatformOption[] = [
   { value: "kuaishou", label: "快手直播 (kuaishou)", shortLabel: "快手", badgeClass: "bg-rose-100 text-rose-800 border-rose-200" },
   { value: "douyin", label: "抖音直播 (douyin)", shortLabel: "抖音", badgeClass: "bg-slate-800 text-white border-slate-700" },
   { value: "cntv", label: "央视/CNTV (cntv)", shortLabel: "央视", badgeClass: "bg-red-100 text-red-800 border-red-200" },
-  { value: "migu", label: "咪咕直播 (migu)", shortLabel: "咪咕", badgeClass: "bg-blue-100 text-blue-800 border-blue-200" },
-  { value: "iptv", label: "IPTV通用 (iptv)", shortLabel: "IPTV", badgeClass: "bg-emerald-100 text-emerald-800 border-emerald-200" },
+  { value: "migu", label: "咪咕直播 (migu)", shortLabel: "咪咕", badgeClass: "bg-blue-100 text-blue-800 border-blue-200" }
 ];
 
 export const getPlatformInfo = (platform: string) => {
