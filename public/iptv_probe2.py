@@ -125,7 +125,13 @@ async def phase_2_decode_check(ff_engine: dict, url: str) -> tuple:
     rtsp_flags = ["-rtsp_transport", "tcp"] if is_rtsp else []
     ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36"
 
-    # 统一用 ffmpeg 读帧验证，速度更快更可靠
+    # 统一用 ffmpeg 读帧验证，速度更快更可靠：
+    # - ffprobe -show_entries format=duration 对直播流（HLS 无时长、RTSP、rtp 组播）常要等待
+    #   很久甚至拿不到时长返回非零退出码，导致误判和拖慢速度。
+    # - ffmpeg 读 -t 秒的帧，能读出帧即证明可播放，读到规定时长就正常退出（返回码 0），
+    #   速度快且可靠。
+    # 读流时长：能读出帧即证明可播放，不必读满 PHASE_II_DECODE_SEC。
+    # 慢源（RTSP / rtp 组播）读 1 秒即可证明在播；普通 HLS 读 2 秒足够。
     if is_rtsp or "/rtp/" in url.lower():
         decode_sec = min(PHASE_II_DECODE_SEC, 1)   # 慢源读 1 秒即可证明可播放
     else:
@@ -140,21 +146,24 @@ async def phase_2_decode_check(ff_engine: dict, url: str) -> tuple:
         else:
             ff_engine = {"type": "ffmpeg", "cmd": ff_cmd}
 
+    # 用 -loglevel info 拉流，stderr 里会带出 "Stream #0:0: Video: ... 1920x1080 ..."，
+    # 便于顺带提取真实分辨率（不额外启动进程、不二次建连）。
     if ff_engine["type"] == "ffplay":
+        # -nodisp (不弹出 GUI 窗口画面) -autoexit (播放结束后自动结束) -t 限制视频拉流秒数
         cmd = [
             ff_engine["cmd"], "-user_agent", ua, *rtsp_flags, "-nodisp", "-autoexit", "-loglevel", "info", 
             "-t", str(decode_sec), url
         ]
     elif ff_engine["type"] == "ffmpeg":
-        # ffmpeg -loglevel info 输出包含 Video Stream width x height 媒体流信息
+        # ffmpeg 校验最严密，-f null - 代表空画面输出，专门用于吞吐评估流健康度
         cmd = [
-            ff_engine["cmd"], "-user_agent", ua, *rtsp_flags, "-probesize", "500000", "-analyzeduration", "500000", "-y", "-loglevel", "info", "-t", str(decode_sec),
+            ff_engine["cmd"], "-user_agent", ua, *rtsp_flags, "-y", "-loglevel", "info", "-t", str(decode_sec),
             "-i", url, "-f", "null", "-"
         ]
     elif ff_engine["type"] == "ffprobe":
         cmd = [
-            ff_engine["cmd"], "-user_agent", ua, *rtsp_flags, "-probesize", "500000", "-analyzeduration", "500000", "-v", "info", "-show_entries", "stream=width,height,codec_type",
-            "-of", "json", url
+            ff_engine["cmd"], "-user_agent", ua, *rtsp_flags, "-v", "info", "-show_entries", "format=duration",
+            "-of", "default=noprint_wrappers=1", url
         ]
 
     try:
@@ -165,21 +174,23 @@ async def phase_2_decode_check(ff_engine: dict, url: str) -> tuple:
             stderr=asyncio.subprocess.PIPE
         )
         
+        # 给解码器宽限额外的拉流超时时长（RTSP 源连接慢，使用更宽松的 phase2_timeout）
         try:
             stdout, stderr = await asyncio.wait_for(
                 process.communicate(), 
                 timeout=phase2_timeout
             )
-            out_text = (stdout.decode("utf-8", errors="ignore") + "\n" + stderr.decode("utf-8", errors="ignore")).strip()
             # 子进程正常退出且退出码为 0 代表媒体解析完全通过，流极度纯净健康!
             if process.returncode == 0:
                 latency = int((time.time() - start_time) * 1000)
-                return True, latency, out_text
+                stderr_text = stderr.decode("utf-8", errors="ignore")
+                resolution = parse_resolution_from_stderr(stderr_text)
+                return True, latency, resolution
             else:
+                # 失败时打印 stderr 尾部，便于定位真实原因
                 err_tail = stderr.decode("utf-8", errors="ignore").strip().splitlines()[-5:]
                 if err_tail:
                     logger.debug(f"  [ff解码器输出] {' | '.join(err_tail)}")
-                return False, 9999, out_text
         except asyncio.TimeoutError:
             try:
                 process.kill()
@@ -193,42 +204,24 @@ async def phase_2_decode_check(ff_engine: dict, url: str) -> tuple:
 
 
 def parse_resolution(url: str, stdout_text: str = "") -> str:
-    # 1. 优先从 ffprobe json 或 ffmpeg/ffplay 提示信息中解析真实分辨率
     if stdout_text:
         try:
             import json
             data = json.loads(stdout_text)
             streams = data.get("streams", [])
-            for s in streams:
-                if s.get("codec_type") == "video" or "width" in s:
-                    w = int(s.get("width", 0))
-                    h = int(s.get("height", 0))
-                    if w > 0 and h > 0:
-                        if h >= 2160 or w >= 3840: return "4K"
-                        if h >= 1080 or w >= 1920: return "1080p"
-                        if h >= 720 or w >= 1280: return "720p"
-                        if h >= 576 or w >= 720: return "576p"
-                        if h >= 480 or w >= 640: return "480p"
-                        return f"{w}x{h}"
+            if streams:
+                w = int(streams[0].get("width", 0))
+                h = int(streams[0].get("height", 0))
+                if w > 0 and h > 0:
+                    if h >= 2160 or w >= 3840: return "4K"
+                    if h >= 1080 or w >= 1920: return "1080p"
+                    if h >= 720 or w >= 1280: return "720p"
+                    if h >= 576 or w >= 720: return "576p"
+                    if h >= 480 or w >= 640: return "480p"
+                    return f"{w}x{h}"
         except Exception:
             pass
 
-        import re
-        # 正则解析 ffmpeg stderr 输出中的 "Stream #0:0... Video: ..., 1920x1080 ..." 模式
-        video_match = re.search(r'Video:.*?\b(\d{3,5})x(\d{3,5})\b', stdout_text, re.IGNORECASE | re.DOTALL)
-        if not video_match:
-            video_match = re.search(r'\b(\d{3,5})x(\d{3,5})\b', stdout_text)
-        if video_match:
-            w, h = int(video_match.group(1)), int(video_match.group(2))
-            if w > 0 and h > 0:
-                if h >= 2160 or w >= 3840: return "4K"
-                if h >= 1080 or w >= 1920: return "1080p"
-                if h >= 720 or w >= 1280: return "720p"
-                if h >= 576 or w >= 720: return "576p"
-                if h >= 480 or w >= 640: return "480p"
-                return f"{w}x{h}"
-
-    # 2. 从 URL 中识别分辨率关键字
     url_lower = url.lower()
     if any(x in url_lower for x in ["3840x2160", "2160p", "4k", "uhd"]): return "4K"
     if any(x in url_lower for x in ["1920x1080", "1080p", "1080i", "4m1080", "7.5m1080", "8m1080"]): return "1080p"
@@ -236,6 +229,35 @@ def parse_resolution(url: str, stdout_text: str = "") -> str:
     if any(x in url_lower for x in ["720x576", "704x576", "576p", "576i"]): return "576p"
     if any(x in url_lower for x in ["640x480", "480p"]): return "480p"
     return ""
+
+
+def parse_resolution_from_stderr(stderr_text: str) -> str:
+    """从 ffmpeg 解码输出的 stderr 中正则提取真实分辨率（无需额外拉流进程）
+
+    ffmpeg 拉流时会输出类似：
+        Stream #0:0: Video: h264 (High), yuv420p(tv, bt709, progressive), 1920x1080 ...
+    通过正则抓取 "WxH"，映射为 4K/1080p/720p/576p/480p 或原样 WxH。
+    """
+    if not stderr_text:
+        return ""
+    import re
+    # 匹配视频流描述里的分辨率，形如 "1920x1080"（含前导空格）
+    m = re.search(r"Video:.*?(\d{2,5})x(\d{2,5})", stderr_text, re.IGNORECASE | re.DOTALL)
+    if not m:
+        return ""
+    try:
+        w = int(m.group(1))
+        h = int(m.group(2))
+    except Exception:
+        return ""
+    if w <= 0 or h <= 0:
+        return ""
+    if h >= 2160 or w >= 3840: return "4K"
+    if h >= 1080 or w >= 1920: return "1080p"
+    if h >= 720 or w >= 1280: return "720p"
+    if h >= 576 or w >= 720: return "576p"
+    if h >= 480 or w >= 640: return "480p"
+    return f"{w}x{h}"
 
 
 async def process_test_pipeline(session: aiohttp.ClientSession, semaphore: asyncio.Semaphore, ff_engine: dict, source_id: str, channel_id: str, url: str, channel_name: str) -> dict:
@@ -261,13 +283,12 @@ async def process_test_pipeline(session: aiohttp.ClientSession, semaphore: async
         # [阶段 2] 精深多媒体解码校验 (仅在本地存在 FFmpeg 工具时执行)
         if ff_engine:
             logger.info(f" 🔍 [Phase 1 通行] 对链路 {url[:45]}... 触发 Phase 2 视频帧解码质检...")
-            p2_ok, p2_latency, decode_out = await phase_2_decode_check(ff_engine, url)
+            p2_ok, p2_latency, p2_resolution = await phase_2_decode_check(ff_engine, url)
             if p2_ok:
-                extracted_res = parse_resolution(url, decode_out)
-                if extracted_res:
-                    resolution = extracted_res
-
-                logger.info(f"  🎉 [质检通过] 解码顺畅，首帧延迟(建立耗时) - {p2_latency}ms | 分辨率: {resolution or '未知'}")
+                # 优先用解码过程捕获的真实分辨率，URL 关键字匹配作兜底
+                if p2_resolution:
+                    resolution = p2_resolution
+                logger.info(f"  🎉 [质检通过] 解码顺畅，首帧延迟(建立耗时) - {p2_latency}ms | 分辨率: {resolution or '未识别'}")
                 res_dict = {
                     "sourceId": source_id,
                     "channelId": channel_id,
@@ -641,10 +662,9 @@ async def test_single_url(url: str):
 
         # Phase 2
         logger.info(f"\n📍 [Phase 2] 流媒体解码验证 ({ff_engine['type']})...")
-        p2_ok, p2_latency, decode_out = await phase_2_decode_check(ff_engine, url)
-        res = parse_resolution(url, decode_out)
+        p2_ok, p2_latency, p2_resolution = await phase_2_decode_check(ff_engine, url)
         if p2_ok:
-            logger.info(f"🎉 [Phase 2] 解码通过！延迟: {p2_latency}ms | 分辨率: {res or '未知'}")
+            logger.info(f"🎉 [Phase 2] 解码通过！延迟: {p2_latency}ms | 分辨率: {p2_resolution or '未识别'}")
             logger.info(f"📊 最终结果: ✅ active（二段验证全部通过）")
         else:
             logger.warning(f"❌ [Phase 2] 解码失败！能连接但无法提取播放帧")
