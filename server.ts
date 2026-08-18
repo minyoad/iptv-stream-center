@@ -237,6 +237,10 @@ function initSqlite() {
       key TEXT PRIMARY KEY,
       value TEXT
     );
+    CREATE TABLE IF NOT EXISTS system_settings (
+      key TEXT PRIMARY KEY,
+      value TEXT
+    );
   `);
 
   
@@ -318,9 +322,12 @@ function initSqlite() {
     console.error("Error initializing carousel proxies:", e);
   }
 
-  // Clean up any invalid miguvideo proxy templates
+  // Clean up any invalid proxy templates and obsolete discovery rules
   try {
-    db.prepare("DELETE FROM carousel_proxies WHERE urlTemplate LIKE '%miguvideo%'").run();
+    db.prepare("DELETE FROM carousel_proxies WHERE urlTemplate LIKE '%miguvideo%' OR urlTemplate LIKE '%lz-cdn%' OR urlTemplate LIKE '%lzcdn%' OR urlTemplate LIKE '%/202%' OR urlTemplate LIKE '%/203%'").run();
+    db.prepare("DELETE FROM carousel_discovery_rules WHERE platform = 'cntv' OR keyword = 'yy.m3u8' OR keyword LIKE 'regex:^https?://%'").run();
+    seedKnownRules(false);
+    cleanupBlockedCarouselProxies();
   } catch (e) {}
 
   // One-time initialization for carousel discovery rules
@@ -583,7 +590,6 @@ const testStatus: TestStatus = {
     { platform: 'yy', keyword: 'yy.php' },
     { platform: 'yy', keyword: '/yy.php' },
     { platform: 'yy', keyword: 'yy.flv' },
-    { platform: 'yy', keyword: 'yy.m3u8' },
 
     // 斗鱼直播
     { platform: 'douyu', keyword: '/douyu/' },
@@ -613,9 +619,7 @@ const testStatus: TestStatus = {
     { platform: 'douyin', keyword: 'douyin.php' },
     { platform: 'douyin', keyword: 'dyin.php' },
 
-    // 央视/CNTV/咪咕 (不包含通用 IPTV 规则，避免误识别普通电视频道)
-    { platform: 'cntv', keyword: '/cntv/' },
-    { platform: 'cntv', keyword: 'cntv.php' },
+    // 咪咕
     { platform: 'migu', keyword: '/migu/' },
     { platform: 'migu', keyword: '/migu?' },
     { platform: 'migu', keyword: 'migu.php' },
@@ -624,8 +628,7 @@ const testStatus: TestStatus = {
     { platform: 'migu', keyword: 'mg.php' },
     { platform: 'migu', keyword: 'regex:[?&]platform=migu' },
     { platform: 'migu', keyword: 'regex::\\d+/(?:migu|mg)/\\d+' },
-    { platform: 'migu', keyword: 'regex::\\d+/6\\d{8}(?!\\d)(?:/|\\?|\\.|#|$)' },
-    { platform: 'migu', keyword: 'regex:^https?://[^/]+/6\\d{8}(?!\\d)(?:/|\\?|\\.|#|$)' }
+    { platform: 'migu', keyword: 'regex::\\d+/[1-9]\\d{7,9}(?!\\d)(?:/|\\?|\\.|#|$)' }
   ];
 
   let discoveryRulesCache: any[] | null = null;
@@ -762,7 +765,16 @@ const testStatus: TestStatus = {
   function cleanupBlockedCarouselProxies(): number {
     let count = 0;
     try {
-      const resMigu = db.prepare("DELETE FROM carousel_proxies WHERE urlTemplate LIKE '%miguvideo%'").run();
+      const resMigu = db.prepare(`
+        DELETE FROM carousel_proxies 
+        WHERE urlTemplate LIKE '%miguvideo%' 
+           OR urlTemplate LIKE '%lz-cdn%' 
+           OR urlTemplate LIKE '%lzcdn%' 
+           OR urlTemplate LIKE '%ffzy%' 
+           OR urlTemplate LIKE '%bfzy%'
+           OR urlTemplate LIKE '%/202%'
+           OR urlTemplate LIKE '%/203%'
+      `).run();
       count += resMigu.changes;
 
       const allProxies = db.prepare('SELECT id, platform, urlTemplate FROM carousel_proxies').all() as any[];
@@ -782,8 +794,8 @@ const testStatus: TestStatus = {
     if (overwrite) {
       db.prepare('DELETE FROM carousel_discovery_rules').run();
     } else {
-      // Clean up obsolete / overly loose Migu rules or unwanted legacy iptv rules
-      db.prepare("DELETE FROM carousel_discovery_rules WHERE keyword IN ('/608', ':3566/', ':3566', ':\\d+/608', '/iptv/', 'iptv.php') OR keyword LIKE ':\\d+/\\d{9}' OR keyword LIKE '%[0-9]{9}%'").run();
+      // Clean up removed rules (cntv, yy.m3u8) or overly loose domain regex rules
+      db.prepare("DELETE FROM carousel_discovery_rules WHERE platform = 'cntv' OR keyword = 'yy.m3u8' OR keyword LIKE 'regex:^https?://%'").run();
     }
     const insertStmt = db.prepare('INSERT OR IGNORE INTO carousel_discovery_rules (id, platform, keyword, enabled) VALUES (?, ?, ?, 1)');
     const insertMany = db.transaction((rules) => {
@@ -1156,18 +1168,18 @@ function extractCarouselPlatformAndId(url: string): { platform: string | null; o
       }
     }
 
-    // 3. Port-level proxy: http://ip:3566/631780532
+    // 3. Port-level proxy: http://ip:port/631780532, http://ip:port/708807420
     if (!originalId) {
-      const rootMatch = url.match(/:\d+\/+(6\d{7,9})(?:(?:\/|\.m3u8|\.flv)[^?#]*)?(?:\?.*)?$/i);
+      const rootMatch = url.match(/:\d+\/+([1-9]\d{7,9})(?:(?:\/|\.m3u8|\.flv)[^?#]*)?(?:\?.*)?$/i);
       if (rootMatch) {
         originalId = rootMatch[1];
         template = url.replace(new RegExp(`(:\\d+/+)${originalId}`, 'i'), '$1{}');
       }
     }
 
-    // 4. Fallback numeric id
-    if (!originalId) {
-      const numMatch = url.match(/\b(6\d{7,9})\b/);
+    // 4. Fallback numeric id (8 to 10 digits) - ONLY if URL explicitly contains migu/mg keyword
+    if (!originalId && /[?&/](?:migu|mg)[_./?]/i.test(url)) {
+      const numMatch = url.match(/\b([1-9]\d{7,9})\b/);
       if (numMatch) {
         originalId = numMatch[1];
         template = url.replace(originalId, '{}');
@@ -1222,7 +1234,7 @@ function parseCarouselUrl(url: string) {
   return { platform, originalId };
 }
 
-function detectAndRegisterCarouselProxy(url: string) {
+function detectAndRegisterCarouselProxy(url: string, ignoreDeletedCheck = false) {
   try {
     if (!url || typeof url !== 'string') return;
     if (isUrlBlockedByDisabledRules(url)) return;
@@ -1230,10 +1242,16 @@ function detectAndRegisterCarouselProxy(url: string) {
 
     if (platform && template && template.includes('{}') && !isUrlBlockedByDisabledRules(template, platform)) {
       // Check if user has explicitly deleted this proxy template
-      try {
-        const isDeleted = db.prepare('SELECT 1 FROM deleted_carousel_proxies WHERE urlTemplate = ?').get(template);
-        if (isDeleted) return;
-      } catch (e) {}
+      if (!ignoreDeletedCheck) {
+        try {
+          const isDeleted = db.prepare('SELECT 1 FROM deleted_carousel_proxies WHERE urlTemplate = ?').get(template);
+          if (isDeleted) return;
+        } catch (e) {}
+      } else {
+        try {
+          db.prepare('DELETE FROM deleted_carousel_proxies WHERE urlTemplate = ?').run(template);
+        } catch (e) {}
+      }
 
       const exists = db.prepare('SELECT id FROM carousel_proxies WHERE urlTemplate = ?').get(template);
       if (!exists) {
@@ -1250,9 +1268,14 @@ function detectAndRegisterCarouselProxy(url: string) {
   }
 }
 
-function scanAndRegisterAllCarouselProxies(): number {
+function scanAndRegisterAllCarouselProxies(forceReScan = false): number {
   try {
     cleanupBlockedCarouselProxies();
+    if (forceReScan) {
+      try {
+        db.prepare('DELETE FROM deleted_carousel_proxies').run();
+      } catch (e) {}
+    }
     let addedCount = 0;
     // Exclude isolated sources and sources belonging to isolated channels
     const allSources = db.prepare(`
@@ -1265,7 +1288,7 @@ function scanAndRegisterAllCarouselProxies(): number {
     for (const row of allSources) {
       if (row.url && !isUrlBlockedByDisabledRules(row.url)) {
         const prevCount = (db.prepare('SELECT COUNT(*) as count FROM carousel_proxies').get() as any).count;
-        detectAndRegisterCarouselProxy(row.url);
+        detectAndRegisterCarouselProxy(row.url, forceReScan);
         const newCount = (db.prepare('SELECT COUNT(*) as count FROM carousel_proxies').get() as any).count;
         if (newCount > prevCount) {
           addedCount += (newCount - prevCount);
@@ -6269,6 +6292,10 @@ app.get("/api/channels", async (req, res) => {
   app.post("/api/carousel-proxies/scan-sources", (req, res) => {
     try {
       cleanupBlockedCarouselProxies();
+      try {
+        db.prepare('DELETE FROM deleted_carousel_proxies').run();
+      } catch (e) {}
+
       let added = 0;
       // Scan sources in memory (ignoring isolated channels and sources)
       for (const ch of channels) {
@@ -6278,7 +6305,7 @@ app.get("/api/channels", async (req, res) => {
             if (s.isolated) continue;
             if (s && s.url && !isUrlBlockedByDisabledRules(s.url)) {
               const beforeCount = (db.prepare('SELECT COUNT(*) as count FROM carousel_proxies').get() as any).count;
-              detectAndRegisterCarouselProxy(s.url);
+              detectAndRegisterCarouselProxy(s.url, true);
               const afterCount = (db.prepare('SELECT COUNT(*) as count FROM carousel_proxies').get() as any).count;
               if (afterCount > beforeCount) {
                 added += (afterCount - beforeCount);
@@ -6288,7 +6315,7 @@ app.get("/api/channels", async (req, res) => {
         }
       }
       // Scan sources in SQLite if any (ignoring isolated sources and channels)
-      const sqlAdded = scanAndRegisterAllCarouselProxies();
+      const sqlAdded = scanAndRegisterAllCarouselProxies(true);
       added += sqlAdded;
 
       const proxies = db.prepare('SELECT * FROM carousel_proxies').all();

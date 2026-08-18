@@ -162,7 +162,7 @@ export const CarouselChannelView = ({ fetchData, channelsData = [] }: { fetchDat
         platformToSave = "cntv";
         showToast("检测到央视 (cctv) 标识，已自动修正平台为 CNTV 央视", "info");
       } else if (!/^\d+$/.test(originalIdToSave)) {
-        showToast("咪咕 (migu) 频道的直播间 ID 须为 8~10 位纯数字（如 631780532）。cctv1 等字符属于 CNTV (央视) 平台。", "error");
+        showToast("咪咕 (migu) 频道的直播间 ID 须为 8~10 位纯数字（如 631780532、708807420）。cctv1 等字符属于 CNTV (央视) 平台。", "error");
         return;
       }
     }
