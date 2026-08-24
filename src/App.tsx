@@ -35,8 +35,10 @@ import {
   ChevronUp,
   ChevronDown,
   X,
-  Menu
-, Globe } from "lucide-react";
+  Menu,
+  Wand2,
+  Sparkles,
+  Globe } from "lucide-react";
 import { Channel, LiveSource, SyncConfig, TestStatus, EpgGuide, Group, EpgSource } from "./types";
 import { arrayMove } from "@dnd-kit/sortable";
 import DashboardView from "./components/DashboardView";
@@ -45,6 +47,7 @@ import { CarouselProxyView } from "./components/CarouselProxyView";
 import { CarouselChannelView } from "./components/CarouselChannelView";
 import { DraggableGroupList } from "./components/DraggableGroupList";
 import { SortableIpGeoApiList } from "./components/SortableIpGeoApiList";
+import { SmartOrganizeModal } from "./components/SmartOrganizeModal";
 import { IpGeoApi } from "./types";
 
 // Define the global variable provided by Vite
@@ -105,6 +108,7 @@ function isPrivateOrIntranetUrl(urlStr: string): boolean {
 export default function App() {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isSpeedTestConfigOpen, setIsSpeedTestConfigOpen] = useState(false);
+  const [isSmartOrganizeOpen, setIsSmartOrganizeOpen] = useState(false);
   const [channels, setChannels] = useState<Channel[]>([]);
   const [syncConfigs, setSyncConfigs] = useState<SyncConfig[]>([]);
   const [groups, setGroups] = useState<Group[]>([]);
@@ -3361,8 +3365,19 @@ export default function App() {
                   </div>
 
                   <div className="border-t border-slate-100 pt-6 space-y-4">
-                    <div className="flex items-center justify-between">
-                      <h4 className="font-bold text-slate-800 text-xs">已存在的实体直播分组目录 ({groups.length} 个)</h4>
+                    <div className="flex items-center justify-between flex-wrap gap-2">
+                      <div className="flex items-center gap-2">
+                        <h4 className="font-bold text-slate-800 text-xs">已存在的实体直播分组目录 ({groups.length} 个)</h4>
+                        <button
+                          type="button"
+                          onClick={() => setIsSmartOrganizeOpen(true)}
+                          className="px-2.5 py-1 bg-purple-50 hover:bg-purple-100 border border-purple-200 text-purple-700 text-[11px] font-bold rounded-lg transition cursor-pointer flex items-center gap-1"
+                          title="自动根据省份、运营商关键字将频道分配到对应分组"
+                        >
+                          <Wand2 className="w-3.5 h-3.5 text-purple-600" />
+                          <span>一键智能归类建组</span>
+                        </button>
+                      </div>
                       <p className="text-[11px] text-slate-400 font-medium hidden sm:block">
                         💡 提示：按住分组左侧 <span className="font-mono text-slate-600 font-bold">⠿</span> 拖拽图标，可自由调整分组排序
                       </p>
@@ -3499,6 +3514,14 @@ export default function App() {
                         >
                           <Trash2 className="w-3.5 h-3.5 sm:mr-1" />
                           <span className="hidden sm:inline">清理失效源</span>
+                        </button>
+                        <button 
+                          onClick={() => setIsSmartOrganizeOpen(true)}
+                          className="px-2.5 sm:px-3.5 py-1.5 sm:py-2 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700 text-white text-[11px] font-bold rounded-xl shadow-xs transition cursor-pointer flex items-center shrink-0 gap-1"
+                          title="根据频道名称中的省份、运营商关键字自动分配归类分组与规范命名"
+                        >
+                          <Wand2 className="w-3.5 h-3.5" />
+                          <span>智能整理</span>
                         </button>
                         <button 
                           onClick={openChannelCreate}
@@ -8064,6 +8087,15 @@ export default function App() {
           </div>
         </div>
       )}
+
+      <SmartOrganizeModal
+        isOpen={isSmartOrganizeOpen}
+        onClose={() => setIsSmartOrganizeOpen(false)}
+        onSuccess={async () => {
+          await fetchData();
+        }}
+        showFeedback={showFeedback}
+      />
 
     </div>
   );
