@@ -60,12 +60,20 @@ export const SmartOrganizeModal: React.FC<SmartOrganizeModalProps> = ({
 
   if (!isOpen) return null;
 
+  const getAuthHeaders = (): Record<string, string> => {
+    const pwd = localStorage.getItem("iptv_admin_password") || "";
+    return {
+      "Content-Type": "application/json",
+      ...(pwd ? { "x-admin-password": pwd } : {}),
+    };
+  };
+
   const handleFetchPreview = async () => {
     setLoadingPreview(true);
     try {
       const res = await fetch("/api/channels/smart-organize/preview", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: getAuthHeaders(),
         body: JSON.stringify({
           groupingMode,
           normalizeCctv,
@@ -106,7 +114,7 @@ export const SmartOrganizeModal: React.FC<SmartOrganizeModalProps> = ({
 
       const res = await fetch("/api/channels/smart-organize/apply", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: getAuthHeaders(),
         body: JSON.stringify({
           selectedChanges,
           options: { groupingMode, normalizeCctv, normalizeSatTv, stripResolution, extractIspAndProvince },
