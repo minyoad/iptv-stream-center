@@ -13,7 +13,8 @@ import {
   RefreshCw,
   Info,
   Building2,
-  Tv2
+  Tv2,
+  MapPin
 } from "lucide-react";
 
 interface SmartOrganizeModalProps {
@@ -35,10 +36,12 @@ export const SmartOrganizeModal: React.FC<SmartOrganizeModalProps> = ({
 
   // Config options
   const [groupingMode, setGroupingMode] = useState<"smart" | "province_only" | "keep_existing">("smart");
+  const [provinceNameFormat, setProvinceNameFormat] = useState<"raw" | "suffix_local" | "suffix_province" | "suffix_channel">("raw");
   const [normalizeCctv, setNormalizeCctv] = useState(true);
   const [normalizeSatTv, setNormalizeSatTv] = useState(true);
   const [stripResolution, setStripResolution] = useState(true);
   const [extractIspAndProvince, setExtractIspAndProvince] = useState(true);
+  const [onlyLocalChannels, setOnlyLocalChannels] = useState(false);
 
   // Preview data
   const [previewData, setPreviewData] = useState<{
@@ -76,10 +79,12 @@ export const SmartOrganizeModal: React.FC<SmartOrganizeModalProps> = ({
         headers: getAuthHeaders(),
         body: JSON.stringify({
           groupingMode,
+          provinceNameFormat,
           normalizeCctv,
           normalizeSatTv,
           stripResolution,
           extractIspAndProvince,
+          onlyLocalChannels,
         }),
       });
 
@@ -117,7 +122,7 @@ export const SmartOrganizeModal: React.FC<SmartOrganizeModalProps> = ({
         headers: getAuthHeaders(),
         body: JSON.stringify({
           selectedChanges,
-          options: { groupingMode, normalizeCctv, normalizeSatTv, stripResolution, extractIspAndProvince },
+          options: { groupingMode, provinceNameFormat, normalizeCctv, normalizeSatTv, stripResolution, extractIspAndProvince, onlyLocalChannels },
         }),
       });
 
@@ -211,7 +216,7 @@ export const SmartOrganizeModal: React.FC<SmartOrganizeModalProps> = ({
                         {groupingMode === "smart" && <Check className="w-4 h-4 text-indigo-600" />}
                       </div>
                       <p className="text-[11px] text-slate-500 leading-relaxed font-normal">
-                        精细划分: 央视、卫视、港澳台、4K超清及各省地方台 (如 <span className="font-mono text-indigo-600 font-semibold">广东地方</span>、<span className="font-mono text-indigo-600 font-semibold">浙江地方</span>)
+                        精细划分: 央视、卫视、港澳台、4K超清及各省地方台，省份分组统一归类
                       </p>
                     </div>
                   </label>
@@ -233,7 +238,7 @@ export const SmartOrganizeModal: React.FC<SmartOrganizeModalProps> = ({
                         {groupingMode === "province_only" && <Check className="w-4 h-4 text-indigo-600" />}
                       </div>
                       <p className="text-[11px] text-slate-500 leading-relaxed font-normal">
-                        按省份直接划分地方台分组 (如 <span className="font-mono text-indigo-600 font-semibold">广东</span>、<span className="font-mono text-indigo-600 font-semibold">浙江</span>、<span className="font-mono text-indigo-600 font-semibold">湖南</span>)
+                        按省份直接划分地方台分组，各省份独立成组
                       </p>
                     </div>
                   </label>
@@ -259,6 +264,46 @@ export const SmartOrganizeModal: React.FC<SmartOrganizeModalProps> = ({
                       </p>
                     </div>
                   </label>
+                </div>
+
+                {/* Sub-option: Province Group Naming Format */}
+                <div className="pt-3 border-t border-slate-200/70 mt-3 space-y-2">
+                  <div className="flex items-center justify-between flex-wrap gap-1">
+                    <span className="text-[11px] font-bold text-slate-700 flex items-center gap-1.5">
+                      <MapPin className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
+                      省份分组命名统一风格:
+                    </span>
+                    <span className="text-[10px] text-slate-400">
+                      💡 系统会自动优先复用现有省份分组名称，防止生成重复分组
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                    {[
+                      { id: "raw", label: "纯省份简称", example: "广东、浙江" },
+                      { id: "suffix_local", label: "带「地方」后缀", example: "广东地方、浙江地方" },
+                      { id: "suffix_province", label: "全称(省/市)", example: "广东省、上海市" },
+                      { id: "suffix_channel", label: "带「频道」后缀", example: "广东频道、浙江频道" },
+                    ].map((fmt) => (
+                      <button
+                        key={fmt.id}
+                        type="button"
+                        onClick={() => setProvinceNameFormat(fmt.id as any)}
+                        className={`p-2.5 rounded-xl border text-left transition ${
+                          provinceNameFormat === fmt.id
+                            ? "bg-indigo-600 text-white border-indigo-600 shadow-sm font-semibold"
+                            : "bg-white text-slate-700 border-slate-200 hover:border-slate-300"
+                        }`}
+                      >
+                        <div className="text-[11px] font-bold flex items-center justify-between">
+                          <span>{fmt.label}</span>
+                          {provinceNameFormat === fmt.id && <Check className="w-3 h-3 text-white" />}
+                        </div>
+                        <div className={`text-[10px] mt-0.5 font-mono ${provinceNameFormat === fmt.id ? "text-indigo-100" : "text-slate-400"}`}>
+                          {fmt.example}
+                        </div>
+                      </button>
+                    ))}
+                  </div>
                 </div>
               </div>
 
@@ -326,6 +371,24 @@ export const SmartOrganizeModal: React.FC<SmartOrganizeModalProps> = ({
                       <span className="text-xs font-bold text-slate-800 block">提炼运营商/省份至线路 metadata</span>
                       <span className="text-[11px] text-slate-500 font-medium">
                         提取频道名中的 <span className="font-mono text-indigo-600">电信/联通/移动</span> 并自动写入线路属性
+                      </span>
+                    </div>
+                  </label>
+
+                  <label className="flex items-start gap-2.5 p-3.5 rounded-xl bg-purple-50/70 border border-purple-200 hover:border-purple-300 cursor-pointer transition sm:col-span-2">
+                    <input
+                      type="checkbox"
+                      checked={onlyLocalChannels}
+                      onChange={(e) => setOnlyLocalChannels(e.target.checked)}
+                      className="mt-0.5 w-4 h-4 text-purple-600 border-purple-300 rounded focus:ring-purple-500 cursor-pointer"
+                    />
+                    <div>
+                      <span className="text-xs font-bold text-purple-950 flex items-center gap-1.5">
+                        <MapPin className="w-3.5 h-3.5 text-purple-600 shrink-0" />
+                        仅匹配省市地方频道 (跳过央视/卫视/全国频道)
+                      </span>
+                      <span className="text-[11px] text-purple-800 font-medium block mt-0.5 leading-relaxed">
+                        开启后，智能归类逻辑只处理名称中包含明确省、市、区地域关键字的频道 (如 <span className="font-mono font-bold">广州综合</span>、<span className="font-mono font-bold">成都公共</span>、<span className="font-mono font-bold">浦东新闻</span>)，自动跳过央视、卫视等全国性频道，避免误归入省份分组
                       </span>
                     </div>
                   </label>

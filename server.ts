@@ -5007,8 +5007,50 @@ app.get("/api/channels", async (req, res) => {
     return name || originalName;
   }
 
-  function determineSmartTargetGroup(channelName: string, detectedProvince: string, options: any) {
+  function formatProvinceGroupName(detectedProvince: string, format: string, existingGroupNames: string[] = []): string {
+    if (!detectedProvince) return "其它频道";
+
+    if (detectedProvince === "香港" || detectedProvince === "澳门" || detectedProvince === "台湾") {
+      return "港澳台";
+    }
+
+    // 1. First check if an existing group in the DB already matches this province in any form
+    // Examples: "广东", "广东地方", "广东省", "广东市", "广东频道"
+    const possibleVariants = [
+      detectedProvince,
+      `${detectedProvince}地方`,
+      `${detectedProvince}省`,
+      `${detectedProvince}市`,
+      `${detectedProvince}频道`
+    ];
+
+    for (const variant of possibleVariants) {
+      if (existingGroupNames.includes(variant)) {
+        return variant; // Reuse existing group name to avoid creating duplicates like '广东' and '广东地方'
+      }
+    }
+
+    // 2. Format according to selected naming style
+    switch (format) {
+      case "suffix_local":
+        return `${detectedProvince}地方`;
+      case "suffix_province":
+        if (["北京", "上海", "天津", "重庆"].includes(detectedProvince)) {
+          return `${detectedProvince}市`;
+        }
+        return `${detectedProvince}省`;
+      case "suffix_channel":
+        return `${detectedProvince}频道`;
+      case "raw":
+      case "province_only":
+      default:
+        return detectedProvince; // Clean "广东", "浙江", "湖南"
+    }
+  }
+
+  function determineSmartTargetGroup(channelName: string, detectedProvince: string, options: any, existingGroupNames: string[] = []) {
     const mode = options.groupingMode || "smart";
+    const format = options.provinceNameFormat || "raw";
     const upper = channelName.toUpperCase();
 
     if (/^CCTV/i.test(upper) || upper.includes("央视") || upper.includes("CGTN") || upper.includes("CETV")) {
@@ -5021,7 +5063,7 @@ app.get("/api/channels", async (req, res) => {
 
     if (channelName.includes("卫视")) {
       if (mode === "province_only" && detectedProvince) {
-        return detectedProvince;
+        return formatProvinceGroupName(detectedProvince, format, existingGroupNames);
       }
       return "卫视频道";
     }
@@ -5040,10 +5082,7 @@ app.get("/api/channels", async (req, res) => {
     }
 
     if (detectedProvince) {
-      if (mode === "province_only") {
-        return detectedProvince;
-      }
-      return `${detectedProvince}地方`;
+      return formatProvinceGroupName(detectedProvince, format, existingGroupNames);
     }
 
     return "其它频道";
@@ -5054,14 +5093,17 @@ app.get("/api/channels", async (req, res) => {
     try {
       const options = req.body || {};
       const groupingMode = options.groupingMode || "smart"; // "smart" | "province_only" | "keep_existing"
+      const provinceNameFormat = options.provinceNameFormat || "raw";
       const normalizeCctv = options.normalizeCctv !== false;
       const normalizeSatTv = options.normalizeSatTv !== false;
       const stripResolution = options.stripResolution !== false;
       const extractIspAndProvince = options.extractIspAndProvince !== false;
+      const onlyLocalChannels = options.onlyLocalChannels === true;
 
       // Group name mapping
       const groupMap = new Map<string, string>(); // id -> name
       groups.forEach((g) => groupMap.set(g.id, g.name));
+      const existingGroupNames = Array.from(new Set(groups.map((g) => g.name)));
 
       const changes: any[] = [];
       const neededGroupNames = new Set<string>();
@@ -5074,6 +5116,18 @@ app.get("/api/channels", async (req, res) => {
         // 1. Detect Province & ISP from original channel title and sources
         const fullSearchText = originalName + " " + (c.sources || []).map((s) => s.url || "").join(" ");
         const { detectedProvince, detectedIsp } = detectProvinceAndIspFromName(fullSearchText);
+        
+        // Explicitly check province/city detection from channel name ONLY
+        const nameProvince = detectProvinceAndIspFromName(originalName).detectedProvince;
+
+        // If onlyLocalChannels mode is enabled, skip channels that are CCTV, Satellite TV, HK/Macau/Taiwan or have no detected province in channel name
+        if (onlyLocalChannels) {
+          const upper = originalName.toUpperCase();
+          const isCctvOrSatOrHk = /^CCTV/i.test(upper) || upper.includes("央视") || upper.includes("CGTN") || upper.includes("CETV") || originalName.includes("卫视") || /翡翠|明珠|TVB|凤凰|澳视|华视|台视|中视|三立|东森|HBO|星空/i.test(originalName);
+          if (isCctvOrSatOrHk || !nameProvince) {
+            return; // Skip non-local channels or channels without explicit province/city keyword in channel name
+          }
+        }
 
         // 2. Clean/Normalize Name
         let newName = cleanChannelNameForSmartOrganize(originalName, {
@@ -5084,7 +5138,12 @@ app.get("/api/channels", async (req, res) => {
         });
 
         // 3. Determine Target Group
-        let targetGroupName = determineSmartTargetGroup(originalName, detectedProvince, { groupingMode });
+        let targetGroupName = determineSmartTargetGroup(
+          originalName,
+          detectedProvince,
+          { groupingMode, provinceNameFormat },
+          existingGroupNames
+        );
         
         let targetGroupNames: string[] = [targetGroupName];
 
@@ -5148,8 +5207,8 @@ app.get("/api/channels", async (req, res) => {
       });
 
       // Find which target groups do not exist yet in database
-      const existingGroupNames = new Set(groups.map((g) => g.name));
-      const newGroupsToCreate = Array.from(neededGroupNames).filter((gn) => !existingGroupNames.has(gn));
+      const existingGroupNameSet = new Set(groups.map((g) => g.name));
+      const newGroupsToCreate = Array.from(neededGroupNames).filter((gn) => !existingGroupNameSet.has(gn));
 
       res.json({
         success: true,
