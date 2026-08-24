@@ -37,6 +37,7 @@ export const SmartOrganizeModal: React.FC<SmartOrganizeModalProps> = ({
   // Config options
   const [groupingMode, setGroupingMode] = useState<"smart" | "province_only" | "keep_existing">("smart");
   const [provinceNameFormat, setProvinceNameFormat] = useState<"raw" | "suffix_local" | "suffix_province" | "suffix_channel">("raw");
+  const [allowMultiGroup, setAllowMultiGroup] = useState(true);
   const [normalizeCctv, setNormalizeCctv] = useState(true);
   const [normalizeSatTv, setNormalizeSatTv] = useState(true);
   const [stripResolution, setStripResolution] = useState(true);
@@ -80,6 +81,7 @@ export const SmartOrganizeModal: React.FC<SmartOrganizeModalProps> = ({
         body: JSON.stringify({
           groupingMode,
           provinceNameFormat,
+          allowMultiGroup,
           normalizeCctv,
           normalizeSatTv,
           stripResolution,
@@ -122,7 +124,7 @@ export const SmartOrganizeModal: React.FC<SmartOrganizeModalProps> = ({
         headers: getAuthHeaders(),
         body: JSON.stringify({
           selectedChanges,
-          options: { groupingMode, provinceNameFormat, normalizeCctv, normalizeSatTv, stripResolution, extractIspAndProvince, onlyLocalChannels },
+          options: { groupingMode, provinceNameFormat, allowMultiGroup, normalizeCctv, normalizeSatTv, stripResolution, extractIspAndProvince, onlyLocalChannels },
         }),
       });
 
@@ -304,6 +306,27 @@ export const SmartOrganizeModal: React.FC<SmartOrganizeModalProps> = ({
                       </button>
                     ))}
                   </div>
+                </div>
+
+                {/* Multi-group option */}
+                <div className="pt-3 border-t border-slate-200/70">
+                  <label className="flex items-start gap-2.5 p-3.5 rounded-xl bg-indigo-50/70 border border-indigo-200 hover:border-indigo-300 cursor-pointer transition">
+                    <input
+                      type="checkbox"
+                      checked={allowMultiGroup}
+                      onChange={(e) => setAllowMultiGroup(e.target.checked)}
+                      className="mt-0.5 w-4 h-4 text-indigo-600 border-indigo-300 rounded focus:ring-indigo-500 cursor-pointer"
+                    />
+                    <div>
+                      <span className="text-xs font-bold text-indigo-950 flex items-center gap-1.5">
+                        <Layers className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
+                        支持多重分组 (允许频道同时归入多个符合条件的分组)
+                      </span>
+                      <span className="text-[11px] text-indigo-800 font-medium block mt-0.5 leading-relaxed">
+                        开启后，符合多特征的频道将同时加入多个分组。例如 <span className="font-mono font-bold">CCTV-5 4K</span> 将同时归入 <span className="font-mono font-bold">「央视频道」</span>、<span className="font-mono font-bold">「4K超清」</span> 和 <span className="font-mono font-bold">「体育频道」</span>；<span className="font-mono font-bold">广东体育</span> 将同时归入 <span className="font-mono font-bold">「广东」</span> 和 <span className="font-mono font-bold">「体育频道」</span>
+                      </span>
+                    </div>
+                  </label>
                 </div>
               </div>
 

@@ -5048,44 +5048,69 @@ app.get("/api/channels", async (req, res) => {
     }
   }
 
-  function determineSmartTargetGroup(channelName: string, detectedProvince: string, options: any, existingGroupNames: string[] = []) {
+  function determineSmartTargetGroups(channelName: string, detectedProvince: string, options: any, existingGroupNames: string[] = []): string[] {
     const mode = options.groupingMode || "smart";
     const format = options.provinceNameFormat || "raw";
+    const allowMultiGroup = options.allowMultiGroup !== false; // Default true: support multi-group assignment
     const upper = channelName.toUpperCase();
 
-    if (/^CCTV/i.test(upper) || upper.includes("央视") || upper.includes("CGTN") || upper.includes("CETV")) {
-      return "央视频道";
-    }
-
-    if (upper.includes("4K") || upper.includes("8K") || upper.includes("超高清")) {
-      return "4K超清";
-    }
-
-    if (channelName.includes("卫视")) {
-      if (mode === "province_only" && detectedProvince) {
-        return formatProvinceGroupName(detectedProvince, format, existingGroupNames);
+    if (mode === "province_only") {
+      if (detectedProvince) {
+        return [formatProvinceGroupName(detectedProvince, format, existingGroupNames)];
       }
-      return "卫视频道";
+      return ["其它频道"];
     }
 
+    const matches: string[] = [];
+
+    // 1. CCTV / 央视
+    if (/^CCTV/i.test(upper) || upper.includes("央视") || upper.includes("CGTN") || upper.includes("CETV")) {
+      matches.push("央视频道");
+    }
+
+    // 2. Satellite TV / 卫视
+    if (channelName.includes("卫视")) {
+      matches.push("卫视频道");
+    }
+
+    // 3. 4K/8K
+    if (upper.includes("4K") || upper.includes("8K") || upper.includes("超高清")) {
+      matches.push("4K超清");
+    }
+
+    // 4. HK / Macao / Taiwan
     if (/翡翠|明珠|TVB|凤凰|澳视|华视|台视|中视|三立|东森|HBO|星空/i.test(channelName) ||
         detectedProvince === "香港" || detectedProvince === "澳门" || detectedProvince === "台湾") {
-      return "港澳台";
+      matches.push("港澳台");
     }
 
+    // 5. Sports
     if (/体育|五星|风云足球|高尔夫|极速汽车/i.test(channelName)) {
-      return "体育频道";
+      matches.push("体育频道");
     }
 
+    // 6. Movies / Cinema / Drama / Anime
     if (/影院|电影|剧场|动作|喜剧|动画|卡酷|少儿|纪录片|纪实|iHOT|CHC/i.test(channelName)) {
-      return "影视频道";
+      matches.push("影视频道");
     }
 
-    if (detectedProvince) {
-      return formatProvinceGroupName(detectedProvince, format, existingGroupNames);
+    // 7. Province / Local Channels
+    if (detectedProvince && !matches.includes("港澳台")) {
+      const provGroup = formatProvinceGroupName(detectedProvince, format, existingGroupNames);
+      if (!matches.includes(provGroup)) {
+        matches.push(provGroup);
+      }
     }
 
-    return "其它频道";
+    if (matches.length === 0) {
+      matches.push("其它频道");
+    }
+
+    if (!allowMultiGroup) {
+      return [matches[0]];
+    }
+
+    return matches;
   }
 
   // --- Smart Organize (智能整理) Endpoints ---
@@ -5094,6 +5119,7 @@ app.get("/api/channels", async (req, res) => {
       const options = req.body || {};
       const groupingMode = options.groupingMode || "smart"; // "smart" | "province_only" | "keep_existing"
       const provinceNameFormat = options.provinceNameFormat || "raw";
+      const allowMultiGroup = options.allowMultiGroup !== false; // Default true
       const normalizeCctv = options.normalizeCctv !== false;
       const normalizeSatTv = options.normalizeSatTv !== false;
       const stripResolution = options.stripResolution !== false;
@@ -5137,15 +5163,13 @@ app.get("/api/channels", async (req, res) => {
           normalizeSatTv
         });
 
-        // 3. Determine Target Group
-        let targetGroupName = determineSmartTargetGroup(
+        // 3. Determine Target Group(s)
+        let targetGroupNames: string[] = determineSmartTargetGroups(
           originalName,
           detectedProvince,
-          { groupingMode, provinceNameFormat },
+          { groupingMode, provinceNameFormat, allowMultiGroup },
           existingGroupNames
         );
-        
-        let targetGroupNames: string[] = [targetGroupName];
 
         if (groupingMode === "keep_existing") {
           const hasCustomGroup = originalGroupNames.some((gn) => gn !== "其它频道" && gn !== "未分类");
