@@ -4853,6 +4853,47 @@ app.get("/api/channels", async (req, res) => {
     res.json({ success: true, count: updatedCount });
   });
 
+  // Batch remove channel from specific group
+  app.post("/api/channels/batch-remove-group", (req, res) => {
+    const { channelIds, groupId } = req.body;
+    if (!Array.isArray(channelIds) || channelIds.length === 0) {
+      return res.status(400).json({ error: "请提供目标频道 ID 列表" });
+    }
+    if (!groupId) {
+      return res.status(400).json({ error: "请提供目标分组 ID" });
+    }
+
+    let updatedCount = 0;
+    channels.forEach((c) => {
+      if (channelIds.includes(c.id)) {
+        if (!Array.isArray(c.groupIds)) {
+          c.groupIds = [];
+        }
+        const originalLen = c.groupIds.length;
+        c.groupIds = c.groupIds.filter((gId) => gId !== groupId);
+        
+        // If no group is assigned, fallback to other group
+        if (c.groupIds.length === 0) {
+          let otherGroup = groups.find((g) => g.id === "g_other" || g.name === "其它频道");
+          if (!otherGroup) {
+            otherGroup = { id: "g_other", name: "其它频道" };
+            groups.push(otherGroup);
+          }
+          c.groupIds.push(otherGroup.id);
+        }
+
+        if (c.groupIds.length !== originalLen || c.groupIds.includes("g_other")) {
+          updatedCount++;
+        }
+      }
+    });
+
+    if (updatedCount > 0) {
+      saveData();
+    }
+    res.json({ success: true, count: updatedCount });
+  });
+
   // --- Smart Organize Helper Functions ---
   const PROVINCES_LIST = [
     "北京", "上海", "天津", "重庆", "河北", "山西", "辽宁", "吉林", "黑龙江", "江苏",

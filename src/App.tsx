@@ -49,6 +49,7 @@ import { DraggableGroupList } from "./components/DraggableGroupList";
 import { SortableIpGeoApiList } from "./components/SortableIpGeoApiList";
 import { SmartOrganizeModal } from "./components/SmartOrganizeModal";
 import { IpGeoApi } from "./types";
+import { authFetch as fetch } from "./utils/api";
 
 // Define the global variable provided by Vite
 declare const __APP_BUILD_VERSION__: string;
@@ -937,6 +938,13 @@ export default function App() {
 
   useEffect(() => {
     detectClientIpInfo(true);
+
+    const handleAuthRequired = () => {
+      setIsAuthenticated(false);
+      setIsAuthRequired(true);
+    };
+    window.addEventListener("iptv_auth_required", handleAuthRequired);
+    return () => window.removeEventListener("iptv_auth_required", handleAuthRequired);
   }, []);
 
   const showFeedback = (type: "success" | "error" | "info", text: string) => {
@@ -944,31 +952,6 @@ export default function App() {
     setTimeout(() => {
       setFeedbackMsg(null);
     }, 4500);
-  };
-
-  // Setup automated global fetch interceptor via a local scoped fetch function
-  const fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
-    const url = typeof input === "string" ? input : (input instanceof Request ? input.url : String(input));
-    if (url.startsWith("/api/")) {
-      const password = localStorage.getItem("iptv_admin_password") || "";
-      const headers = new Headers(init?.headers || {});
-      if (password) {
-        headers.set("x-admin-password", password);
-      }
-      const updatedInit = {
-        ...init,
-        headers,
-      };
-      const response = await window.fetch(input, updatedInit);
-      
-      // If server responds with 401 Unauthorized because of password requirement, trigger authentication prompt
-      if (response.status === 401 && !url.includes("/api/auth/verify") && !url.includes("/api/auth/status")) {
-        setIsAuthenticated(false);
-        setIsAuthRequired(true);
-      }
-      return response;
-    }
-    return window.fetch(input, init);
   };
 
   const checkAuthStatus = async (retryCount = 0) => {
