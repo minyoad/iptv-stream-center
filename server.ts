@@ -5347,6 +5347,10 @@ app.get("/api/channels", async (req, res) => {
       return res.status(404).json({ error: "未找到频道" });
     }
 
+    if (channel.sources.some((s) => s.url === url)) {
+      return res.status(400).json({ error: "该直播源链接在此频道下已存在，重复添加已自动拦截" });
+    }
+
     const newSource: LiveSource = {
       id: "src_" + Math.random().toString(36).substring(2, 10),
       url,
@@ -7981,50 +7985,76 @@ ${JSON.stringify(scoredList.map(c => ({ epgId: c.epgId, names: c.displayNames, s
   });
 
   app.post("/api/cleanup/inactive", (req, res) => {
-    const { failThreshold } = req.body || {};
+    const { failThreshold, action = "isolate" } = req.body || {};
     const threshold = parseInt(failThreshold as string) || 0;
 
     let affectedCount = 0;
     let restoredRtspCount = 0;
 
     channels.forEach((channel) => {
-      channel.sources.forEach((s) => {
-        const isRtspOrIntranet = isPrivateOrIntranetUrl(s.url);
-
-        if (isRtspOrIntranet) {
-          const isExplicitlyTimeout = s.latency !== undefined && s.latency >= 9999;
-          
-          if (!isExplicitlyTimeout) {
-            if (s.isolated) {
-              s.isolated = false;
-              restoredRtspCount++;
-            }
-            if (s.status === "inactive") {
-              s.status = "active";
-            }
-            return; // Skip isolating RTSP / Intranet streams
+      if (action === "delete") {
+        const initialCount = channel.sources.length;
+        channel.sources = channel.sources.filter((s) => {
+          const isRtspOrIntranet = isPrivateOrIntranetUrl(s.url);
+          if (isRtspOrIntranet) {
+            const isExplicitlyTimeout = s.latency !== undefined && s.latency >= 9999;
+            if (!isExplicitlyTimeout) return true; // Keep RTSP/Intranet
           }
-          // If it is a timeout (9999ms), fall through to normal cleanup/isolation logic
-        }
 
-        const isInvalid = s.status === "inactive" || (s.latency !== undefined && s.latency >= 9999);
+          const isInvalid = s.status === "inactive" || (s.latency !== undefined && s.latency >= 9999);
+          if (isInvalid) {
+            if (threshold > 0) {
+              const failures = (s.testCount || 0) - (s.successCount || 0);
+              if (failures < threshold && s.latency !== 9999 && s.status !== "inactive") {
+                return true; // Keep if failures haven't met threshold
+              }
+            }
+            return false; // Physical delete
+          }
+          return true;
+        });
+        affectedCount += (initialCount - channel.sources.length);
+      } else {
+        // Soft Isolate
+        channel.sources.forEach((s) => {
+          const isRtspOrIntranet = isPrivateOrIntranetUrl(s.url);
 
-        if (isInvalid && !s.isolated) {
-          if (threshold > 0) {
-            const failures = (s.testCount || 0) - (s.successCount || 0);
-            if (failures < threshold && s.latency !== 9999 && s.status !== "inactive") {
-              return; // Skip isolating if it hasn't failed enough times
+          if (isRtspOrIntranet) {
+            const isExplicitlyTimeout = s.latency !== undefined && s.latency >= 9999;
+            
+            if (!isExplicitlyTimeout) {
+              if (s.isolated) {
+                s.isolated = false;
+                restoredRtspCount++;
+              }
+              if (s.status === "inactive") {
+                s.status = "active";
+              }
+              return; // Skip isolating RTSP / Intranet streams
             }
           }
-          s.isolated = true;
-          s.status = "inactive";
-          affectedCount++;
-        }
-      });
+
+          const isInvalid = s.status === "inactive" || (s.latency !== undefined && s.latency >= 9999);
+
+          if (isInvalid && !s.isolated) {
+            if (threshold > 0) {
+              const failures = (s.testCount || 0) - (s.successCount || 0);
+              if (failures < threshold && s.latency !== 9999 && s.status !== "inactive") {
+                return; // Skip isolating if it hasn't failed enough times
+              }
+            }
+            s.isolated = true;
+            s.status = "inactive";
+            affectedCount++;
+          }
+        });
+      }
     });
 
     saveData();
-    let msg = `成功隔离 (软隐藏) ${affectedCount} 个失效链接直播源`;
+    let msg = action === "delete"
+      ? `成功彻底物理删除了 ${affectedCount} 个失效直播源`
+      : `成功软隔离 (隐藏) ${affectedCount} 个失效直播源`;
     if (restoredRtspCount > 0) {
       msg += `，并自动恢复防卡死解隔离了 ${restoredRtspCount} 个 RTSP/内网源`;
     }
