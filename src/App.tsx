@@ -38,13 +38,13 @@ import {
   Menu,
   Wand2,
   Sparkles,
+  Film,
   Globe } from "lucide-react";
 import { Channel, LiveSource, SyncConfig, TestStatus, EpgGuide, Group, EpgSource } from "./types";
 import { arrayMove } from "@dnd-kit/sortable";
 import DashboardView from "./components/DashboardView";
 import { DraggableChannelList } from "./components/DraggableChannelList";
-import { CarouselProxyView } from "./components/CarouselProxyView";
-import { CarouselChannelView } from "./components/CarouselChannelView";
+import { CarouselHubView } from "./components/CarouselHubView";
 import { DraggableGroupList } from "./components/DraggableGroupList";
 import { SortableIpGeoApiList } from "./components/SortableIpGeoApiList";
 import { SmartOrganizeModal } from "./components/SmartOrganizeModal";
@@ -3036,6 +3036,23 @@ export default function App() {
             <Tv className="w-4 h-4" />
             频道与线路编辑
           </button>
+
+          <button 
+            onClick={async () => {
+              setActiveTab("carousel");
+              setIsMobileMenuOpen(false);
+              await fetchData();
+            }}
+            className={`w-full flex items-center gap-3.5 px-4 py-3 rounded-xl transition text-xs font-semibold ${
+              activeTab === "carousel" 
+              ? "bg-indigo-50/80 text-indigo-700 font-bold" 
+              : "text-slate-500 hover:bg-slate-50 hover:text-slate-800"
+            }`}
+            id="nav_carousel"
+          >
+            <Film className={`w-4 h-4 ${activeTab === "carousel" ? "text-indigo-600" : "text-slate-400"}`} />
+            轮播代理与映射
+          </button>
           
           <button 
             onClick={() => {
@@ -3168,6 +3185,7 @@ export default function App() {
             <h1 className="text-xs sm:text-sm md:text-base font-bold text-slate-800 truncate">
               {activeTab === "dashboard" && "直播管理中心一览 (Dashboard)"}
               {activeTab === "channels" && "频道列表与线路维护中心"}
+              {activeTab === "carousel" && "轮播频道映射与代理管理工作台"}
               {activeTab === "sync" && "M3U / TXT 网络同步订阅与自定义文件导入"}
               {activeTab === "export" && "播放接口配置生成工具"}
               {activeTab === "epg" && "EPG XML 节目单同步整合中心"}
@@ -3267,50 +3285,7 @@ export default function App() {
                     <span className="sm:hidden">全局线路</span>
                     <span className="hidden sm:inline">全局线路与批量管理</span>
                   </button>
-
-                  <button
-                    onClick={(e) => {
-                      setChannelSubTab("carousel");
-                      e.currentTarget.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
-                    }}
-                    className={`px-3 sm:px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 shrink-0 cursor-pointer touch-press ${
-                      channelSubTab === "carousel"
-                      ? "bg-slate-800 text-white shadow-md shadow-slate-900/15 ring-2 ring-slate-800/10"
-                      : "bg-white text-slate-600 hover:text-slate-900 hover:bg-slate-50 border border-slate-200"
-                    }`}
-                  >
-                    <RefreshCw className="w-3.5 h-3.5 shrink-0" />
-                    <span className="sm:hidden">轮播代理</span>
-                    <span className="hidden sm:inline">轮播代理配置</span>
-                  </button>
-
-                  <button
-                    onClick={(e) => {
-                      setChannelSubTab("carousel_channels" as any);
-                      e.currentTarget.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
-                    }}
-                    className={`px-3 sm:px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 shrink-0 cursor-pointer touch-press ${
-                      channelSubTab === ("carousel_channels" as any)
-                      ? "bg-slate-800 text-white shadow-md shadow-slate-900/15 ring-2 ring-slate-800/10"
-                      : "bg-white text-slate-600 hover:text-slate-900 hover:bg-slate-50 border border-slate-200"
-                    }`}
-                  >
-                    <RefreshCw className="w-3.5 h-3.5 shrink-0" />
-                    <span className="sm:hidden">轮播频道</span>
-                    <span className="hidden sm:inline">轮播频道管理</span>
-                  </button>
                 </div>
-              </div>
-
-              <div className={channelSubTab === "carousel" ? "block animate-fade-in" : "hidden"}>
-                    <CarouselProxyView 
-                       
-                       fetchData={fetchData}
-                    />
-              </div>
-              
-              <div className={channelSubTab === ("carousel_channels" as any) ? "block animate-fade-in" : "hidden"}>
-                    <CarouselChannelView fetchData={fetchData} channelsData={channels} />
               </div>
 
               {channelSubTab === "groups" && (
@@ -5284,6 +5259,15 @@ export default function App() {
                 </div>
               )}
             </div>
+          )}
+
+          {/* VIEW: CAROUSEL PROXY & CHANNEL MAPPING HUB */}
+          {activeTab === "carousel" && (
+            <CarouselHubView 
+              fetchData={fetchData} 
+              channelsData={channels} 
+              onFeedback={showFeedback} 
+            />
           )}
 
           {/* VIEW: SUBSCRIPTIONS & MANUAL BULK IMPORT */}
