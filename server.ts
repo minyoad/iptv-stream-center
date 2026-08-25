@@ -19,6 +19,17 @@ import crypto from "crypto";
 import { GoogleGenAI, Type } from "@google/genai";
 import Database from "better-sqlite3";
 import compression from "compression";
+import {
+  PROVINCES_LIST,
+  CITY_TO_PROVINCE,
+  REGIONAL_TV_BRANDS,
+  STANDARD_CCTV_NAME_MAP,
+  detectProvinceAndIspFromName,
+  formatProvinceGroupName,
+  determineSmartTargetGroups,
+  cleanChannelNameForSmartOrganize,
+  stripNoiseForDetection
+} from "./server/geo_channels";
 
 interface LiveSource {
   id: string;
@@ -2338,40 +2349,13 @@ loadDefaultAliases();
 loadData();
 checkAndPerformDailyBackup();
 
-// Utility function to map URL and parse ISP/Province
-function parseIspAndProvince(name: string): { province: string; isp: string } {
-  let province = "全国";
-  let isp = "BGP";
-
-  const provinces = [
-    "北京", "上海", "天津", "重庆", "河北", "山西", "辽宁", "吉林", "黑龙江", "江苏",
-    "浙江", "安徽", "福建", "江西", "山东", "河南", "湖北", "湖南", "广东", "海南",
-    "四川", "贵州", "云南", "陕西", "甘肃", "青海", "台湾", "内蒙古", "广西", "西藏",
-    "宁夏", "新疆", "香港", "澳门"
-  ];
-  for (const p of provinces) {
-    if (name.includes(p)) {
-      province = p;
-      break;
-    }
-  }
-
-  const isps = [
-    { key: "电信", label: "电信" },
-    { key: "联通", label: "联通" },
-    { key: "移动", label: "移动" },
-    { key: "广电", label: "广电" },
-    { key: "铁通", label: "铁通" },
-    { key: "BGP", label: "BGP" }
-  ];
-  for (const i of isps) {
-    if (name.includes(i.key) || name.toLowerCase().includes(i.key.toLowerCase())) {
-      isp = i.label;
-      break;
-    }
-  }
-
-  return { province, isp };
+// Utility function to map URL and parse ISP/Province using comprehensive geo engine
+function parseIspAndProvince(name: string, streamUrls: string[] = []): { province: string; isp: string } {
+  const { detectedProvince, detectedIsp } = detectProvinceAndIspFromName(name, streamUrls);
+  return {
+    province: detectedProvince || "全国",
+    isp: detectedIsp || "BGP"
+  };
 }
 
 function isPrivateOrIntranetUrl(urlStr: string): boolean {
@@ -4894,266 +4878,6 @@ app.get("/api/channels", async (req, res) => {
     res.json({ success: true, count: updatedCount });
   });
 
-  // --- Smart Organize Helper Functions ---
-  const PROVINCES_LIST = [
-    "北京", "上海", "天津", "重庆", "河北", "山西", "辽宁", "吉林", "黑龙江", "江苏",
-    "浙江", "安徽", "福建", "江西", "山东", "河南", "湖北", "湖南", "广东", "海南",
-    "四川", "贵州", "云南", "陕西", "甘肃", "青海", "台湾", "内蒙古", "广西", "西藏",
-    "宁夏", "新疆", "香港", "澳门"
-  ];
-
-  const CITY_TO_PROVINCE: Record<string, string> = {
-    // 广东
-    "广州": "广东", "深圳": "广东", "珠海": "广东", "汕头": "广东", "佛山": "广东", "韶关": "广东", "湛江": "广东", "肇庆": "广东", "江门": "广东", "茂名": "广东", "惠州": "广东", "梅州": "广东", "汕尾": "广东", "河源": "广东", "阳江": "广东", "清远": "广东", "东莞": "广东", "中山": "广东", "潮州": "广东", "揭阳": "广东", "云浮": "广东", "珠江": "广东", "南方": "广东",
-    // 浙江
-    "杭州": "浙江", "宁波": "浙江", "温州": "浙江", "嘉兴": "浙江", "湖州": "浙江", "绍兴": "浙江", "金华": "浙江", "衢州": "浙江", "舟山": "浙江", "台州": "浙江", "丽水": "浙江",
-    // 江苏
-    "南京": "江苏", "无锡": "江苏", "徐州": "江苏", "常州": "江苏", "苏州": "江苏", "南通": "江苏", "连云港": "江苏", "淮安": "江苏", "盐城": "江苏", "扬州": "江苏", "镇江": "江苏", "泰州": "江苏", "宿迁": "江苏",
-    // 湖南
-    "长沙": "湖南", "株洲": "湖南", "湘潭": "湖南", "衡阳": "湖南", "邵阳": "湖南", "岳阳": "湖南", "常德": "湖南", "张家界": "湖南", "益阳": "湖南", "郴州": "湖南", "永州": "湖南", "怀化": "湖南", "娄底": "湖南", "湘西": "湖南",
-    // 湖北
-    "武汉": "湖北", "黄石": "湖北", "十堰": "湖北", "宜昌": "湖北", "襄阳": "湖北", "鄂州": "湖北", "荆门": "湖北", "孝感": "湖北", "荆州": "湖北", "黄冈": "湖北", "咸宁": "湖北", "随州": "湖北", "恩施": "湖北",
-    // 四川
-    "成都": "四川", "自贡": "四川", "攀枝花": "四川", "泸州": "四川", "德阳": "四川", "绵阳": "四川", "广元": "四川", "遂宁": "四川", "内江": "四川", "乐山": "四川", "南充": "四川", "眉山": "四川", "宜宾": "四川", "广安": "四川", "达州": "四川", "雅安": "四川", "巴中": "四川", "资阳": "四川", "凉山": "四川",
-    // 山东
-    "济南": "山东", "青岛": "山东", "淄博": "山东", "枣庄": "山东", "东营": "山东", "烟台": "山东", "潍坊": "山东", "济宁": "山东", "泰安": "山东", "威海": "山东", "日照": "山东", "临沂": "山东", "德州": "山东", "聊城": "山东", "滨州": "山东", "菏泽": "山东",
-    // 河南
-    "郑州": "河南", "开封": "河南", "洛阳": "河南", "平顶山": "河南", "安阳": "河南", "鹤壁": "河南", "新乡": "河南", "焦作": "河南", "濮阳": "河南", "许昌": "河南", "漯河": "河南", "三门峡": "河南", "南阳": "河南", "商丘": "河南", "信阳": "河南", "周口": "河南", "驻马店": "河南",
-    // 河北
-    "石家庄": "河北", "唐山": "河北", "秦皇岛": "河北", "邯郸": "河北", "邢台": "河北", "保定": "河北", "张家口": "河北", "承德": "河北", "沧州": "河北", "廊坊": "河北", "衡水": "河北",
-    // 山西
-    "太原": "山西", "大同": "山西", "阳泉": "山西", "长治": "山西", "晋城": "山西", "朔州": "山西", "晋中": "山西", "运城": "山西", "忻州": "山西", "临汾": "山西", "吕梁": "山西",
-    // 辽宁
-    "沈阳": "辽宁", "大连": "辽宁", "鞍山": "辽宁", "抚顺": "辽宁", "本溪": "辽宁", "丹东": "辽宁", "锦州": "辽宁", "营口": "辽宁", "阜新": "辽宁", "辽阳": "辽宁", "盘锦": "辽宁", "铁岭": "辽宁", "朝阳": "辽宁", "葫芦岛": "辽宁",
-    // 吉林
-    "长春": "吉林", "吉林市": "吉林", "四平": "吉林", "辽源": "吉林", "通化": "吉林", "白山": "吉林", "松原": "吉林", "白城": "吉林", "延边": "吉林",
-    // 黑龙江
-    "哈尔滨": "黑龙江", "齐齐哈尔": "黑龙江", "鸡西": "黑龙江", "鹤岗": "黑龙江", "双鸭山": "黑龙江", "大庆": "黑龙江", "伊春": "黑龙江", "佳木斯": "黑龙江", "七台河": "黑龙江", "牡丹江": "黑龙江", "黑河": "黑龙江", "绥化": "黑龙江",
-    // 安徽
-    "合肥": "安徽", "芜湖": "安徽", "蚌埠": "安徽", "淮南": "安徽", "马鞍山": "安徽", "淮北": "安徽", "铜陵": "安徽", "安庆": "安徽", "黄山": "安徽", "滁州": "安徽", "阜阳": "安徽", "宿州": "安徽", "六安": "安徽", "亳州": "安徽", "池州": "安徽", "宣城": "安徽",
-    // 福建
-    "福州": "福建", "厦门": "福建", "莆田": "福建", "三明": "福建", "泉州": "福建", "漳州": "福建", "南平": "福建", "龙岩": "福建", "宁德": "福建",
-    // 江西
-    "南昌": "江西", "景德镇": "江西", "萍乡": "江西", "九江": "江西", "新余": "江西", "鹰潭": "江西", "赣州": "江西", "吉安": "江西", "宜春": "江西", "抚州": "江西", "上饶": "江西",
-    // 陕西
-    "西安": "陕西", "铜川": "陕西", "宝鸡": "陕西", "咸阳": "陕西", "渭南": "陕西", "延安": "陕西", "汉中": "陕西", "榆林": "陕西", "安康": "陕西", "商洛": "陕西",
-    // 甘肃
-    "兰州": "甘肃", "嘉峪关": "甘肃", "金昌": "甘肃", "白银": "甘肃", "天水": "甘肃", "武威": "甘肃", "张掖": "甘肃", "平凉": "甘肃", "酒泉": "甘肃", "庆阳": "甘肃", "定西": "甘肃", "陇南": "甘肃",
-    // 贵州
-    "贵阳": "贵州", "六盘水": "贵州", "遵义": "贵州", "安顺": "贵州", "毕节": "贵州", "铜仁": "贵州",
-    // 云南
-    "昆明": "云南", "曲靖": "云南", "玉溪": "云南", "保山": "云南", "昭通": "云南", "丽江": "云南", "普洱": "云南", "临沧": "云南",
-    // 海南
-    "海口": "海南", "三亚": "海南",
-    // 广西
-    "南宁": "广西", "柳州": "广西", "桂林": "广西", "梧州": "广西", "北海": "广西", "防城港": "广西", "钦州": "广西", "贵港": "广西", "玉林": "广西", "百色": "广西", "贺州": "广西", "河池": "广西", "来宾": "广西", "崇左": "广西",
-    // 内蒙古
-    "呼和浩特": "内蒙古", "包头": "内蒙古", "乌海": "内蒙古", "赤峰": "内蒙古", "通辽": "内蒙古", "鄂尔多斯": "内蒙古", "呼伦贝尔": "内蒙古",
-    // 新疆
-    "乌鲁木齐": "新疆", "克拉玛依": "新疆",
-    // 宁夏
-    "银川": "宁夏", "石嘴山": "宁夏", "吴忠": "宁夏", "固原": "宁夏", "中卫": "宁夏",
-    // 青海
-    "西宁": "青海", "海东": "青海",
-    // 西藏
-    "拉萨": "西藏", "日喀则": "西藏",
-    // 港澳台
-    "香港": "香港", "TVB": "香港", "翡翠": "香港", "明珠": "香港", "J2": "香港", "澳门": "澳门", "澳视": "澳门", "台湾": "台湾", "中视": "台湾", "华视": "台湾", "台视": "台湾", "三立": "台湾", "东森": "台湾"
-  };
-
-  const STANDARD_CCTV_NAME_MAP: Record<string, string> = {
-    "cctv1": "CCTV-1 综合",
-    "cctv2": "CCTV-2 财经",
-    "cctv3": "CCTV-3 综艺",
-    "cctv4": "CCTV-4 中文国际",
-    "cctv4asia": "CCTV-4 亚洲",
-    "cctv4europe": "CCTV-4 欧洲",
-    "cctv4america": "CCTV-4 美洲",
-    "cctv5": "CCTV-5 体育",
-    "cctv5+": "CCTV-5+ 体育赛事",
-    "cctv5plus": "CCTV-5+ 体育赛事",
-    "cctv6": "CCTV-6 电影",
-    "cctv7": "CCTV-7 国防军事",
-    "cctv8": "CCTV-8 电视剧",
-    "cctv9": "CCTV-9 纪录",
-    "cctv10": "CCTV-10 科教",
-    "cctv11": "CCTV-11 戏曲",
-    "cctv12": "CCTV-12 社会与法",
-    "cctv13": "CCTV-13 新闻",
-    "cctv14": "CCTV-14 少儿",
-    "cctv15": "CCTV-15 音乐",
-    "cctv16": "CCTV-16 奥林匹克",
-    "cctv17": "CCTV-17 农业农村",
-    "cctv4k": "CCTV-4K 超高清",
-    "cctv8k": "CCTV-8K 超高清"
-  };
-
-  function detectProvinceAndIspFromName(text: string) {
-    let detectedProvince = "";
-    let detectedIsp = "";
-
-    if (!text) return { detectedProvince, detectedIsp };
-
-    if (/电信/i.test(text)) detectedIsp = "电信";
-    else if (/联通/i.test(text)) detectedIsp = "联通";
-    else if (/移动/i.test(text)) detectedIsp = "移动";
-    else if (/广电/i.test(text)) detectedIsp = "广电";
-
-    for (const p of PROVINCES_LIST) {
-      if (text.includes(p)) {
-        detectedProvince = p;
-        break;
-      }
-    }
-
-    if (!detectedProvince) {
-      for (const [city, prov] of Object.entries(CITY_TO_PROVINCE)) {
-        if (text.includes(city)) {
-          detectedProvince = prov;
-          break;
-        }
-      }
-    }
-
-    return { detectedProvince, detectedIsp };
-  }
-
-  function cleanChannelNameForSmartOrganize(originalName: string, options: any) {
-    if (!originalName) return "";
-    let name = originalName.trim();
-
-    if (options.stripResolution !== false) {
-      name = stripBitrateAndResolution(name);
-    }
-
-    if (options.extractIspAndProvince !== false) {
-      name = name.replace(/(?:\s+|-|_)*(?:移动|电信|联通|广电|BGP|内网|组播)+(?:\s+|-|_)*/gi, " ");
-    }
-
-    if (options.normalizeCctv !== false && /^cctv/i.test(name.trim())) {
-      const normKey = normalizeChannelName(name);
-      if (STANDARD_CCTV_NAME_MAP[normKey]) {
-        return STANDARD_CCTV_NAME_MAP[normKey];
-      }
-    }
-
-    if (options.normalizeSatTv !== false && name.includes("卫视")) {
-      const matchSat = name.match(/([\u4e00-\u9fa5]{2,6}卫视)/);
-      if (matchSat) {
-        return matchSat[1];
-      }
-    }
-
-    name = name.replace(/^[\s\-_:,，;；]+|[\s\-_:,，;；]+$/g, "").trim();
-    return name || originalName;
-  }
-
-  function formatProvinceGroupName(detectedProvince: string, format: string, existingGroupNames: string[] = []): string {
-    if (!detectedProvince) return "其它频道";
-
-    if (detectedProvince === "香港" || detectedProvince === "澳门" || detectedProvince === "台湾") {
-      return "港澳台";
-    }
-
-    // 1. First check if an existing group in the DB already matches this province in any form
-    // Examples: "广东", "广东地方", "广东省", "广东市", "广东频道"
-    const possibleVariants = [
-      detectedProvince,
-      `${detectedProvince}地方`,
-      `${detectedProvince}省`,
-      `${detectedProvince}市`,
-      `${detectedProvince}频道`
-    ];
-
-    for (const variant of possibleVariants) {
-      if (existingGroupNames.includes(variant)) {
-        return variant; // Reuse existing group name to avoid creating duplicates like '广东' and '广东地方'
-      }
-    }
-
-    // 2. Format according to selected naming style
-    switch (format) {
-      case "suffix_local":
-        return `${detectedProvince}地方`;
-      case "suffix_province":
-        if (["北京", "上海", "天津", "重庆"].includes(detectedProvince)) {
-          return `${detectedProvince}市`;
-        }
-        return `${detectedProvince}省`;
-      case "suffix_channel":
-        return `${detectedProvince}频道`;
-      case "raw":
-      case "province_only":
-      default:
-        return detectedProvince; // Clean "广东", "浙江", "湖南"
-    }
-  }
-
-  function determineSmartTargetGroups(channelName: string, detectedProvince: string, options: any, existingGroupNames: string[] = []): string[] {
-    const mode = options.groupingMode || "smart";
-    const format = options.provinceNameFormat || "raw";
-    const allowMultiGroup = options.allowMultiGroup !== false; // Default true: support multi-group assignment
-    const upper = channelName.toUpperCase();
-
-    if (mode === "province_only") {
-      if (detectedProvince) {
-        return [formatProvinceGroupName(detectedProvince, format, existingGroupNames)];
-      }
-      return ["其它频道"];
-    }
-
-    const matches: string[] = [];
-
-    // 1. CCTV / 央视
-    if (/^CCTV/i.test(upper) || upper.includes("央视") || upper.includes("CGTN") || upper.includes("CETV")) {
-      matches.push("央视频道");
-    }
-
-    // 2. Satellite TV / 卫视
-    if (channelName.includes("卫视")) {
-      matches.push("卫视频道");
-    }
-
-    // 3. 4K/8K
-    if (upper.includes("4K") || upper.includes("8K") || upper.includes("超高清")) {
-      matches.push("4K超清");
-    }
-
-    // 4. HK / Macao / Taiwan
-    if (/翡翠|明珠|TVB|凤凰|澳视|华视|台视|中视|三立|东森|HBO|星空/i.test(channelName) ||
-        detectedProvince === "香港" || detectedProvince === "澳门" || detectedProvince === "台湾") {
-      matches.push("港澳台");
-    }
-
-    // 5. Sports
-    if (/体育|五星|风云足球|高尔夫|极速汽车/i.test(channelName)) {
-      matches.push("体育频道");
-    }
-
-    // 6. Movies / Cinema / Drama / Anime
-    if (/影院|电影|剧场|动作|喜剧|动画|卡酷|少儿|纪录片|纪实|iHOT|CHC/i.test(channelName)) {
-      matches.push("影视频道");
-    }
-
-    // 7. Province / Local Channels
-    if (detectedProvince && !matches.includes("港澳台")) {
-      const provGroup = formatProvinceGroupName(detectedProvince, format, existingGroupNames);
-      if (!matches.includes(provGroup)) {
-        matches.push(provGroup);
-      }
-    }
-
-    if (matches.length === 0) {
-      matches.push("其它频道");
-    }
-
-    if (!allowMultiGroup) {
-      return [matches[0]];
-    }
-
-    return matches;
-  }
-
   // --- Smart Organize (智能整理) Endpoints ---
   app.post("/api/channels/smart-organize/preview", (req, res) => {
     try {
@@ -5180,9 +4904,9 @@ app.get("/api/channels", async (req, res) => {
         const rawGroupNames = (c.groupIds || []).map((id) => groupMap.get(id) || "其它频道");
         const originalGroupNames = rawGroupNames.length > 0 ? rawGroupNames : ["其它频道"];
 
-        // 1. Detect Province & ISP from original channel title and sources
-        const fullSearchText = originalName + " " + (c.sources || []).map((s) => s.url || "").join(" ");
-        const { detectedProvince, detectedIsp } = detectProvinceAndIspFromName(fullSearchText);
+        // 1. Detect Province & ISP from original channel title and sources using robust geo engine
+        const sourceUrls = (c.sources || []).map((s) => s.url || "").filter(Boolean);
+        const { detectedProvince, detectedIsp } = detectProvinceAndIspFromName(originalName, sourceUrls);
         
         // Explicitly check province/city detection from channel name ONLY
         const nameProvince = detectProvinceAndIspFromName(originalName).detectedProvince;
@@ -5197,12 +4921,17 @@ app.get("/api/channels", async (req, res) => {
         }
 
         // 2. Clean/Normalize Name
-        let newName = cleanChannelNameForSmartOrganize(originalName, {
-          stripResolution,
-          extractIspAndProvince,
-          normalizeCctv,
-          normalizeSatTv
-        });
+        let newName = cleanChannelNameForSmartOrganize(
+          originalName,
+          {
+            stripResolution,
+            extractIspAndProvince,
+            normalizeCctv,
+            normalizeSatTv
+          },
+          stripBitrateAndResolution,
+          normalizeChannelName
+        );
 
         // 3. Determine Target Group(s)
         let targetGroupNames: string[] = determineSmartTargetGroups(
