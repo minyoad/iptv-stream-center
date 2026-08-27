@@ -2363,8 +2363,6 @@ function isPrivateOrIntranetUrl(urlStr: string): boolean {
   try {
     const urlLower = urlStr.toLowerCase().trim();
     if (
-      urlLower.startsWith("rtsp://") ||
-      urlLower.startsWith("rtmp://") ||
       urlLower.startsWith("udp://") ||
       urlLower.startsWith("rtp://") ||
       urlLower.startsWith("p2p://")
@@ -2500,22 +2498,33 @@ function parseResolution(url: string, textOrHeader?: string): string | undefined
 }
 
 // Stream Resolution probe using ffprobe
-async function probeStreamResolutionWithFfprobe(url: string, timeoutMs = 1000): Promise<string | undefined> {
+async function probeStreamResolutionWithFfprobe(url: string, timeoutMs = 1500): Promise<string | undefined> {
   if (isPrivateOrIntranetUrl(url)) return undefined;
 
   try {
-    const { stdout } = await execFileAsync("ffprobe", [
+    const isRtmp = url.toLowerCase().startsWith("rtmp://");
+    const args = [
       "-v", "error",
       "-probesize", "500000",
       "-analyzeduration", "500000",
-      "-rw_timeout", `${timeoutMs * 1000}`,
-      "-timeout", `${timeoutMs * 1000}`,
+    ];
+
+    if (isRtmp) {
+      args.push("-rtmp_live", "live");
+    } else {
+      args.push("-rw_timeout", `${timeoutMs * 1000}`);
+      args.push("-timeout", `${timeoutMs * 1000}`);
+    }
+
+    args.push(
       "-select_streams", "v:0",
       "-show_entries", "stream=width,height",
       "-of", "json",
       "-user_agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
       url
-    ], { timeout: timeoutMs + 300 });
+    );
+
+    const { stdout } = await execFileAsync("ffprobe", args, { timeout: timeoutMs + 1000 });
 
     const data = JSON.parse(stdout);
     if (data && data.streams && data.streams.length > 0) {
