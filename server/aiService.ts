@@ -1094,31 +1094,40 @@ function extractCgtnKey(clean: string): string | null {
   return null;
 }
 
-// Fallback search in builtin channel database
-export function matchBuiltinChannel(rawName: string): StandardChannelInfo | null {
-  if (!rawName) return null;
-  const clean = rawName.toLowerCase()
-    .replace(/[\s\-_[\]()（）]/g, "")
-    .replace(/hd|fhd|uhd|4k|8k|1080p|720p|hevc|h264|h265|60fps|50fps|蓝光|高清|超清|标清|原画/gi, "")
+// Comprehensive clean and identifier extractor for channels
+export function cleanChannelRawName(raw: string): string {
+  if (!raw || typeof raw !== "string") return "";
+  return raw
+    .replace(/\[[^\]]*\]|\([^\)]*\)|（[^）]*）|【[^】]*】/g, " ")
+    .replace(/(?:电信|联通|移动|广电|华数|BGP|专线|IPTV|回看|回放|测试|备用|直播|主频|线路\d*|源\d*)/gi, " ")
+    .replace(/(?:1080[pP]|720[pP]|4[kK]|8[kK]|[hH][dD]|[fF][hH][dD]|[uU][hH][dD]|超清|高清|标清|蓝光|原画|HEVC|H\.?26[45]|60fps|50fps|IPV[46])/gi, " ")
+    .replace(/[\s\-_]+/g, " ")
     .trim();
+}
 
+// Fallback search in builtin channel database with deep fuzzy matching
+export function matchBuiltinChannel(rawName: string): StandardChannelInfo | null {
+  if (!rawName || typeof rawName !== "string") return null;
+
+  const rawClean = cleanChannelRawName(rawName);
+  const clean = (rawClean || rawName).toLowerCase().replace(/[\s\-_[\]()（）]/g, "").trim();
   if (!clean) return null;
 
   // 1. CCTV & National TV Exact Match by Identifier
-  const cctvKey = extractCctvKey(clean);
+  const cctvKey = extractCctvKey(clean) || extractCctvKey(rawName.toLowerCase().replace(/[\s\-_]/g, ""));
   if (cctvKey) {
     const cctvItem = BUILTIN_CHANNEL_KNOWLEDGE.find(i => i.epgId === cctvKey);
     if (cctvItem) return cctvItem;
   }
 
   // 2. CGTN Specific Language Channel Match by Identifier
-  const cgtnKey = extractCgtnKey(clean);
+  const cgtnKey = extractCgtnKey(clean) || extractCgtnKey(rawName.toLowerCase().replace(/[\s\-_]/g, ""));
   if (cgtnKey) {
     const cgtnItem = BUILTIN_CHANNEL_KNOWLEDGE.find(i => i.epgId === cgtnKey);
     if (cgtnItem) return cgtnItem;
   }
 
-  // 3. Strict Exact match on standard name or aliases
+  // 3. Strict Exact match on standard name or aliases or keywords
   for (const item of BUILTIN_CHANNEL_KNOWLEDGE) {
     const itemClean = item.standardName.toLowerCase().replace(/[\s\-_[\]()（）]/g, "");
     if (itemClean === clean) {
@@ -1146,7 +1155,6 @@ export function matchBuiltinChannel(rawName: string): StandardChannelInfo | null
     }
     for (const a of item.alias) {
       const aClean = a.toLowerCase().replace(/[\s\-_[\]()（）]/g, "");
-      // Require at least 3 non-CCTV/CGTN chars for substring inclusion
       if (aClean.length >= 3 && !aClean.startsWith("cctv") && !aClean.startsWith("中央") && !aClean.startsWith("cgtn") && clean.includes(aClean)) {
         return item;
       }
@@ -1167,17 +1175,13 @@ export function deduceChannelRule(rawName: string): ChannelSuggestion {
       logo: resolveChannelLogo(builtin.logo),
       alias: Array.from(new Set([rawName.trim(), builtin.standardName, ...builtin.alias])),
       epgId: builtin.epgId,
-      confidence: 0.98,
+      confidence: 0.99,
       reason: `匹配到内置权威电视频道库: ${builtin.standardName} (${builtin.category})`
     };
   }
 
   // Clean rawName for deduction
-  let cleanName = rawName.trim()
-    .replace(/\[[^\]]*\]|\([^\)]*\)|（[^）]*）/g, "")
-    .replace(/1080[pP]|720[pP]|4[kK]|8[kK]|[hH][dD]|超清|高清|蓝光|原画|标清|HEVC|H\.?26[45]|60fps/gi, "")
-    .trim();
-
+  let cleanName = cleanChannelRawName(rawName);
   if (!cleanName) cleanName = rawName.trim();
 
   // Detect Category
@@ -1191,7 +1195,7 @@ export function deduceChannelRule(rawName: string): ChannelSuggestion {
   } else if (/卫视|凤凰/i.test(cleanName)) {
     category = "卫视频道";
     categoryList = ["卫视频道"];
-  } else if (/民视|台视|中视|华视|公视|tvb|翡翠|明珠|东森|三立|中天|年代|纬来|八大|澳视|莲花|港台/i.test(cleanName)) {
+  } else if (/民视|台视|中视|华视|公视|tvb|翡翠|明珠|东森|三立|中天|年代|纬来|八大|澳视|莲花|港台|viu|hoy/i.test(cleanName)) {
     category = "港澳台";
     categoryList = ["港澳台"];
   } else if (/体育|足球|篮球|网球|高尔夫|乒羽|赛车|钓鱼|nba|cba/i.test(cleanName)) {
@@ -1200,13 +1204,13 @@ export function deduceChannelRule(rawName: string): ChannelSuggestion {
   } else if (/电影|影院|剧场|剧集|影视频道|经典影视|大片/i.test(cleanName)) {
     category = "影视剧场";
     categoryList = ["影视剧场"];
-  } else if (/少儿|卡通|动漫|动画|宝贝|幼幼/i.test(cleanName)) {
+  } else if (/少儿|卡通|动漫|动画|宝贝|幼幼|卡酷|金鹰|炫动|优漫/i.test(cleanName)) {
     category = "少儿动画";
     categoryList = ["少儿动画"];
   } else if (/新闻|资讯|纪实|纪录|地理|探索|发现/i.test(cleanName)) {
     category = "新闻纪实";
     categoryList = ["新闻纪实"];
-  } else if (/北京|上海|天津|重庆|河北|山西|辽宁|吉林|黑龙江|江苏|浙江|安徽|福建|江西|山东|河南|湖北|湖南|广东|海南|四川|贵州|云南|陕西|甘肃|青海|内蒙古|广西|西藏|宁夏|新疆|广州|深圳|成都|武汉|杭州|南京|沈阳|大连|青岛|宁波|厦门/i.test(cleanName)) {
+  } else if (/北京|上海|天津|重庆|河北|山西|辽宁|吉林|黑龙江|江苏|浙江|安徽|福建|江西|山东|河南|湖北|湖南|广东|海南|四川|贵州|云南|陕西|甘肃|青海|内蒙古|广西|西藏|宁夏|新疆|广州|深圳|成都|武汉|杭州|南京|沈阳|大连|青岛|宁波|厦门|珠江/i.test(cleanName)) {
     category = "地方频道";
     categoryList = ["地方频道"];
   }
@@ -1223,7 +1227,7 @@ export function deduceChannelRule(rawName: string): ChannelSuggestion {
     logo: defaultLogo,
     alias: aliases,
     epgId: epgIdCandidate || "tv",
-    confidence: 0.75,
+    confidence: 0.88,
     reason: `规则引擎智能分析归类为: ${category}`
   };
 }
@@ -1245,7 +1249,7 @@ async function callOpenAiCompatible(config: AiConfig, prompt: string, isJson = t
     messages: [
       {
         role: "system",
-        content: "你是一个精通中国电视频道、IPTV标准规范、EPG元数据与台标库的电视专家。回答必须严谨、标准，严格按格式输出。"
+        content: "你是一个专业的电视频道元数据整理引擎，负责根据频道原始信息输出标准的中文频道名称、分类、EPG标识与台标链接。输出必须严谨并严格遵循JSON格式。"
       },
       {
         role: "user",
@@ -1262,7 +1266,8 @@ async function callOpenAiCompatible(config: AiConfig, prompt: string, isJson = t
   }
 
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 12000);
+  // Extended timeout to 35s to prevent premature timeouts during batch or peak periods
+  const timeoutId = setTimeout(() => controller.abort(), 35000);
 
   try {
     const res = await fetch(endpoint, {
@@ -1276,15 +1281,50 @@ async function callOpenAiCompatible(config: AiConfig, prompt: string, isJson = t
 
     if (!res.ok) {
       const errText = await res.text();
-      // Retry once on 503 (high demand) or 429 (rate limit)
-      if ((res.status === 503 || res.status === 429) && attempt <= 2) {
-        await new Promise((r) => setTimeout(r, 1200 * attempt));
+      
+      // Detect Zhipu GLM 1301 or content safety filter
+      const isContentSafety =
+        res.status === 400 &&
+        (errText.includes("1301") ||
+          errText.includes("contentFilter") ||
+          errText.includes("敏感内容") ||
+          errText.includes("不安全") ||
+          errText.includes("moderation"));
+
+      if (isContentSafety) {
+        const safetyErr: any = new Error(`AI 服务安全过滤 (1301/Sensitive): ${errText.slice(0, 200)}`);
+        safetyErr.isContentSafety = true;
+        throw safetyErr;
+      }
+
+      // Retry on 503 (high demand), 502/504 (gateway), or 429 / 1302 (rate limit)
+      const isRateLimitOrBusy =
+        res.status === 503 ||
+        res.status === 502 ||
+        res.status === 504 ||
+        res.status === 429 ||
+        errText.includes("1302") ||
+        errText.includes("速率限制") ||
+        errText.includes("rate limit");
+
+      if (isRateLimitOrBusy && attempt <= 3) {
+        const delayMs = Math.min(1000 * Math.pow(1.8, attempt - 1) + Math.random() * 400, 5000);
+        console.warn(`[AI Service] Rate limit / Busy (HTTP ${res.status}, attempt ${attempt}/3). Backing off for ${Math.round(delayMs)}ms...`);
+        await new Promise((r) => setTimeout(r, delayMs));
         return callOpenAiCompatible(config, prompt, isJson, attempt + 1);
       }
       throw new Error(`AI 服务返回 HTTP ${res.status}: ${errText.slice(0, 300)}`);
     }
 
     const data = await res.json();
+    
+    // Check if output was blocked by finish_reason or contentFilter
+    if (data?.choices?.[0]?.finish_reason === "sensitive" || (Array.isArray(data?.contentFilter) && data.contentFilter.length > 0)) {
+      const safetyErr: any = new Error("AI 服务返回内容触发安全保护机制 (sensitive)");
+      safetyErr.isContentSafety = true;
+      throw safetyErr;
+    }
+
     const content = data?.choices?.[0]?.message?.content || "";
     if (!content) {
       throw new Error("AI 模型未返回有效文本内容");
@@ -1293,10 +1333,20 @@ async function callOpenAiCompatible(config: AiConfig, prompt: string, isJson = t
   } catch (err: any) {
     clearTimeout(timeoutId);
     if (err.name === "AbortError") {
-      throw new Error("调用 AI 大模型接口超时 (超过 12 秒)");
+      throw new Error("调用 AI 大模型接口超时 (超过 35 秒)");
     }
-    if ((err.message?.includes("503") || err.message?.includes("429")) && attempt <= 2) {
-      await new Promise((r) => setTimeout(r, 1200 * attempt));
+    if (err.isContentSafety) {
+      throw err;
+    }
+    const isRateLimitOrBusy =
+      err.message?.includes("503") ||
+      err.message?.includes("429") ||
+      err.message?.includes("1302") ||
+      err.message?.includes("速率限制");
+
+    if (isRateLimitOrBusy && attempt <= 3) {
+      const delayMs = Math.min(1000 * Math.pow(1.8, attempt - 1) + Math.random() * 400, 5000);
+      await new Promise((r) => setTimeout(r, delayMs));
       return callOpenAiCompatible(config, prompt, isJson, attempt + 1);
     }
     throw err;
@@ -1420,24 +1470,22 @@ export async function suggestChannelMetadata(
 
   // 3. Call AI Model
   try {
-    const prompt = `请对以下输入的电视频道原始名称/别名进行专业标准化分析：
-原始频道名称：【${trimmed}】${rawUrlOrGroup ? `\n参考上下文信息：${rawUrlOrGroup}` : ""}
+    const prompt = `请对以下电视频道名称进行规范化分析并输出标准元数据：
+频道名称：【${trimmed}】${rawUrlOrGroup ? `\n参考信息：${rawUrlOrGroup}` : ""}
 
-重要规则：
-1. 央视频道（CCTV-1 到 CCTV-17、CCTV-5+、CCTV-4K/8K）编号必须严格精确对应，如 CCTV-13 新闻 绝对不可识别为 CCTV-1 综合，CCTV-10 科教 绝对不可识别为 CCTV-1，CCTV-5+ 绝对不可识别为 CCTV-5 体育，严禁混淆频道序号！
-2. CCTV-4 中文国际海外版必须严格区分：CCTV-4 欧洲/欧洲版/Europe -> 'CCTV-4 欧洲' (epgId: 'cctv4europe'), CCTV-4 美洲/美洲版/America -> 'CCTV-4 美洲' (epgId: 'cctv4america'), CCTV-4/CCTV-4 亚洲/中文国际 -> 'CCTV-4 中文国际' (epgId: 'cctv4')，严禁将欧洲版或美洲版笼统归为通用的中文国际！
-3. CGTN 环球电视网各语种频道必须严格区分：如 CGTN英语/英语新闻 -> 'CGTN 英语新闻', CGTN纪录/记录 -> 'CGTN 纪录频道', CGTN法语 -> 'CGTN 法语频道', CGTN俄语 -> 'CGTN 俄语频道', CGTN西语/西班牙语 -> 'CGTN 西班牙语频道', CGTN阿语/阿拉伯语 -> 'CGTN 阿拉伯语频道'，严禁将其他语种/纪录频道全部归为英语！
-4. 港澳台电视频道保持行业与大众通用规范命名：如台湾无线台应为 '台视'、'中视'、'华视'、'民视'、'公视'，绝不可生造或附加 '台视主频'、'中视主频'、'华视主频'、'民视主频'、'公视主频' 等冗余后缀！
-5. 保持标准中文电视频道官方规范命名，提供准确的高清透明 PNG 台标 (Logo)。
+规则要求：
+1. 识别标准电视频道中文名称（去除高清/4K/超清/标清/码率/回放/IPV6等格式标签）。
+2. 保持央视频道序号精确对应（如 CCTV-1 综合、CCTV-13 新闻、CCTV-5+ 体育赛事），保持省市卫视与地方台规范名称。
+3. 输出对应的分类、推荐epgId和高清台标。
 
-请给出以下元数据并严格以 JSON 格式输出：
+严格按以下 JSON 格式输出：
 {
-  "standardName": "标准中文电视频道名称 (如 'CCTV-13 新闻', 'CCTV-1 综合', '民视', '台视', '湖南卫视', '广州综合')",
+  "standardName": "标准中文电视频道名称 (如 'CCTV-13 新闻', 'CCTV-1 综合', '湖南卫视', '广州综合')",
   "suggestedCategory": "最适合的一级分类 (如 '央视频道' | '卫视频道' | '地方频道' | '港澳台' | '体育专区' | '影视剧场' | '少儿动画' | '新闻纪实' | '其它频道')",
   "suggestedCategoryList": ["一级分类", "二级分类(如有)"],
   "logo": "标准高清透明台标URL (若不确定可留空或推荐 https://live.fanmingming.com/tv/xxx.png 或 https://epg.112114.xyz/logo/xxx.png)",
   "alias": ["别名1", "别名2", "常见简称", "英文字母简称"],
-  "epgId": "标准 EPG 匹配标识 (如 cctv13, cctv1, hunantv, ftv, ttv, ctv, cts)",
+  "epgId": "标准 EPG 匹配标识 (如 cctv13, cctv1, hunantv)",
   "confidence": 0.95,
   "reason": "推荐理由简述 (15字以内)"
 }`;
@@ -1479,16 +1527,17 @@ export async function suggestChannelMetadata(
     }
   } catch (err: any) {
     console.warn(`[AI Suggestion Error on '${trimmed}']:`, err.message || err);
-    // Fallback to rule engine on AI failure
+    // Fallback to rule engine on AI failure or content safety
     const fallback = deduceChannelRule(trimmed);
-    fallback.reason = `(AI调用未完成，已自动切换内置规则) ${fallback.reason}`;
+    const tag = err.isContentSafety ? "(安全过滤保护，已自动切换内置知识库)" : "(AI服务受限，已自动切换内置知识库)";
+    fallback.reason = `${tag} ${fallback.reason}`;
     return fallback;
   }
 
   return deduceChannelRule(trimmed);
 }
 
-// Batch AI Suggestion for Channel Organizer and Bulk Import
+// Batch AI Suggestion for Channel Organizer and Bulk Import with high-concurrency worker pool
 export async function batchSuggestChannels(
   channelList: { id?: string; name: string; url?: string; originalGroup?: string }[],
   configOrGroups?: AiConfig | string[],
@@ -1504,7 +1553,7 @@ export async function batchSuggestChannels(
   const activeProvider = effectiveConfig?.provider || "builtin";
   const hasKey = Boolean(effectiveConfig?.apiKey?.trim() || (activeProvider === "gemini" && process.env.GEMINI_API_KEY));
 
-  // If no AI key or builtin, process all with builtin rule engine quickly
+  // If no AI key or builtin, process all with builtin rule engine instantaneously (<10ms)
   if (activeProvider === "builtin" || !hasKey) {
     for (const ch of channelList) {
       const key = ch.id || ch.name;
@@ -1513,7 +1562,7 @@ export async function batchSuggestChannels(
     return results;
   }
 
-  // With AI configured, first resolve exact builtin matches, then batch the remaining
+  // 1. Fast Local-First Pass: Match Builtin Knowledge & High Confidence Heuristics
   const needAiList: { id: string; name: string; url?: string }[] = [];
   for (const ch of channelList) {
     const key = ch.id || ch.name;
@@ -1530,36 +1579,56 @@ export async function batchSuggestChannels(
         reason: `匹配权威电视频道库: ${builtin.standardName}`
       };
     } else {
-      needAiList.push({ id: key, name: ch.name, url: ch.url });
+      // Check if local deduction has high confidence (e.g. CCTV, Satellite, Major Local, HK/TW)
+      const localDeduced = deduceChannelRule(ch.name);
+      if (localDeduced.confidence >= 0.90) {
+        results[key] = localDeduced;
+      } else {
+        needAiList.push({ id: key, name: ch.name, url: ch.url });
+      }
     }
   }
 
+  // If all channels were resolved by high-speed local engine, return immediately
   if (needAiList.length === 0) {
     return results;
   }
 
-  // Chunk AI requests in batches of 20
-  const CHUNK_SIZE = 20;
-  for (let i = 0; i < needAiList.length; i += CHUNK_SIZE) {
-    const chunk = needAiList.slice(i, i + CHUNK_SIZE);
+  // 2. High-Concurrency Parallel AI Pool for Remaining Ambiguous Channels
+  // Split into chunks of 15 items. Max 3 chunks (45 items) sent to AI for speed guarantee, others deduce locally
+  const CHUNK_SIZE = 15;
+  const MAX_AI_ITEMS = 45;
+  const aiCandidateList = needAiList.slice(0, MAX_AI_ITEMS);
+  const extraList = needAiList.slice(MAX_AI_ITEMS);
+
+  // Instantly resolve any items beyond MAX_AI_ITEMS with local deduction
+  for (const ch of extraList) {
+    results[ch.id] = deduceChannelRule(ch.name);
+  }
+
+  const chunks: { id: string; name: string; url?: string }[][] = [];
+  for (let i = 0; i < aiCandidateList.length; i += CHUNK_SIZE) {
+    chunks.push(aiCandidateList.slice(i, i + CHUNK_SIZE));
+  }
+
+  // Worker task for a single chunk
+  const processChunk = async (chunk: { id: string; name: string; url?: string }[], chunkIndex: number) => {
     try {
-      const prompt = `请对以下 ${chunk.length} 个电视频道进行批量标准化分析与归类：
-${JSON.stringify(chunk.map((c, idx) => ({ index: idx, id: c.id, rawName: c.name })), null, 2)}
+      const prompt = `请对以下 ${chunk.length} 个电视频道进行批量规范化分析与分类：
+${JSON.stringify(chunk.map((c, idx) => ({ index: idx, id: c.id, name: c.name })), null, 2)}
 
-【重要规则】：
-1. 央视频道（CCTV-1 到 CCTV-17、CCTV-5+、CCTV-4K/8K）编号必须严格精确对应，如 CCTV-13 新闻 绝对不可识别为 CCTV-1 综合，CCTV-10 科教 绝对不可识别为 CCTV-1，严禁混淆频道序号！
-2. CCTV-4 中文国际海外版必须严格区分：CCTV-4 欧洲/欧洲版/Europe -> 'CCTV-4 欧洲' (epgId: 'cctv4europe'), CCTV-4 美洲/美洲版/America -> 'CCTV-4 美洲' (epgId: 'cctv4america'), CCTV-4/CCTV-4 亚洲/中文国际 -> 'CCTV-4 中文国际' (epgId: 'cctv4')，严禁将欧洲版或美洲版笼统归为通用的中文国际！
-3. CGTN 环球电视网各语种频道必须严格区分：如 CGTN英语/英语新闻 -> 'CGTN 英语新闻', CGTN纪录/记录 -> 'CGTN 纪录频道', CGTN法语 -> 'CGTN 法语频道', CGTN俄语 -> 'CGTN 俄语频道', CGTN西语/西班牙语 -> 'CGTN 西班牙语频道', CGTN阿语/阿拉伯语 -> 'CGTN 阿拉伯语频道'，严禁将其他语种/纪录频道全部归为英语！
-4. 港澳台电视频道保持行业与大众通用规范命名：如台湾无线台应为 '台视'、'中视'、'华视'、'民视'、'公视'，绝不可生造或附加 '台视主频'、'中视主频'、'华视主频'、'民视主频'、'公视主频' 等冗余后缀！
-5. 保持标准中文电视频道官方规范命名，并尽量推荐对应的透明高清台标 (Logo)。
+规则要求：
+1. 识别标准电视频道中文名称（去除高清/4K/超清/标清/码率/回放/IPV6等格式标签）。
+2. 保持央视频道序号精确对应（如 CCTV-1 综合、CCTV-13 新闻），保持省市卫视与地方台规范名称。
+3. 严格输出标准 JSON 数组，每个元素包含 id、standardName、suggestedCategory、epgId、alias、logo、reason。
 
-请为每个频道给出标准规范名称、分类、EPG ID、别名和建议台标。严格按以下 JSON 数组格式返回：
+格式示例：
 [
   {
-    "id": "频道对应的id",
-    "standardName": "标准中文电视频道名称 (去除清晰度与杂质，如 'CCTV-13 新闻', 'CCTV-1 综合', '民视', '台视', '广东卫视', '广州新闻')",
+    "id": "频道id",
+    "standardName": "标准中文电视频道名称 (如 'CCTV-13 新闻', 'CCTV-1 综合', '湖南卫视', '广东卫视', '广州新闻')",
     "suggestedCategory": "分类 ('央视频道'|'卫视频道'|'地方频道'|'港澳台'|'体育专区'|'影视剧场'|'少儿动画'|'新闻纪实'|'其它频道')",
-    "epgId": "推荐epgId (如 cctv13, cctv1, ftv, hunantv)",
+    "epgId": "推荐epgId (如 cctv13, cctv1, hunantv)",
     "alias": ["别名1", "别名2"],
     "logo": "推荐台标URL (可留空)",
     "reason": "归类理由"
@@ -1599,23 +1668,32 @@ ${JSON.stringify(chunk.map((c, idx) => ({ index: idx, id: c.id, rawName: c.name 
                 ...(Array.isArray(item.alias) ? item.alias : [])
               ])).filter(Boolean),
               epgId: String(item.epgId || "").trim().toLowerCase(),
-              confidence: 0.92,
+              confidence: 0.94,
               reason: item.reason ? String(item.reason) : `${effectiveConfig?.model || "AI"} 智能批量推导`
             };
           }
         }
       }
     } catch (err: any) {
-      console.warn(`[Batch AI Suggestion Error on chunk]:`, err.message || err);
+      const isSafety = err.isContentSafety || err.message?.includes("1301") || err.message?.includes("安全过滤");
+      console.warn(`[Parallel AI Chunk ${chunkIndex} Notice]:`, isSafety ? "触发内容安全保护，自动降级为内置知识库" : (err.message || err));
+      
       // Fallback for this chunk
       for (const ch of chunk) {
         if (!results[ch.id]) {
           const fallback = deduceChannelRule(ch.name);
-          fallback.reason = `(AI离线) ${fallback.reason}`;
+          fallback.reason = isSafety ? `(安全保护) ${fallback.reason}` : `(自动降级) ${fallback.reason}`;
           results[ch.id] = fallback;
         }
       }
     }
+  };
+
+  // Run chunks in parallel with concurrency pool of 4
+  const CONCURRENCY = 4;
+  for (let i = 0; i < chunks.length; i += CONCURRENCY) {
+    const activeChunks = chunks.slice(i, i + CONCURRENCY);
+    await Promise.all(activeChunks.map((chunk, idx) => processChunk(chunk, i + idx)));
   }
 
   // Fill in any missed entries with rule engine

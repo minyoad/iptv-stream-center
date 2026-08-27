@@ -5185,9 +5185,11 @@ app.get("/api/channels", async (req, res) => {
 
   // --- Smart Organize (智能整理) Endpoints ---
   app.post("/api/channels/smart-organize/preview", async (req, res) => {
+    const startTime = Date.now();
     try {
       const options = req.body || {};
-      const useAi = options.useAi !== false; // Default true
+      const organizeEngine = options.organizeEngine || (options.useAi === false ? "fast" : "ai");
+      const useAi = organizeEngine === "ai" && options.useAi !== false;
       const groupingMode = options.groupingMode || "smart"; // "smart" | "province_only" | "keep_existing"
       const provinceNameFormat = options.provinceNameFormat || "raw";
       const allowMultiGroup = options.allowMultiGroup !== false; // Default true
@@ -5376,6 +5378,8 @@ app.get("/api/channels", async (req, res) => {
       const existingGroupNameSet = new Set(groups.map((g) => g.name));
       const newGroupsToCreate = Array.from(neededGroupNames).filter((gn) => !existingGroupNameSet.has(gn));
 
+      const elapsedMs = Date.now() - startTime;
+
       res.json({
         success: true,
         summary: {
@@ -5385,7 +5389,9 @@ app.get("/api/channels", async (req, res) => {
           groupChangesCount: changes.filter((c) => c.groupsChanged).length,
           sourcesUpdatedCount: changes.reduce((sum, c) => sum + c.sourcesUpdatedCount, 0),
           newGroupsToCreate,
-          aiProcessedCount: aiMap.size
+          aiProcessedCount: aiMap.size,
+          elapsedMs,
+          engine: useAi ? "ai_hybrid" : "fast_local"
         },
         changes
       });
