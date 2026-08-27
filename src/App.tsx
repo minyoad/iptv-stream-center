@@ -3077,22 +3077,31 @@ export default function App() {
 
   return (
     <div className="w-full min-h-screen bg-slate-50 flex overflow-hidden font-sans text-slate-800" id="app_frame">
-      {/* Dynamic Slide-in Status / Info Feedback Banner with iOS Safe Area */}
+      {/* Dynamic Slide-in Status / Info Feedback Banner with iOS Safe Area & Mobile Responsive Layout */}
       {feedbackMsg && (
         <div 
-          className={`fixed top-[calc(env(safe-area-inset-top,0px)+1rem)] right-4 z-50 p-4 rounded-xl shadow-lg border flex items-center gap-3 animate-slide-in max-w-sm transition-all duration-300 ${
+          className={`fixed top-[calc(env(safe-area-inset-top,0px)+0.75rem)] left-3 right-3 sm:left-auto sm:right-6 z-[99999] p-3 sm:p-4 rounded-2xl shadow-2xl border flex items-center justify-between gap-3 animate-slide-in sm:max-w-md transition-all duration-300 backdrop-blur-md ${
             feedbackMsg.type === "success" 
-            ? "bg-emerald-50 border-emerald-100 text-emerald-800" 
+            ? "bg-emerald-50/95 border-emerald-200 text-emerald-950 shadow-emerald-950/10" 
             : feedbackMsg.type === "error" 
-            ? "bg-rose-50 border-rose-100 text-rose-800" 
-            : "bg-blue-50 border-blue-100 text-blue-800"
+            ? "bg-rose-50/95 border-rose-200 text-rose-950 shadow-rose-950/10" 
+            : "bg-blue-50/95 border-blue-200 text-blue-950 shadow-blue-950/10"
           }`}
           id="toast_message"
         >
-          {feedbackMsg.type === "success" ? <CheckCircle className="w-5 h-5 text-emerald-600 flex-shrink-0" /> : 
-           feedbackMsg.type === "error" ? <XCircle className="w-5 h-5 text-rose-600 flex-shrink-0" /> : 
-           <AlertCircle className="w-5 h-5 text-blue-600 flex-shrink-0" />}
-          <p className="text-xs font-semibold">{feedbackMsg.text}</p>
+          <div className="flex items-center gap-2.5 sm:gap-3 min-w-0 flex-1">
+            {feedbackMsg.type === "success" ? <CheckCircle className="w-5 h-5 text-emerald-600 flex-shrink-0" /> : 
+             feedbackMsg.type === "error" ? <XCircle className="w-5 h-5 text-rose-600 flex-shrink-0" /> : 
+             <AlertCircle className="w-5 h-5 text-blue-600 flex-shrink-0" />}
+            <p className="text-xs sm:text-sm font-semibold leading-snug break-words">{feedbackMsg.text}</p>
+          </div>
+          <button
+            onClick={() => setFeedbackMsg(null)}
+            className="p-1 text-slate-400 hover:text-slate-700 rounded-lg hover:bg-black/5 transition shrink-0"
+            title="关闭提示"
+          >
+            <X className="w-4 h-4" />
+          </button>
         </div>
       )}
 
@@ -3892,30 +3901,41 @@ export default function App() {
                     <div className="bg-white rounded-2xl border border-slate-200 p-3.5 sm:p-5 lg:p-6 flex flex-col h-full gap-4 sm:gap-5" id="line_manager_main">
                       
                       {/* Sub header for channel detail view */}
-                      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 pb-3 sm:pb-4 border-b border-slate-100 shrink-0">
-                        <div className="flex items-center gap-3 min-w-0 flex-1">
+                      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 pb-3 sm:pb-4 border-b border-slate-100 shrink-0 w-full min-w-0">
+                        <div className="flex items-start sm:items-center gap-3 min-w-0 flex-1 w-full overflow-hidden">
                           {selectedChannel.logo ? (
                               <img 
                                 src={selectedChannel.logo} 
                                 alt="logo" 
-                                className="w-10 h-10 rounded-xl object-contain bg-slate-50 border border-slate-100 p-1 shadow-sm transition-all duration-300 ease-in-out hover:scale-[4] hover:border-slate-300 origin-left relative hover:z-50 hover:shadow-xl cursor-zoom-in shrink-0" 
+                                className="w-10 h-10 rounded-xl object-contain bg-slate-50 border border-slate-100 p-1 shadow-sm transition-all duration-300 ease-in-out hover:scale-[4] hover:border-slate-300 origin-left relative hover:z-50 hover:shadow-xl cursor-zoom-in shrink-0 mt-0.5 sm:mt-0" 
                                 onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
                               />
                             ) : (
-                              <div className="w-10 h-10 rounded-xl bg-slate-50 border border-slate-200 flex items-center justify-center text-slate-400 shadow-sm shrink-0">
+                              <div className="w-10 h-10 rounded-xl bg-slate-50 border border-slate-200 flex items-center justify-center text-slate-400 shadow-sm shrink-0 mt-0.5 sm:mt-0">
                                 <Tv className="w-5 h-5" />
                               </div>
                             )}
-                          <div className="min-w-0 flex-1">
-                            <div className="flex items-center gap-2 flex-wrap">
-                              <h3 className="font-bold text-slate-800 text-sm leading-tight truncate">{selectedChannel.name}</h3>
+                          <div className="min-w-0 flex-1 overflow-hidden">
+                            <div className="flex items-center gap-2 flex-wrap min-w-0 max-w-full">
+                              <h3 className="font-bold text-slate-800 text-sm leading-tight break-words max-w-full">{selectedChannel.name}</h3>
                               <span className="bg-slate-100 text-[10px] text-slate-600 px-2 py-0.5 rounded shrink-0">
                                 {(Array.isArray(selectedChannel.groupIds) ? selectedChannel.groupIds : []).map(gId => (groups || []).find(g => g.id === gId)?.name).filter(Boolean).join(", ") || "其它"}
                               </span>
                             </div>
-                            <p className="text-[11px] text-slate-500 mt-1 truncate">
-                              别名(Aliases): <span className="font-mono bg-slate-50 px-1 rounded">{(Array.isArray(selectedChannel.alias) ? selectedChannel.alias : []).join(" / ") || "无"}</span>
-                            </p>
+                            <div className="text-[11px] text-slate-500 mt-1 flex flex-wrap items-center gap-1.5 min-w-0 max-w-full">
+                              <span className="shrink-0 text-slate-400 font-medium">别名:</span>
+                              {(Array.isArray(selectedChannel.alias) && selectedChannel.alias.length > 0) ? (
+                                <div className="flex flex-wrap items-center gap-1 min-w-0 max-w-full">
+                                  {selectedChannel.alias.map((a, idx) => (
+                                    <span key={idx} className="font-mono text-[10px] bg-slate-100/90 text-slate-700 px-1.5 py-0.5 rounded border border-slate-200/70 max-w-full break-all inline-block leading-tight">
+                                      {a}
+                                    </span>
+                                  ))}
+                                </div>
+                              ) : (
+                                <span className="font-mono bg-slate-50 px-1 text-[10px] text-slate-400 rounded">无</span>
+                              )}
+                            </div>
                           </div>
                         </div>
 
@@ -7245,18 +7265,18 @@ export default function App() {
                         </div>
                       </div>
 
-                      <div className="grid grid-cols-2 gap-2 text-[10px] pt-1.5 border-t border-slate-100">
-                        <div className="truncate">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[10px] pt-1.5 border-t border-slate-100 min-w-0">
+                        <div className="min-w-0">
                           <span className="text-slate-400 font-medium">推荐别名: </span>
-                          <span className="font-bold text-slate-700">
+                          <span className="font-bold text-slate-700 break-words">
                             {Array.isArray(aiChannelSuggestion.alias) && aiChannelSuggestion.alias.length > 0
                               ? aiChannelSuggestion.alias.slice(0, 3).join(", ")
                               : "无"}
                           </span>
                         </div>
-                        <div className="truncate">
+                        <div className="min-w-0">
                           <span className="text-slate-400 font-medium">推荐 EPG: </span>
-                          <span className="font-mono font-bold text-indigo-700">{aiChannelSuggestion.epgId || "自动生成"}</span>
+                          <span className="font-mono font-bold text-indigo-700 break-all">{aiChannelSuggestion.epgId || "自动生成"}</span>
                         </div>
                       </div>
                     </div>

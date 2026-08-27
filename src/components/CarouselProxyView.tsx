@@ -2471,19 +2471,22 @@ export const CarouselProxyView = ({ fetchData }: { fetchData: () => void }) => {
 
       {/* In-App Toast Notification */}
       {toast && (
-        <div className="fixed top-5 right-5 z-[9999] flex items-center gap-2.5 px-4 py-3 rounded-xl shadow-2xl transition-all duration-200 border text-sm font-medium animate-slide-in backdrop-blur-md bg-white/95 max-w-md">
-          {toast.type === "success" && <CheckCircle2 className="w-5 h-5 text-emerald-500 shrink-0" />}
-          {toast.type === "error" && <AlertCircle className="w-5 h-5 text-rose-500 shrink-0" />}
-          {toast.type === "info" && <Info className="w-5 h-5 text-indigo-500 shrink-0" />}
-          <span className={`flex-1 ${
-            toast.type === "success" ? "text-slate-800" :
-            toast.type === "error" ? "text-rose-900" : "text-slate-800"
-          }`}>
-            {toast.message}
-          </span>
+        <div className="fixed top-[calc(env(safe-area-inset-top,0px)+0.75rem)] left-3 right-3 sm:left-auto sm:right-6 z-[99999] flex items-center justify-between gap-3 px-4 py-3 rounded-2xl shadow-2xl transition-all duration-200 border text-xs sm:text-sm font-medium animate-slide-in backdrop-blur-md bg-white/95 sm:max-w-md">
+          <div className="flex items-center gap-2.5 min-w-0 flex-1">
+            {toast.type === "success" && <CheckCircle2 className="w-5 h-5 text-emerald-500 shrink-0" />}
+            {toast.type === "error" && <AlertCircle className="w-5 h-5 text-rose-500 shrink-0" />}
+            {toast.type === "info" && <Info className="w-5 h-5 text-indigo-500 shrink-0" />}
+            <span className={`leading-snug break-words ${
+              toast.type === "success" ? "text-slate-800 font-semibold" :
+              toast.type === "error" ? "text-rose-900 font-semibold" : "text-slate-800 font-semibold"
+            }`}>
+              {toast.message}
+            </span>
+          </div>
           <button 
             onClick={() => setToast(null)} 
-            className="text-slate-400 hover:text-slate-600 p-0.5 rounded transition"
+            className="text-slate-400 hover:text-slate-600 p-1 rounded-lg hover:bg-slate-100 transition shrink-0"
+            title="关闭提示"
           >
             <X className="w-4 h-4" />
           </button>

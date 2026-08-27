@@ -1027,6 +1027,11 @@ function syncCarouselSources(): { createdCount: number; updatedCount: number; to
       );
       db.prepare("UPDATE carousel_channels SET channelId = ? WHERE id = ?").run(dbChannel.id, cc.id);
     } else {
+      if (dbChannel.name && dbChannel.name !== cc.name) {
+        // Automatically sync updated channel name into carousel_channels
+        db.prepare("UPDATE carousel_channels SET name = ? WHERE id = ?").run(dbChannel.name, cc.id);
+        cc.name = dbChannel.name;
+      }
       try {
         let gIds = JSON.parse(dbChannel.groupIds || "[]");
         if (!Array.isArray(gIds) || gIds.length === 0) {
@@ -2148,6 +2153,38 @@ function loadData() {
       });
     });
 
+    // Ensure all carousel_channels records stay in sync with live channel names and IDs
+    try {
+      const chMap = new Map(channels.map(c => [c.id, c.name]));
+      const nameMap = new Map<string, string>();
+      for (const ch of channels) {
+        nameMap.set(normalizeChannelName(ch.name), ch.id);
+        if (Array.isArray(ch.alias)) {
+          for (const a of ch.alias) {
+            nameMap.set(normalizeChannelName(a), ch.id);
+          }
+        }
+      }
+      const carouselChs = db.prepare("SELECT id, channelId, name FROM carousel_channels").all() as any[];
+      const updateStmt = db.prepare("UPDATE carousel_channels SET channelId = ?, name = ? WHERE id = ?");
+      for (const cc of carouselChs) {
+        if (cc.channelId && chMap.has(cc.channelId)) {
+          const liveName = chMap.get(cc.channelId)!;
+          if (liveName && liveName !== cc.name) {
+            updateStmt.run(cc.channelId, liveName, cc.id);
+          }
+        } else if (cc.name) {
+          const foundId = nameMap.get(normalizeChannelName(cc.name));
+          if (foundId) {
+            const liveName = chMap.get(foundId) || cc.name;
+            updateStmt.run(foundId, liveName, cc.id);
+          }
+        }
+      }
+    } catch (e) {
+      console.error("Failed to sync carousel channel names on startup:", e);
+    }
+
     if (updated) {
       saveDataSync();
     } else {
@@ -2370,6 +2407,19 @@ function saveDataSync() {
           epg.message || ""
         );
       }
+
+      // 6. Keep carousel_channels names in sync with live channel names
+      try {
+        const chMap = new Map(channels.map(c => [c.id, c.name]));
+        const carouselChs = db.prepare("SELECT id, channelId, name FROM carousel_channels").all() as any[];
+        const updateCarouselNameStmt = db.prepare("UPDATE carousel_channels SET name = ? WHERE id = ?");
+        for (const cc of carouselChs) {
+          const liveName = chMap.get(cc.channelId);
+          if (liveName && liveName !== cc.name) {
+            updateCarouselNameStmt.run(liveName, cc.id);
+          }
+        }
+      } catch (e) {}
     });
 
     syncDb();
@@ -3715,7 +3765,12 @@ async function performSync(config: SyncConfig, force = false) {
           if (parsedCarouselM3u.platform && parsedCarouselM3u.originalId) {
              isCarouselM3u = true;
              carouselKeyM3u = `@carousel:${parsedCarouselM3u.platform}_${parsedCarouselM3u.originalId}`;
-             const registry = db.prepare("SELECT name FROM carousel_channels WHERE platform = ? AND originalId = ?").get(parsedCarouselM3u.platform, parsedCarouselM3u.originalId) as any;
+             const registry = db.prepare(`
+                SELECT c.channelId, COALESCE(NULLIF(ch.name, ''), NULLIF(c.name, ''), '未知频道') as name 
+                FROM carousel_channels c 
+                LEFT JOIN channels ch ON c.channelId = ch.id 
+                WHERE c.platform = ? AND c.originalId = ?
+             `).get(parsedCarouselM3u.platform, parsedCarouselM3u.originalId) as any;
              if (registry) {
                currentInfo.name = registry.name;
              }
@@ -4709,7 +4764,12 @@ app.get("/api/channels", async (req, res) => {
       return res.status(404).json({ error: "未找到该频道" });
     }
 
-    if (name) channel.name = name;
+    if (name) {
+      channel.name = name;
+      try {
+        db.prepare("UPDATE carousel_channels SET name = ? WHERE channelId = ?").run(name, id);
+      } catch (e) {}
+    }
     
     if (groupIds && Array.isArray(groupIds)) {
       channel.groupIds = groupIds;
@@ -5075,6 +5135,21 @@ app.get("/api/channels", async (req, res) => {
 
     const otherIdsToMerge = channelIds.filter(id => id !== primaryChannel.id);
     channels = channels.filter(c => !otherIdsToMerge.includes(c.id));
+
+    // Update any carousel_channels mappings that were linked to merged channels or primary channel
+    try {
+      if (otherIdsToMerge.length > 0) {
+        const placeholders = otherIdsToMerge.map(() => '?').join(',');
+        db.prepare(`UPDATE carousel_channels SET channelId = ?, name = ? WHERE channelId IN (${placeholders})`).run(
+          primaryChannel.id,
+          primaryChannel.name,
+          ...otherIdsToMerge
+        );
+      }
+      db.prepare("UPDATE carousel_channels SET name = ? WHERE channelId = ?").run(primaryChannel.name, primaryChannel.id);
+    } catch (e) {
+      console.error("[Carousel Merge Sync Error]", e);
+    }
 
     saveData();
 
@@ -5550,6 +5625,9 @@ app.get("/api/channels", async (req, res) => {
         if (change) {
           if (change.newName) {
             c.name = change.newName;
+            try {
+              db.prepare("UPDATE carousel_channels SET name = ? WHERE channelId = ?").run(change.newName, c.id);
+            } catch (e) {}
           }
           if (change.suggestedLogo && (!c.logo || c.logo.includes("placeholder") || c.logo.includes("default"))) {
             c.logo = change.suggestedLogo;
@@ -5902,7 +5980,12 @@ app.get("/api/channels", async (req, res) => {
             if (parsedCarouselM3u.platform && parsedCarouselM3u.originalId) {
                isCarouselM3u = true;
                carouselKeyM3u = `@carousel:${parsedCarouselM3u.platform}_${parsedCarouselM3u.originalId}`;
-               const registry = db.prepare("SELECT name FROM carousel_channels WHERE platform = ? AND originalId = ?").get(parsedCarouselM3u.platform, parsedCarouselM3u.originalId) as any;
+               const registry = db.prepare(`
+                SELECT c.channelId, COALESCE(NULLIF(ch.name, ''), NULLIF(c.name, ''), '未知频道') as name 
+                FROM carousel_channels c 
+                LEFT JOIN channels ch ON c.channelId = ch.id 
+                WHERE c.platform = ? AND c.originalId = ?
+              `).get(parsedCarouselM3u.platform, parsedCarouselM3u.originalId) as any;
                if (registry) {
                  currentInfo.name = registry.name;
                }
@@ -6039,7 +6122,12 @@ app.get("/api/channels", async (req, res) => {
                const parsedCarouselTxt = parseCarouselUrl(u);
                if (parsedCarouselTxt.platform && parsedCarouselTxt.originalId) {
                  isCarouselTxt = true;
-                 const registry = db.prepare("SELECT name FROM carousel_channels WHERE platform = ? AND originalId = ?").get(parsedCarouselTxt.platform, parsedCarouselTxt.originalId) as any;
+                 const registry = db.prepare(`
+                   SELECT c.channelId, COALESCE(NULLIF(ch.name, ''), NULLIF(c.name, ''), '未知频道') as name 
+                   FROM carousel_channels c 
+                   LEFT JOIN channels ch ON c.channelId = ch.id 
+                   WHERE c.platform = ? AND c.originalId = ?
+                 `).get(parsedCarouselTxt.platform, parsedCarouselTxt.originalId) as any;
                  if (registry) {
                    name = registry.name;
                  }
@@ -6790,7 +6878,7 @@ app.get("/api/channels", async (req, res) => {
 
   app.get("/api/carousel-channels", (req, res) => {
     try {
-      const rows = db.prepare("SELECT c.id, c.channelId, COALESCE(NULLIF(c.name, ''), NULLIF(ch.name, ''), '未知频道') as name, c.platform, c.originalId FROM carousel_channels c LEFT JOIN channels ch ON c.channelId = ch.id").all();
+      const rows = db.prepare("SELECT c.id, c.channelId, COALESCE(NULLIF(ch.name, ''), NULLIF(c.name, ''), '未知频道') as name, c.platform, c.originalId FROM carousel_channels c LEFT JOIN channels ch ON c.channelId = ch.id").all();
       res.json(rows);
     } catch (e: any) {
       res.status(500).json({ error: e.message });
@@ -6839,53 +6927,77 @@ app.get("/api/channels", async (req, res) => {
     }
   });
 
-  app.get("/api/carousel-channels-unregistered", (req, res) => {
-    try {
-      // Exclude isolated sources and sources belonging to isolated channels
-      const allSources = db.prepare(`
-        SELECT s.url, c.name as channelName 
-        FROM sources s 
-        JOIN channels c ON s.channelId = c.id 
-        WHERE (s.isolated = 0 OR s.isolated IS NULL) 
-          AND (c.isolated = 0 OR c.isolated IS NULL)
-      `).all() as any[];
-      const existingChannels = db.prepare('SELECT platform, originalId FROM carousel_channels').all() as any[];
-      const existingSet = new Set(existingChannels.map((c: any) => `${c.platform}_${c.originalId}`));
+  function getUnregisteredCarouselSources() {
+    // Exclude isolated sources and sources belonging to isolated channels
+    const allSources = db.prepare(`
+      SELECT s.url, c.name as channelName 
+      FROM sources s 
+      JOIN channels c ON s.channelId = c.id 
+      WHERE (s.isolated = 0 OR s.isolated IS NULL) 
+        AND (c.isolated = 0 OR c.isolated IS NULL)
+    `).all() as any[];
+    const existingChannels = db.prepare('SELECT platform, originalId FROM carousel_channels').all() as any[];
+    const existingSet = new Set(existingChannels.map((c: any) => `${c.platform}_${c.originalId}`));
 
-      // Also gather from in-memory channels (skipping isolated)
-      const inMemorySources: { url: string; channelName: string }[] = [];
-      for (const ch of channels) {
-        if (ch.isolated) continue;
-        if (ch.sources) {
-          for (const s of ch.sources) {
-            if (s.isolated) continue;
-            if (s.url) {
-              inMemorySources.push({ url: s.url, channelName: ch.name });
-            }
+    // Also gather from in-memory channels (skipping isolated)
+    const inMemorySources: { url: string; channelName: string }[] = [];
+    for (const ch of channels) {
+      if (ch.isolated) continue;
+      if (ch.sources) {
+        for (const s of ch.sources) {
+          if (s.isolated) continue;
+          if (s.url) {
+            inMemorySources.push({ url: s.url, channelName: ch.name });
           }
         }
       }
-      const combinedSources = allSources.length > 0 ? allSources : inMemorySources;
+    }
+    const combinedSources = allSources.length > 0 ? allSources : inMemorySources;
 
-      const map = new Map();
-      for (const row of combinedSources) {
-        if (!row.url || isUrlBlockedByDisabledRules(row.url)) continue;
-        const parsed = parseCarouselUrl(row.url);
-        if (parsed.platform && parsed.originalId) {
-          const key = `${parsed.platform}_${parsed.originalId}`;
-          if (!existingSet.has(key)) {
-            if (!map.has(key)) {
-              map.set(key, { platform: parsed.platform, originalId: parsed.originalId, sampleNames: new Set() });
-            }
-            map.get(key).sampleNames.add(row.channelName);
+    const map = new Map();
+    for (const row of combinedSources) {
+      if (!row.url || isUrlBlockedByDisabledRules(row.url)) continue;
+      const parsed = parseCarouselUrl(row.url);
+      if (parsed.platform && parsed.originalId) {
+        const key = `${parsed.platform}_${parsed.originalId}`;
+        if (!existingSet.has(key)) {
+          if (!map.has(key)) {
+            map.set(key, { platform: parsed.platform, originalId: parsed.originalId, sampleNames: new Set() });
           }
+          map.get(key).sampleNames.add(row.channelName);
         }
       }
-      const results = Array.from(map.values()).map((v: any) => ({
+    }
+    return {
+      unregistered: Array.from(map.values()).map((v: any) => ({
         ...v,
         sampleNames: Array.from(v.sampleNames)
-      }));
-      res.json(results);
+      })),
+      totalSourcesScanned: combinedSources.length
+    };
+  }
+
+  app.get("/api/carousel-channels-unregistered", (req, res) => {
+    try {
+      const { unregistered } = getUnregisteredCarouselSources();
+      res.json(unregistered);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/carousel-channels-unregistered/rescan", (req, res) => {
+    try {
+      discoveryRulesCache = null;
+      const newlyDiscoveredProxies = scanAndRegisterAllCarouselProxies();
+      const { unregistered, totalSourcesScanned } = getUnregisteredCarouselSources();
+      res.json({
+        success: true,
+        count: unregistered.length,
+        unregistered,
+        newlyDiscoveredProxies,
+        scannedSourcesCount: totalSourcesScanned
+      });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }

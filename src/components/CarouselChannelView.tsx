@@ -23,6 +23,8 @@ export const CarouselChannelView = ({ fetchData, channelsData = [] }: { fetchDat
   const [toast, setToast] = useState<{ message: string; type: "success" | "error" | "info" } | null>(null);
   const [showResetConfirmModal, setShowResetConfirmModal] = useState(false);
 
+  const [isRescanning, setIsRescanning] = useState(false);
+
   // Search & Ignore state for unregistered items
   const [ignoredKeys, setIgnoredKeys] = useState<string[]>(() => {
     try {
@@ -61,7 +63,7 @@ export const CarouselChannelView = ({ fetchData, channelsData = [] }: { fetchDat
       return next;
     });
     setSelectedUnregIds(prev => prev.filter(id => !keysToIgnore.includes(id)));
-    showToast(`已将 ${keysToIgnore.length} 个未识别项移入忽略列表`, "info");
+    showToast(`已将 ${keysToIgnore.length} 个未映射项移入忽略列表`, "info");
   };
 
   const clearAllIgnored = () => {
@@ -79,6 +81,30 @@ export const CarouselChannelView = ({ fetchData, channelsData = [] }: { fetchDat
     setTimeout(() => {
       setToast(prev => (prev?.message === message ? null : prev));
     }, 4000);
+  };
+
+  const handleRescanUnregistered = async () => {
+    setIsRescanning(true);
+    try {
+      const res = await fetch("/api/carousel-channels-unregistered/rescan", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" }
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setUnregistered(Array.isArray(data.unregistered) ? data.unregistered : []);
+        showToast(
+          `重新扫描完成！已分析 ${data.scannedSourcesCount || 0} 个直播源，发现 ${data.count} 个未映射轮播直播间${data.newlyDiscoveredProxies ? `，提取 ${data.newlyDiscoveredProxies} 个新代理模板` : ''}`,
+          "success"
+        );
+      } else {
+        showToast("重新扫描失败: " + (data.error || "未知异常"), "error");
+      }
+    } catch (e: any) {
+      showToast("重新扫描通信故障: " + (e.message || "网络错误"), "error");
+    } finally {
+      setIsRescanning(false);
+    }
   };
 
   const loadRulesOnly = async () => {
@@ -104,12 +130,11 @@ export const CarouselChannelView = ({ fetchData, channelsData = [] }: { fetchDat
       });
       const data = await res.json();
       if (res.ok && data.success) {
-        showToast(data.message || "成功加载预置特征发现规则！", "success");
+        showToast((data.message || "成功加载预置特征发现规则！") + " 正在重新扫描未映射源...", "success");
         if (Array.isArray(data.rules)) {
           setRules(data.rules);
-        } else {
-          loadRulesOnly();
         }
+        await loadData();
       } else {
         showToast("预置规则失败: " + (data.error || "网络故障"), "error");
       }
@@ -167,12 +192,12 @@ export const CarouselChannelView = ({ fetchData, channelsData = [] }: { fetchDat
       }
     }
 
-    const existing = channelsData?.find(c => c.name === form.name);
+    const existing = channelsData?.find(c => c.name.trim().toLowerCase() === form.name.trim().toLowerCase() || (form.channelId && c.id === form.channelId));
     const payload = {
-      name: form.name.trim(),
+      name: (existing ? existing.name : form.name).trim(),
       platform: platformToSave,
       originalId: originalIdToSave,
-      channelId: existing ? existing.id : ""
+      channelId: existing ? existing.id : (form.channelId || "")
     };
     try {
       if (editingId) {
@@ -218,8 +243,8 @@ export const CarouselChannelView = ({ fetchData, channelsData = [] }: { fetchDat
       if (res.ok) {
         setRuleForm({ platform: "yy", keyword: "" });
         setCustomPlatform("");
-        showToast("已成功添加特征发现规则：" + ruleForm.keyword.trim());
-        loadRulesOnly();
+        showToast("已成功添加特征规则，正在重新扫描直播源...", "success");
+        await loadData();
       } else {
         const d = await res.json().catch(() => ({}));
         showToast("保存规则失败: " + (d.error || "未知原因"), "error");
@@ -239,8 +264,8 @@ export const CarouselChannelView = ({ fetchData, channelsData = [] }: { fetchDat
         body: JSON.stringify({ enabled: nextEnabled })
       });
       if (res.ok) {
-        setRules(prev => prev.map(item => item.id === r.id ? { ...item, enabled: nextEnabled } : item));
-        showToast(nextEnabled ? "已启用该特征发现规则" : "已停用该特征发现规则", "info");
+        showToast(nextEnabled ? "已启用规则，正在更新未映射源..." : "已停用规则，正在更新未映射源...", "info");
+        await loadData();
       } else {
         showToast("切换规则状态失败", "error");
       }
@@ -254,9 +279,9 @@ export const CarouselChannelView = ({ fetchData, channelsData = [] }: { fetchDat
     try {
       const res = await fetch(`/api/carousel-discovery-rules/${id}`, { method: "DELETE" });
       if (res.ok) {
-        setRules(prev => prev.filter(r => r.id !== id));
         setSelectedRuleIds(prev => prev.filter(i => i !== id));
-        showToast("已成功删除特征发现规则");
+        showToast("已删除特征发现规则，并更新未映射列表", "success");
+        await loadData();
       } else {
         showToast("删除规则失败", "error");
       }
@@ -276,9 +301,9 @@ export const CarouselChannelView = ({ fetchData, channelsData = [] }: { fetchDat
         body: JSON.stringify({ ids: selectedRuleIds })
       });
       if (res.ok) {
-        setRules(prev => prev.filter(r => !selectedRuleIds.includes(r.id)));
-        showToast(`已成功批量删除 ${selectedRuleIds.length} 条特征发现规则`);
+        showToast(`已批量删除 ${selectedRuleIds.length} 条特征规则，并重新扫描未映射源`, "success");
         setSelectedRuleIds([]);
+        await loadData();
       } else {
         showToast("批量删除规则失败", "error");
       }
@@ -301,9 +326,9 @@ export const CarouselChannelView = ({ fetchData, channelsData = [] }: { fetchDat
         body: JSON.stringify({ ids: iptvRuleIds })
       });
       if (res.ok) {
-        setRules(prev => prev.filter(r => !iptvRuleIds.includes(r.id)));
+        showToast(`已成功清除 ${iptvRuleIds.length} 条 IPTV 特征规则并重新扫描`, "success");
         setSelectedRuleIds(prev => prev.filter(id => !iptvRuleIds.includes(id)));
-        showToast(`已成功清除 ${iptvRuleIds.length} 条 IPTV 特征规则`);
+        await loadData();
       } else {
         showToast("清除 IPTV 规则失败", "error");
       }
@@ -525,13 +550,18 @@ export const CarouselChannelView = ({ fetchData, channelsData = [] }: { fetchDat
   return (
     <div className="space-y-6">
       {toast && (
-        <div className={`fixed top-4 right-4 z-50 px-4 py-3 rounded-xl shadow-lg border text-sm font-bold flex items-center gap-2 animate-fade-in ${
-          toast.type === "success" ? "bg-emerald-50 text-emerald-800 border-emerald-200" :
-          toast.type === "error" ? "bg-rose-50 text-rose-800 border-rose-200" :
-          "bg-indigo-50 text-indigo-800 border-indigo-200"
+        <div className={`fixed top-[calc(env(safe-area-inset-top,0px)+0.75rem)] left-3 right-3 sm:left-auto sm:right-6 z-[99999] px-4 py-3 rounded-2xl shadow-2xl border text-xs sm:text-sm font-bold flex items-center justify-between gap-3 animate-fade-in sm:max-w-md backdrop-blur-md ${
+          toast.type === "success" ? "bg-emerald-50/95 text-emerald-900 border-emerald-200 shadow-emerald-900/10" :
+          toast.type === "error" ? "bg-rose-50/95 text-rose-900 border-rose-200 shadow-rose-900/10" :
+          "bg-indigo-50/95 text-indigo-900 border-indigo-200 shadow-indigo-900/10"
         }`}>
-          <span>{toast.message}</span>
-          <button onClick={() => setToast(null)} className="ml-2 hover:opacity-70">
+          <div className="flex items-center gap-2.5 min-w-0 flex-1">
+            {toast.type === "success" ? <CheckCircle className="w-4 h-4 text-emerald-600 shrink-0" /> :
+             toast.type === "error" ? <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" /> :
+             <Info className="w-4 h-4 text-indigo-600 shrink-0" />}
+            <span className="leading-snug break-words">{toast.message}</span>
+          </div>
+          <button onClick={() => setToast(null)} className="p-1 text-slate-400 hover:text-slate-700 rounded-lg hover:bg-black/5 transition shrink-0" title="关闭提示">
             <X className="w-4 h-4" />
           </button>
         </div>
@@ -610,7 +640,7 @@ export const CarouselChannelView = ({ fetchData, channelsData = [] }: { fetchDat
                   onClick={() => setActiveTab("unregistered")}
                   className={`px-2 sm:px-4 py-1.5 rounded-lg text-xs font-bold transition flex items-center justify-center gap-1 ${activeTab === "unregistered" ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-600 hover:text-slate-800'}`}
                >
-                  <span>未识别项</span>
+                  <span>未映射直播源</span>
                   <span className="text-[10px] opacity-75">({unregistered.filter(u => !ignoredKeys.includes(`${u.platform}_${u.originalId}`)).length})</span>
                </button>
                <button 
@@ -628,9 +658,18 @@ export const CarouselChannelView = ({ fetchData, channelsData = [] }: { fetchDat
           <div className="p-0 animate-fade-in">
              <div className="p-4 bg-indigo-50/50 border-b border-indigo-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                 <div className="text-xs text-indigo-900 leading-relaxed font-sans flex-1">
-                  <span className="font-bold">特征发现机制：</span> 系统下载订阅或解析 M3U 时，会根据以下关键词规则自动捕获对应的第三方网络直播间 URL，将其归类并自动提取为通用轮播映射。
+                  <span className="font-bold">特征发现机制：</span> 系统下载订阅或解析 M3U 时，会根据以下关键词规则自动捕获对应的第三方网络直播间 URL，将其归类并自动提取为通用轮播映射。规则发生增删改时，系统将自动重新扫描现有全部直播源并提取未映射项。
                 </div>
                 <div className="flex flex-wrap items-center gap-2 shrink-0">
+                  <button 
+                    onClick={handleRescanUnregistered}
+                    disabled={isRescanning}
+                    className="px-3.5 py-1.5 bg-white text-indigo-700 hover:bg-indigo-50 disabled:opacity-60 border border-indigo-200 rounded-lg font-bold text-xs flex items-center transition shadow-xs whitespace-nowrap"
+                    title="根据最新特征发现规则重新扫描现有全部直播源"
+                  >
+                    {isRescanning ? <RefreshCw className="w-3.5 h-3.5 mr-1.5 animate-spin text-indigo-600" /> : <RefreshCw className="w-3.5 h-3.5 mr-1.5 text-indigo-600" />}
+                    {isRescanning ? "正在重新扫描..." : "重新扫描现有源"}
+                  </button>
                   {rules.some(r => r.platform === 'iptv' || (r.keyword && r.keyword.toLowerCase().includes('iptv'))) && (
                     <button 
                       onClick={handleClearIptvRules}
@@ -1032,6 +1071,16 @@ export const CarouselChannelView = ({ fetchData, channelsData = [] }: { fetchDat
                 </div>
                 
                 <div className="flex items-center gap-2 shrink-0">
+                  <button
+                    onClick={handleRescanUnregistered}
+                    disabled={isRescanning}
+                    className="px-3.5 py-1.5 bg-amber-600 hover:bg-amber-700 disabled:opacity-50 text-white rounded-lg text-xs font-bold transition flex items-center shadow-xs whitespace-nowrap"
+                    title="从现有全部直播源中根据最新特征发现规则重新扫描提取未映射直播源"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 mr-1.5 ${isRescanning ? 'animate-spin' : ''}`} />
+                    {isRescanning ? "正在重新扫描直播源..." : "重新发现未映射源"}
+                  </button>
+
                   <button
                     onClick={() => {
                       setShowIgnored(!showIgnored);
