@@ -156,8 +156,9 @@ export interface IpGeoApi {
 }
 
 let ipGeoApis: IpGeoApi[] = [
-  { id: "ip-api", name: "ip-api.com", url: "http://ip-api.com/json/{{ip}}?lang=zh-CN", enabled: true },
-  { id: "pconline", name: "太平洋电脑网", url: "https://whois.pconline.com.cn/ipJson.jsp?ip={{ip}}&json=true", enabled: true }
+  { id: "ip-api", name: "ip-api.com", url: "http://ip-api.com/json/{{ip}}?lang=zh-CN", enabled: true, failCount: 0 },
+  { id: "pconline", name: "太平洋电脑网", url: "https://whois.pconline.com.cn/ipJson.jsp?ip={{ip}}&json=true", enabled: true, failCount: 0 },
+  { id: "ipwhois", name: "ipwho.is", url: "https://ipwho.is/{{ip}}?lang=zh-CN", enabled: true, failCount: 0 }
 ];
 let autoSwitchGeoApi = true;
 
@@ -1863,7 +1864,21 @@ function loadData() {
         if (row.key === "carouselProxyPresets") { try { carouselProxyPresets = JSON.parse(row.value); } catch(e) {} }
         if (row.key === "autoCreateChannel") autoCreateChannel = (row.value === "true" || row.value === "1");
         if (row.key === "ipGeoApis") {
-          try { ipGeoApis = JSON.parse(row.value); } catch(e) {}
+          try {
+            const parsed = JSON.parse(row.value);
+            if (Array.isArray(parsed) && parsed.length > 0) {
+              // Ensure if all loaded APIs were disabled, re-enable them
+              const anyEnabled = parsed.some((a: any) => a.enabled);
+              if (!anyEnabled) {
+                parsed.forEach((a: any) => { a.enabled = true; a.failCount = 0; });
+              }
+              // If ipwhois is missing from loaded list, append it as fallback
+              if (!parsed.some((a: any) => a.id === "ipwhois" || a.url?.includes("ipwho.is"))) {
+                parsed.push({ id: "ipwhois", name: "ipwho.is", url: "https://ipwho.is/{{ip}}?lang=zh-CN", enabled: true, failCount: 0 });
+              }
+              ipGeoApis = parsed;
+            }
+          } catch(e) {}
         }
         if (row.key === "autoSwitchGeoApi") autoSwitchGeoApi = (row.value === "true" || row.value === "1");
 
@@ -3094,25 +3109,47 @@ function getGeminiClient(): GoogleGenAI {
   return geminiClient;
 }
 
-const ipGeoCache = new Map<string, { province: string, isp: string }>();
+const ipGeoCache = new Map<string, { province: string; isp: string; timestamp: number }>();
+const IP_GEO_CACHE_TTL = 24 * 60 * 60 * 1000; // 24 hours
 
 async function getClientIpGeo(ipString: string): Promise<{ province: string, isp: string }> {
   let ip = (ipString || "").trim();
   if (ip.includes("::ffff:")) {
     ip = ip.replace("::ffff:", "");
   }
-  if (!ip || ip === "127.0.0.1" || ip === "::1" || ip.startsWith("10.") || ip.startsWith("192.168.") || ip.startsWith("172.16.") || ip.startsWith("172.17.") || ip.startsWith("172.18.") || ip.startsWith("172.19.") || ip.startsWith("172.2") || ip.startsWith("172.3")) {
+  if (
+    !ip ||
+    ip === "127.0.0.1" ||
+    ip === "::1" ||
+    ip === "localhost" ||
+    ip.startsWith("10.") ||
+    ip.startsWith("192.168.") ||
+    ip.startsWith("100.") ||
+    /^172\.(1[6-9]|2[0-9]|3[0-1])\./.test(ip)
+  ) {
     return { province: "", isp: "" };
   }
 
-  if (ipGeoCache.has(ip)) {
-    return ipGeoCache.get(ip)!;
+  // Check cache first
+  const cached = ipGeoCache.get(ip);
+  if (cached && Date.now() - cached.timestamp < IP_GEO_CACHE_TTL) {
+    return { province: cached.province, isp: cached.isp };
   }
 
-  const enabledApis = ipGeoApis.filter(a => a.enabled);
-  if (enabledApis.length === 0) return { province: "", isp: "" };
+  let enabledApis = ipGeoApis.filter(a => a.enabled);
+  if (enabledApis.length === 0) {
+    // If all APIs got disabled somehow, re-enable defaults
+    ipGeoApis.forEach(a => { a.enabled = true; a.failCount = 0; });
+    enabledApis = ipGeoApis;
+  }
 
-  const provinces = ["北京", "上海", "天津", "重庆", "河北", "山西", "辽宁", "吉林", "黑龙江", "江苏", "浙江", "安徽", "福建", "江西", "山东", "河南", "湖北", "湖南", "广东", "海南", "四川", "贵州", "云南", "陕西", "甘肃", "青海", "台湾", "内蒙古", "广西", "西藏", "宁夏", "新疆", "香港", "澳门"];
+  const provinces = [
+    "北京", "上海", "天津", "重庆", "河北", "山西", "辽宁", "吉林", "黑龙江",
+    "江苏", "浙江", "安徽", "福建", "江西", "山东", "河南", "湖北", "湖南",
+    "广东", "海南", "四川", "贵州", "云南", "陕西", "甘肃", "青海", "台湾",
+    "内蒙古", "广西", "西藏", "宁夏", "新疆", "香港", "澳门"
+  ];
+
   const ispKeywords = [
     { keyword: "telecom", name: "电信" },
     { keyword: "unicom", name: "联通" },
@@ -3121,6 +3158,7 @@ async function getClientIpGeo(ipString: string): Promise<{ province: string, isp
     { keyword: "broadband", name: "广电" },
     { keyword: "cantv", name: "广电" },
     { keyword: "chinasat", name: "广电" },
+    { keyword: "tietong", name: "铁通" },
     { keyword: "电信", name: "电信" },
     { keyword: "联通", name: "联通" },
     { keyword: "移动", name: "移动" },
@@ -3130,10 +3168,16 @@ async function getClientIpGeo(ipString: string): Promise<{ province: string, isp
 
   for (const api of enabledApis) {
     try {
-      const url = api.url.replace("{{ip}}", ip);
+      const url = api.url.replace("{{ip}}", encodeURIComponent(ip));
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 3000);
-      const res = await fetch(url, { signal: controller.signal });
+      const timeoutId = setTimeout(() => controller.abort(), 6000);
+      const res = await fetch(url, {
+        signal: controller.signal,
+        headers: {
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+          "Accept": "application/json, text/plain, */*"
+        }
+      });
       clearTimeout(timeoutId);
 
       if (res.ok) {
@@ -3145,55 +3189,119 @@ async function getClientIpGeo(ipString: string): Promise<{ province: string, isp
           text = new TextDecoder("gbk").decode(buffer);
         }
 
-        const rawLower = text.toLowerCase();
+        let parsedJson: any = null;
+        try {
+          const jsonMatch = text.match(/\{[\s\S]*\}/);
+          if (jsonMatch) {
+            parsedJson = JSON.parse(jsonMatch[0]);
+          }
+        } catch (_) {}
+
         let matchedProvince = "";
-        for (const p of provinces) {
-          if (rawLower.includes(p.toLowerCase())) {
-            matchedProvince = p;
-            break;
-          }
-        }
-
         let matchedIsp = "";
-        for (const ik of ispKeywords) {
-          if (rawLower.includes(ik.keyword.toLowerCase())) {
-            matchedIsp = ik.name;
-            break;
+
+        if (parsedJson) {
+          const rawPro = parsedJson.pro || parsedJson.province || parsedJson.region || parsedJson.regionName || parsedJson.state || (parsedJson.info && parsedJson.info.prov) || "";
+          const rawIsp = parsedJson.isp || parsedJson.org || parsedJson.carrier || parsedJson.operator || parsedJson.as || (parsedJson.connection && parsedJson.connection.isp) || (parsedJson.info && parsedJson.info.isp) || "";
+          const rawCountry = parsedJson.country || parsedJson.country_name || (parsedJson.info && parsedJson.info.country) || "";
+          const rawAddr = parsedJson.addr || "";
+
+          // 1. Check Chinese province in rawPro / rawAddr / text
+          const searchSpace = `${rawPro} ${rawAddr} ${text}`.toLowerCase();
+          for (const p of provinces) {
+            if (searchSpace.includes(p.toLowerCase())) {
+              matchedProvince = p;
+              break;
+            }
+          }
+
+          // 2. Check ISP
+          const ispSearchSpace = `${rawIsp} ${rawAddr} ${text}`.toLowerCase();
+          for (const ik of ispKeywords) {
+            if (ispSearchSpace.includes(ik.keyword.toLowerCase())) {
+              matchedIsp = ik.name;
+              break;
+            }
+          }
+
+          // 3. Foreign / Overseas IP detection (e.g. UK, US, Japan, HK, etc.)
+          if (!matchedProvince && rawCountry) {
+            if (rawCountry !== "China" && rawCountry !== "中国" && rawCountry !== "CN") {
+              matchedProvince = rawCountry;
+              if (!matchedIsp) {
+                matchedIsp = rawIsp || "海外";
+              }
+            }
+          } else if (!matchedProvince && (parsedJson.proCode === "999999" || parsedJson.pro === "英国" || parsedJson.addr?.includes("英国") || parsedJson.addr?.includes("美国") || parsedJson.addr?.includes("海外") || parsedJson.addr?.includes("日本") || parsedJson.addr?.includes("香港") || parsedJson.addr?.includes("台湾") || parsedJson.addr?.includes("新加坡") || parsedJson.addr?.includes("德国") || parsedJson.addr?.includes("法国") || parsedJson.addr?.includes("加拿大") || parsedJson.addr?.includes("澳大利亚") || parsedJson.addr?.includes("韩国"))) {
+            matchedProvince = parsedJson.pro || parsedJson.addr || "海外";
+            if (!matchedIsp) {
+              matchedIsp = rawIsp || "海外";
+            }
+          }
+        } else {
+          const rawLower = text.toLowerCase();
+          for (const p of provinces) {
+            if (rawLower.includes(p.toLowerCase())) {
+              matchedProvince = p;
+              break;
+            }
+          }
+
+          for (const ik of ispKeywords) {
+            if (rawLower.includes(ik.keyword.toLowerCase())) {
+              matchedIsp = ik.name;
+              break;
+            }
           }
         }
 
+        // Cache result (even if generic/overseas) to avoid repeated remote calls
         if (matchedProvince || matchedIsp) {
-          const geo = { province: matchedProvince, isp: matchedIsp };
+          const geo = { province: matchedProvince, isp: matchedIsp, timestamp: Date.now() };
           ipGeoCache.set(ip, geo);
           console.log(`[IP GEO LOOKUP] Resolved IP ${ip} via ${api.name}: province=${geo.province}, isp=${geo.isp}`);
           
-          // Reset failCount on success
           if (api.failCount && api.failCount > 0) {
             api.failCount = 0;
             saveData();
           }
 
-          return geo;
+          return { province: geo.province, isp: geo.isp };
+        } else {
+          const fallbackGeo = { province: "", isp: "", timestamp: Date.now() };
+          ipGeoCache.set(ip, fallbackGeo);
+          return fallbackGeo;
         }
       } else {
-        throw new Error(`HTTP Error ${res.status}`);
+        if (autoSwitchGeoApi && res.status >= 400 && res.status < 500) {
+          api.failCount = (api.failCount || 0) + 1;
+          if (api.failCount >= 5) {
+            console.warn(`[IP GEO LOOKUP] Auto-disabling API ${api.name} due to ${api.failCount} consecutive HTTP ${res.status} failures.`);
+            api.enabled = false;
+            saveData();
+          }
+        }
       }
     } catch (err: any) {
-      console.error(`[IP GEO LOOKUP ERROR] API ${api.name} for ${ip}: ${err.message || err}`);
+      console.warn(`[IP GEO LOOKUP] Warning: API ${api.name} lookup failed for ${ip}: ${err.message || err}`);
       
-      // Increment failCount and disable if >= 3
-      api.failCount = (api.failCount || 0) + 1;
-      if (api.failCount >= 3) {
-        console.warn(`[IP GEO LOOKUP] Auto-disabling API ${api.name} due to ${api.failCount} consecutive failures.`);
-        api.enabled = false;
+      // For timeouts / aborts, do NOT immediately disable the API
+      if (err.name !== "AbortError" && autoSwitchGeoApi) {
+        api.failCount = (api.failCount || 0) + 1;
+        if (api.failCount >= 5) {
+          console.warn(`[IP GEO LOOKUP] Auto-disabling API ${api.name} due to ${api.failCount} consecutive non-timeout errors.`);
+          api.enabled = false;
+          saveData();
+        }
       }
-      saveData();
     }
 
     if (!autoSwitchGeoApi) break;
   }
 
-  return { province: "", isp: "" };
+  const finalFallback = { province: "", isp: "", timestamp: Date.now() };
+  ipGeoCache.set(ip, finalFallback);
+  return finalFallback;
 }
 
 function sortSourcesByGeo(sources: LiveSource[], clientProvince: string, clientIsp: string): LiveSource[] {

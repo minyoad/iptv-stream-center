@@ -1,6 +1,7 @@
 import { GoogleGenAI, Type } from "@google/genai";
 import fs from "fs";
 import path from "path";
+import { detectProvinceAndIspFromName } from "./geo_channels";
 
 export interface LogoCdnSource {
   id: string;
@@ -359,7 +360,7 @@ const LOGO_BASE_112 = "https://epg.112114.xyz/logo";
 export const BUILTIN_CHANNEL_KNOWLEDGE: StandardChannelInfo[] = [
   // === CCTV 央视频道 ===
   {
-    keywords: ["cctv1", "cctv-1", "中央一套", "中央1套", "央视一套", "cctv 1", "综合频道"],
+    keywords: ["cctv1", "cctv-1", "中央一套", "中央1套", "央视一套", "cctv 1", "中央综合", "央视综合"],
     standardName: "CCTV-1 综合",
     category: "央视频道",
     categoryList: ["央视频道", "综合频道"],
@@ -368,7 +369,7 @@ export const BUILTIN_CHANNEL_KNOWLEDGE: StandardChannelInfo[] = [
     epgId: "cctv1"
   },
   {
-    keywords: ["cctv2", "cctv-2", "中央二套", "中央2套", "央视二套", "cctv 2", "财经频道"],
+    keywords: ["cctv2", "cctv-2", "中央二套", "中央2套", "央视二套", "cctv 2", "中央财经", "央视财经"],
     standardName: "CCTV-2 财经",
     category: "央视频道",
     categoryList: ["央视频道", "财经资讯"],
@@ -377,7 +378,7 @@ export const BUILTIN_CHANNEL_KNOWLEDGE: StandardChannelInfo[] = [
     epgId: "cctv2"
   },
   {
-    keywords: ["cctv3", "cctv-3", "中央三套", "中央3套", "央视三套", "cctv 3", "综艺频道"],
+    keywords: ["cctv3", "cctv-3", "中央三套", "中央3套", "央视三套", "cctv 3", "中央综艺", "央视综艺"],
     standardName: "CCTV-3 综艺",
     category: "央视频道",
     categoryList: ["央视频道", "影视综艺"],
@@ -418,74 +419,74 @@ export const BUILTIN_CHANNEL_KNOWLEDGE: StandardChannelInfo[] = [
     category: "央视频道",
     categoryList: ["央视频道", "体育专区"],
     logo: `${LOGO_BASE_FAN}/CCTV5plus.png`,
-    alias: ["CCTV5+", "CCTV-5+", "CCTV5plus", "中央五加", "CCTV-5+ 体育赛事", "CCTV-5+ 体育赛事HD", "体育赛事频道"],
+    alias: ["CCTV5+", "CCTV-5+", "CCTV5plus", "中央五加", "CCTV-5+ 体育赛事", "CCTV-5+ 体育赛事HD"],
     epgId: "cctv5plus"
   },
   {
-    keywords: ["cctv5", "cctv-5", "中央五套", "中央5套", "央视五套", "cctv 5", "体育频道"],
+    keywords: ["cctv5", "cctv-5", "中央五套", "中央5套", "央视五套", "cctv 5", "中央体育", "央视体育"],
     standardName: "CCTV-5 体育",
     category: "央视频道",
     categoryList: ["央视频道", "体育专区"],
     logo: `${LOGO_BASE_FAN}/CCTV5.png`,
-    alias: ["CCTV5", "CCTV-5", "中央五套", "中央5套", "CCTV-5 体育", "CCTV-5 体育HD", "央视五套", "体育频道"],
+    alias: ["CCTV5", "CCTV-5", "中央五套", "中央5套", "CCTV-5 体育", "CCTV-5 体育HD", "央视五套"],
     epgId: "cctv5"
   },
   {
-    keywords: ["cctv6", "cctv-6", "中央六套", "中央6套", "央视六套", "cctv 6", "电影频道"],
+    keywords: ["cctv6", "cctv-6", "中央六套", "中央6套", "央视六套", "cctv 6", "中央电影", "央视电影"],
     standardName: "CCTV-6 电影",
     category: "央视频道",
     categoryList: ["央视频道", "影视剧场"],
     logo: `${LOGO_BASE_FAN}/CCTV6.png`,
-    alias: ["CCTV6", "CCTV-6", "中央六套", "中央6套", "CCTV-6 电影", "CCTV-6 电影HD", "央视六套", "电影频道"],
+    alias: ["CCTV6", "CCTV-6", "中央六套", "中央6套", "CCTV-6 电影", "CCTV-6 电影HD", "央视六套"],
     epgId: "cctv6"
   },
   {
-    keywords: ["cctv7", "cctv-7", "中央七套", "中央7套", "央视七套", "cctv 7", "国防军事", "军事农业"],
+    keywords: ["cctv7", "cctv-7", "中央七套", "中央7套", "央视七套", "cctv 7", "国防军事", "央视国防军事"],
     standardName: "CCTV-7 国防军事",
     category: "央视频道",
     categoryList: ["央视频道", "纪实军事"],
     logo: `${LOGO_BASE_FAN}/CCTV7.png`,
-    alias: ["CCTV7", "CCTV-7", "中央七套", "中央7套", "CCTV-7 国防军事", "CCTV-7 军事HD", "央视七套", "国防军事"],
+    alias: ["CCTV7", "CCTV-7", "中央七套", "中央7套", "CCTV-7 国防军事", "CCTV-7 军事HD", "央视七套"],
     epgId: "cctv7"
   },
   {
-    keywords: ["cctv8", "cctv-8", "中央八套", "中央8套", "央视八套", "cctv 8", "电视剧频道"],
+    keywords: ["cctv8", "cctv-8", "中央八套", "中央8套", "央视八套", "cctv 8", "央视电视剧", "中央电视剧"],
     standardName: "CCTV-8 电视剧",
     category: "央视频道",
     categoryList: ["央视频道", "影视剧场"],
     logo: `${LOGO_BASE_FAN}/CCTV8.png`,
-    alias: ["CCTV8", "CCTV-8", "中央八套", "中央8套", "CCTV-8 电视剧", "CCTV-8 电视剧HD", "央视八套", "电视剧频道"],
+    alias: ["CCTV8", "CCTV-8", "中央八套", "中央8套", "CCTV-8 电视剧", "CCTV-8 电视剧HD", "央视八套"],
     epgId: "cctv8"
   },
   {
-    keywords: ["cctv9", "cctv-9", "中央九套", "中央9套", "央视九套", "cctv 9", "纪录频道"],
+    keywords: ["cctv9", "cctv-9", "中央九套", "中央9套", "央视九套", "cctv 9", "央视纪录", "中央纪录"],
     standardName: "CCTV-9 纪录",
     category: "央视频道",
     categoryList: ["央视频道", "纪实地理"],
     logo: `${LOGO_BASE_FAN}/CCTV9.png`,
-    alias: ["CCTV9", "CCTV-9", "中央九套", "中央9套", "CCTV-9 纪录", "CCTV-9 纪录HD", "央视九套", "纪录频道"],
+    alias: ["CCTV9", "CCTV-9", "中央九套", "中央9套", "CCTV-9 纪录", "CCTV-9 纪录HD", "央视九套"],
     epgId: "cctv9"
   },
   {
-    keywords: ["cctv10", "cctv-10", "中央十套", "中央10套", "央视十套", "cctv 10", "科教频道"],
+    keywords: ["cctv10", "cctv-10", "中央十套", "中央10套", "央视十套", "cctv 10", "央视科教", "中央科教"],
     standardName: "CCTV-10 科教",
     category: "央视频道",
     categoryList: ["央视频道", "科教文化"],
     logo: `${LOGO_BASE_FAN}/CCTV10.png`,
-    alias: ["CCTV10", "CCTV-10", "中央十套", "中央10套", "CCTV-10 科教", "CCTV-10 科教HD", "央视十套", "科教频道"],
+    alias: ["CCTV10", "CCTV-10", "中央十套", "中央10套", "CCTV-10 科教", "CCTV-10 科教HD", "央视十套"],
     epgId: "cctv10"
   },
   {
-    keywords: ["cctv11", "cctv-11", "中央十一套", "中央11套", "央视十一套", "cctv 11", "戏曲频道"],
+    keywords: ["cctv11", "cctv-11", "中央十一套", "中央11套", "央视十一套", "cctv 11", "央视戏曲", "中央戏曲"],
     standardName: "CCTV-11 戏曲",
     category: "央视频道",
     categoryList: ["央视频道", "戏曲艺术"],
     logo: `${LOGO_BASE_FAN}/CCTV11.png`,
-    alias: ["CCTV11", "CCTV-11", "中央十一套", "中央11套", "CCTV-11 戏曲", "CCTV-11 戏曲HD", "央视十一套", "戏曲频道"],
+    alias: ["CCTV11", "CCTV-11", "中央十一套", "中央11套", "CCTV-11 戏曲", "CCTV-11 戏曲HD", "央视十一套"],
     epgId: "cctv11"
   },
   {
-    keywords: ["cctv12", "cctv-12", "中央十二套", "中央12套", "央视十二套", "cctv 12", "社会与法", "社会法制"],
+    keywords: ["cctv12", "cctv-12", "中央十二套", "中央12套", "央视十二套", "cctv 12", "社会与法", "央视社会与法"],
     standardName: "CCTV-12 社会与法",
     category: "央视频道",
     categoryList: ["央视频道", "法治社会"],
@@ -494,39 +495,39 @@ export const BUILTIN_CHANNEL_KNOWLEDGE: StandardChannelInfo[] = [
     epgId: "cctv12"
   },
   {
-    keywords: ["cctv13", "cctv-13", "中央十三套", "中央13套", "央视十三套", "cctv 13", "新闻频道", "央视新闻"],
+    keywords: ["cctv13", "cctv-13", "中央十三套", "中央13套", "央视十三套", "cctv 13", "央视新闻", "cctv新闻"],
     standardName: "CCTV-13 新闻",
     category: "央视频道",
     categoryList: ["央视频道", "新闻资讯"],
     logo: `${LOGO_BASE_FAN}/CCTV13.png`,
-    alias: ["CCTV13", "CCTV-13", "中央十三套", "中央13套", "CCTV-13 新闻", "CCTV-13 新闻HD", "央视十三套", "新闻频道"],
+    alias: ["CCTV13", "CCTV-13", "中央十三套", "中央13套", "CCTV-13 新闻", "CCTV-13 新闻HD", "央视十三套", "央视新闻"],
     epgId: "cctv13"
   },
   {
-    keywords: ["cctv14", "cctv-14", "中央十四套", "中央14套", "央视十四套", "cctv 14", "少儿频道", "央视少儿"],
+    keywords: ["cctv14", "cctv-14", "中央十四套", "中央14套", "央视十四套", "cctv 14", "央视少儿", "cctv少儿"],
     standardName: "CCTV-14 少儿",
     category: "央视频道",
     categoryList: ["央视频道", "少儿动画"],
     logo: `${LOGO_BASE_FAN}/CCTV14.png`,
-    alias: ["CCTV14", "CCTV-14", "中央十四套", "中央14套", "CCTV-14 少儿", "CCTV-14 少儿HD", "央视十四套", "少儿频道"],
+    alias: ["CCTV14", "CCTV-14", "中央十四套", "中央14套", "CCTV-14 少儿", "CCTV-14 少儿HD", "央视十四套", "央视少儿"],
     epgId: "cctv14"
   },
   {
-    keywords: ["cctv15", "cctv-15", "中央十五套", "中央15套", "央视十五套", "cctv 15", "音乐频道", "央视音乐"],
+    keywords: ["cctv15", "cctv-15", "中央十五套", "中央15套", "央视十五套", "cctv 15", "央视音乐", "cctv音乐"],
     standardName: "CCTV-15 音乐",
     category: "央视频道",
     categoryList: ["央视频道", "音乐专区"],
     logo: `${LOGO_BASE_FAN}/CCTV15.png`,
-    alias: ["CCTV15", "CCTV-15", "中央十五套", "中央15套", "CCTV-15 音乐", "CCTV-15 音乐HD", "央视十五套", "音乐频道"],
+    alias: ["CCTV15", "CCTV-15", "中央十五套", "中央15套", "CCTV-15 音乐", "CCTV-15 音乐HD", "央视十五套", "央视音乐"],
     epgId: "cctv15"
   },
   {
-    keywords: ["cctv16", "cctv-16", "中央十六套", "中央16套", "央视十六套", "cctv 16", "奥林匹克", "奥运频道"],
+    keywords: ["cctv16", "cctv-16", "中央十六套", "中央16套", "央视十六套", "cctv 16", "奥林匹克", "央视奥林匹克"],
     standardName: "CCTV-16 奥林匹克",
     category: "央视频道",
     categoryList: ["央视频道", "体育专区"],
     logo: `${LOGO_BASE_FAN}/CCTV16.png`,
-    alias: ["CCTV16", "CCTV-16", "中央十六套", "CCTV-16 奥林匹克", "CCTV-16 奥林匹克HD", "央视十六套", "奥林匹克频道"],
+    alias: ["CCTV16", "CCTV-16", "中央十六套", "CCTV-16 奥林匹克", "CCTV-16 奥林匹克HD", "央视十六套"],
     epgId: "cctv16"
   },
   {
@@ -535,7 +536,7 @@ export const BUILTIN_CHANNEL_KNOWLEDGE: StandardChannelInfo[] = [
     category: "央视频道",
     categoryList: ["央视频道", "农业纪实"],
     logo: `${LOGO_BASE_FAN}/CCTV17.png`,
-    alias: ["CCTV17", "CCTV-17", "中央十七套", "CCTV-17 农业农村", "CCTV-17 农业HD", "央视十七套", "农业农村频道"],
+    alias: ["CCTV17", "CCTV-17", "中央十七套", "CCTV-17 农业农村", "CCTV-17 农业HD", "央视十七套"],
     epgId: "cctv17"
   },
   {
@@ -555,6 +556,196 @@ export const BUILTIN_CHANNEL_KNOWLEDGE: StandardChannelInfo[] = [
     logo: `${LOGO_BASE_FAN}/CCTV8K.png`,
     alias: ["CCTV-8K", "CCTV8K", "CCTV 8K", "央视8K", "CCTV-8K 超高清"],
     epgId: "cctv8k"
+  },
+  // === CCTV 数字专区与付费频道 ===
+  {
+    keywords: ["cctv电视指南", "cctv-电视指南", "电视指南", "央视电视指南"],
+    standardName: "CCTV 电视指南",
+    category: "央视频道",
+    categoryList: ["央视频道"],
+    logo: `${LOGO_BASE_FAN}/CCTV电视指南.png`,
+    alias: ["CCTV电视指南", "CCTV 电视指南", "CCTV-电视指南", "央视电视指南"],
+    epgId: "cctv_guide"
+  },
+  {
+    keywords: ["cctv文化精品", "cctv央视文化精品", "央视文化精品", "文化精品"],
+    standardName: "CCTV 文化精品",
+    category: "央视频道",
+    categoryList: ["央视频道"],
+    logo: `${LOGO_BASE_FAN}/CCTV文化精品.png`,
+    alias: ["CCTV文化精品", "CCTV 文化精品", "CCTV央视文化精品", "CCTV-文化精品", "央视文化精品"],
+    epgId: "cctv_culture"
+  },
+  {
+    keywords: ["cctv女性时尚", "女性时尚", "央视女性时尚"],
+    standardName: "CCTV 女性时尚",
+    category: "央视频道",
+    categoryList: ["央视频道"],
+    logo: `${LOGO_BASE_FAN}/CCTV女性时尚.png`,
+    alias: ["CCTV女性时尚", "CCTV 女性时尚", "CCTV-女性时尚", "央视女性时尚"],
+    epgId: "cctv_female"
+  },
+  {
+    keywords: ["cctv兵器科技", "兵器科技", "央视兵器科技"],
+    standardName: "CCTV 兵器科技",
+    category: "央视频道",
+    categoryList: ["央视频道"],
+    logo: `${LOGO_BASE_FAN}/CCTV兵器科技.png`,
+    alias: ["CCTV兵器科技", "CCTV 兵器科技", "CCTV-兵器科技", "央视兵器科技"],
+    epgId: "cctv_weapon"
+  },
+  {
+    keywords: ["cctv央视台球", "cctv台球", "央视台球", "cctv-台球"],
+    standardName: "CCTV 央视台球",
+    category: "央视频道",
+    categoryList: ["央视频道", "体育专区"],
+    logo: `${LOGO_BASE_FAN}/CCTV央视台球.png`,
+    alias: ["CCTV央视台球", "CCTV 央视台球", "CCTV台球", "CCTV 台球", "央视台球"],
+    epgId: "cctv_billiards"
+  },
+  {
+    keywords: ["cctv风云足球", "风云足球", "央视风云足球"],
+    standardName: "CCTV 风云足球",
+    category: "央视频道",
+    categoryList: ["央视频道", "体育专区"],
+    logo: `${LOGO_BASE_FAN}/CCTV风云足球.png`,
+    alias: ["CCTV风云足球", "CCTV 风云足球", "风云足球", "央视风云足球"],
+    epgId: "cctv_soccer"
+  },
+  {
+    keywords: ["cctv风云剧场", "风云剧场", "央视风云剧场"],
+    standardName: "CCTV 风云剧场",
+    category: "央视频道",
+    categoryList: ["央视频道", "影视剧场"],
+    logo: `${LOGO_BASE_FAN}/CCTV风云剧场.png`,
+    alias: ["CCTV风云剧场", "CCTV 风云剧场", "风云剧场", "央视风云剧场"],
+    epgId: "cctv_fyjc"
+  },
+  {
+    keywords: ["cctv第一剧场", "第一剧场", "央视第一剧场"],
+    standardName: "CCTV 第一剧场",
+    category: "央视频道",
+    categoryList: ["央视频道", "影视剧场"],
+    logo: `${LOGO_BASE_FAN}/CCTV第一剧场.png`,
+    alias: ["CCTV第一剧场", "CCTV 第一剧场", "第一剧场", "央视第一剧场"],
+    epgId: "cctv_dyjc"
+  },
+  {
+    keywords: ["cctv怀旧剧场", "怀旧剧场", "央视怀旧剧场"],
+    standardName: "CCTV 怀旧剧场",
+    category: "央视频道",
+    categoryList: ["央视频道", "影视剧场"],
+    logo: `${LOGO_BASE_FAN}/CCTV怀旧剧场.png`,
+    alias: ["CCTV怀旧剧场", "CCTV 怀旧剧场", "怀旧剧场", "央视怀旧剧场"],
+    epgId: "cctv_hjjc"
+  },
+  {
+    keywords: ["cctv风云音乐", "风云音乐", "央视风云音乐"],
+    standardName: "CCTV 风云音乐",
+    category: "央视频道",
+    categoryList: ["央视频道", "音乐专区"],
+    logo: `${LOGO_BASE_FAN}/CCTV风云音乐.png`,
+    alias: ["CCTV风云音乐", "CCTV 风云音乐", "风云音乐", "央视风云音乐"],
+    epgId: "cctv_fyyd"
+  },
+  {
+    keywords: ["cctv高尔夫网球", "cctv高尔夫·网球", "高尔夫网球", "央视高尔夫网球"],
+    standardName: "CCTV 高尔夫·网球",
+    category: "央视频道",
+    categoryList: ["央视频道", "体育专区"],
+    logo: `${LOGO_BASE_FAN}/CCTV高尔夫网球.png`,
+    alias: ["CCTV高尔夫网球", "CCTV 高尔夫网球", "CCTV 高尔夫·网球", "高尔夫网球", "央视高尔夫网球"],
+    epgId: "cctv_golf"
+  },
+  {
+    keywords: ["cctv世界地理", "世界地理", "央视世界地理"],
+    standardName: "CCTV 世界地理",
+    category: "央视频道",
+    categoryList: ["央视频道", "新闻纪实"],
+    logo: `${LOGO_BASE_FAN}/CCTV世界地理.png`,
+    alias: ["CCTV世界地理", "CCTV 世界地理", "世界地理", "央视世界地理"],
+    epgId: "cctv_geo"
+  },
+  {
+    keywords: ["cctv发现之旅", "发现之旅", "央视发现之旅"],
+    standardName: "CCTV 发现之旅",
+    category: "央视频道",
+    categoryList: ["央视频道", "新闻纪实"],
+    logo: `${LOGO_BASE_FAN}/CCTV发现之旅.png`,
+    alias: ["CCTV发现之旅", "CCTV 发现之旅", "发现之旅", "央视发现之旅"],
+    epgId: "cctv_discovery"
+  },
+  {
+    keywords: ["cctv中学生", "央视中学生"],
+    standardName: "CCTV 中学生",
+    category: "央视频道",
+    categoryList: ["央视频道"],
+    logo: `${LOGO_BASE_FAN}/CCTV中学生.png`,
+    alias: ["CCTV中学生", "CCTV 中学生", "央视中学生"],
+    epgId: "cctv_student"
+  },
+  {
+    keywords: ["cctv卫生健康", "卫生健康", "央视卫生健康"],
+    standardName: "CCTV 卫生健康",
+    category: "央视频道",
+    categoryList: ["央视频道"],
+    logo: `${LOGO_BASE_FAN}/CCTV卫生健康.png`,
+    alias: ["CCTV卫生健康", "CCTV 卫生健康", "卫生健康", "央视卫生健康"],
+    epgId: "cctv_health"
+  },
+  {
+    keywords: ["cctv老故事", "老故事", "央视老故事"],
+    standardName: "CCTV 老故事",
+    category: "央视频道",
+    categoryList: ["央视频道", "新闻纪实"],
+    logo: `${LOGO_BASE_FAN}/CCTV老故事.png`,
+    alias: ["CCTV老故事", "CCTV 老故事", "老故事", "央视老故事"],
+    epgId: "cctv_oldstory"
+  },
+  {
+    keywords: ["cctv新科动漫", "新科动漫", "央视新科动漫"],
+    standardName: "CCTV 新科动漫",
+    category: "央视频道",
+    categoryList: ["央视频道", "少儿动画"],
+    logo: `${LOGO_BASE_FAN}/CCTV新科动漫.png`,
+    alias: ["CCTV新科动漫", "CCTV 新科动漫", "新科动漫", "央视新科动漫"],
+    epgId: "cctv_xinke"
+  },
+  {
+    keywords: ["cctv证券资讯", "证券资讯", "央视证券资讯"],
+    standardName: "CCTV 证券资讯",
+    category: "央视频道",
+    categoryList: ["央视频道", "财经资讯"],
+    logo: `${LOGO_BASE_FAN}/CCTV证券资讯.png`,
+    alias: ["CCTV证券资讯", "CCTV 证券资讯", "证券资讯", "央视证券资讯"],
+    epgId: "cctv_stock"
+  },
+  {
+    keywords: ["chc高清电影", "chc高清", "chc 高清电影"],
+    standardName: "CHC 高清电影",
+    category: "央视频道",
+    categoryList: ["央视频道", "影视剧场"],
+    logo: `${LOGO_BASE_FAN}/CHC高清电影.png`,
+    alias: ["CHC 高清电影", "CHC高清电影", "CHC高清"],
+    epgId: "chc_hd"
+  },
+  {
+    keywords: ["chc动作电影", "chc动作", "chc 动作电影"],
+    standardName: "CHC 动作电影",
+    category: "央视频道",
+    categoryList: ["央视频道", "影视剧场"],
+    logo: `${LOGO_BASE_FAN}/CHC动作电影.png`,
+    alias: ["CHC 动作电影", "CHC动作电影", "CHC动作"],
+    epgId: "chc_action"
+  },
+  {
+    keywords: ["chc家庭影院", "chc家庭", "chc 家庭影院"],
+    standardName: "CHC 家庭影院",
+    category: "央视频道",
+    categoryList: ["央视频道", "影视剧场"],
+    logo: `${LOGO_BASE_FAN}/CHC家庭影院.png`,
+    alias: ["CHC 家庭影院", "CHC家庭影院"],
+    epgId: "chc_family"
   },
   {
     keywords: ["cgtn", "cgtn英语", "cgtn英语新闻", "cgtn news", "cgtn english", "cgtn en", "cgtn1"],
@@ -804,12 +995,12 @@ export const BUILTIN_CHANNEL_KNOWLEDGE: StandardChannelInfo[] = [
     epgId: "ttv"
   },
   {
-    keywords: ["中视", "中视主频", "ctv", "中国电视", "中视综合", "中视hd"],
+    keywords: ["中视", "中视主频", "中视综合", "中视hd", "台湾中视", "中国电视公司"],
     standardName: "中视",
     category: "港澳台",
     categoryList: ["港澳台", "台湾频道"],
     logo: `${LOGO_BASE_112}/中视.png`,
-    alias: ["中视", "中视主频", "中国电视", "CTV", "中视HD", "中视综合"],
+    alias: ["中视", "中视主频", "台湾中视", "中视HD", "中视综合", "中国电视公司"],
     epgId: "ctv"
   },
   {
@@ -1007,27 +1198,40 @@ export const BUILTIN_CHANNEL_KNOWLEDGE: StandardChannelInfo[] = [
 
 // Helper to extract exact CCTV channel identifier (prevents substring conflicts like CCTV-13 matching CCTV-1)
 function extractCctvKey(clean: string): string | null {
+  const isCctvExplicit = /^(?:cctv|中央|央视)/i.test(clean);
+
+  // Check CCTV Specialty Channels
+  if (/(?:cctv|央视|中央)[-_\s]*电视指南|电视指南/i.test(clean) && (isCctvExplicit || clean === "电视指南" || clean === "电视指南频道")) return "cctv_guide";
+  if (/(?:cctv|央视|中央)[-_\s]*(?:央视)?文化精品|文化精品/i.test(clean) && (isCctvExplicit || clean === "文化精品" || clean === "文化精品频道")) return "cctv_culture";
+  if (/(?:cctv|央视|中央)[-_\s]*女性时尚|女性时尚/i.test(clean) && (isCctvExplicit || clean === "女性时尚" || clean === "女性时尚频道")) return "cctv_female";
+  if (/(?:cctv|央视|中央)[-_\s]*兵器科技|兵器科技/i.test(clean) && (isCctvExplicit || clean === "兵器科技" || clean === "兵器科技频道")) return "cctv_weapon";
+  if (/(?:cctv|央视|中央)[-_\s]*(?:央视)?台球|央视台球/i.test(clean)) return "cctv_billiards";
+  if (/(?:cctv|央视|中央)[-_\s]*风云足球|风云足球/i.test(clean) && (isCctvExplicit || clean === "风云足球" || clean === "风云足球频道")) return "cctv_soccer";
+  if (/(?:cctv|央视|中央)[-_\s]*风云剧场|风云剧场/i.test(clean) && (isCctvExplicit || clean === "风云剧场" || clean === "风云剧场频道")) return "cctv_fyjc";
+  if (/(?:cctv|央视|中央)[-_\s]*第一剧场|第一剧场/i.test(clean) && (isCctvExplicit || clean === "第一剧场" || clean === "第一剧场频道")) return "cctv_dyjc";
+  if (/(?:cctv|央视|中央)[-_\s]*怀旧剧场|怀旧剧场/i.test(clean) && (isCctvExplicit || clean === "怀旧剧场" || clean === "怀旧剧场频道")) return "cctv_hjjc";
+  if (/(?:cctv|央视|中央)[-_\s]*风云音乐|风云音乐/i.test(clean) && (isCctvExplicit || clean === "风云音乐" || clean === "风云音乐频道")) return "cctv_fyyd";
+  if (/(?:cctv|央视|中央)[-_\s]*高尔夫/i.test(clean)) return "cctv_golf";
+  if (/(?:cctv|央视|中央)[-_\s]*世界地理|世界地理/i.test(clean) && (isCctvExplicit || clean === "世界地理" || clean === "世界地理频道")) return "cctv_geo";
+  if (/(?:cctv|央视|中央)[-_\s]*发现之旅|发现之旅/i.test(clean) && (isCctvExplicit || clean === "发现之旅" || clean === "发现之旅频道")) return "cctv_discovery";
+  if (/(?:cctv|央视|中央)[-_\s]*中学生/i.test(clean)) return "cctv_student";
+  if (/(?:cctv|央视|中央)[-_\s]*卫生健康|卫生健康/i.test(clean) && (isCctvExplicit || clean === "卫生健康" || clean === "卫生健康频道")) return "cctv_health";
+  if (/(?:cctv|央视|中央)[-_\s]*老故事|老故事/i.test(clean) && (isCctvExplicit || clean === "老故事" || clean === "老故事频道")) return "cctv_oldstory";
+  if (/(?:cctv|央视|中央)[-_\s]*新科动漫|新科动漫/i.test(clean) && (isCctvExplicit || clean === "新科动漫" || clean === "新科动漫频道")) return "cctv_xinke";
+  if (/(?:cctv|央视|中央)[-_\s]*证券资讯|证券资讯/i.test(clean) && (isCctvExplicit || clean === "证券资讯" || clean === "证券资讯频道")) return "cctv_stock";
+
+  // CHC channels
+  if (/chc[-_\s]*高清/i.test(clean)) return "chc_hd";
+  if (/chc[-_\s]*动作/i.test(clean)) return "chc_action";
+  if (/chc[-_\s]*家庭/i.test(clean)) return "chc_family";
+
   // Check explicit 5+ / 5plus / 体育赛事
-  if (/(?:cctv[-_\s]*(?:5\+|5plus)|中央五\+|中央5\+|央视五\+|央视5\+|体育赛事)/i.test(clean)) {
+  if (/(?:cctv[-_\s]*(?:5\+|5plus)|中央五\+|中央5\+|央视五\+|央视5\+|央视体育赛事)/i.test(clean)) {
     return "cctv5plus";
   }
   // Check 4K / 8K
   if (/(?:cctv[-_\s]*4k|中央4k|央视4k)/i.test(clean)) return "cctv4k";
   if (/(?:cctv[-_\s]*8k|中央8k|央视8k)/i.test(clean)) return "cctv8k";
-
-  // Check special names without ambiguity
-  if (/(?:新闻频道|央视新闻|cctv新闻)/i.test(clean) && !/(?:cctv[-_\s]*[1-9]|中央[一二三四五六七八九十]|央视[一二三四五六七八九十])/i.test(clean)) return "cctv13";
-  if (/(?:少儿频道|央视少儿|cctv少儿)/i.test(clean) && !/(?:cctv[-_\s]*[1-9]|中央[一二三四五六七八九十]|央视[一二三四五六七八九十])/i.test(clean)) return "cctv14";
-  if (/(?:奥林匹克|奥运频道|央视奥林匹克)/i.test(clean)) return "cctv16";
-  if (/(?:农业农村|央视农业|央视农村)/i.test(clean)) return "cctv17";
-  if (/(?:社会与法|法制频道|央视社会与法)/i.test(clean)) return "cctv12";
-  if (/(?:国防军事|央视军事|军事频道)/i.test(clean)) return "cctv7";
-  if (/(?:科教频道|央视科教)/i.test(clean)) return "cctv10";
-  if (/(?:戏曲频道|央视戏曲)/i.test(clean)) return "cctv11";
-  if (/(?:音乐频道|央视音乐)/i.test(clean)) return "cctv15";
-  if (/(?:纪录频道|央视纪录)/i.test(clean)) return "cctv9";
-  if (/(?:财经频道|央视财经)/i.test(clean)) return "cctv2";
-  if (/(?:综艺频道|央视综艺)/i.test(clean)) return "cctv3";
 
   // Check CCTV-4 regional editions (Europe / America / Asia)
   if (/(?:cctv[-_\s]*4|中央4|央视4|中央四|央视四|中文国际)/i.test(clean)) {
@@ -1036,12 +1240,25 @@ function extractCctvKey(clean: string): string | null {
     return "cctv4";
   }
 
-  if (/(?:电视剧频道|央视电视剧)/i.test(clean)) return "cctv8";
-  if (/(?:电影频道|央视电影)/i.test(clean)) return "cctv6";
-  if (/(?:央视综合|中央综合)/i.test(clean)) return "cctv1";
+  // Check CCTV named channels - MUST require explicit CCTV / 央视 / 中央 identifier
+  if (/(?:央视新闻|cctv[-_\s]*新闻|中央电视台新闻)/i.test(clean)) return "cctv13";
+  if (/(?:央视少儿|cctv[-_\s]*少儿|中央电视台少儿)/i.test(clean)) return "cctv14";
+  if (/(?:央视奥林匹克|cctv[-_\s]*奥林匹克|cctv[-_\s]*奥运|央视奥运)/i.test(clean)) return "cctv16";
+  if (/(?:央视农业|cctv[-_\s]*农业|央视农村|cctv[-_\s]*农村)/i.test(clean)) return "cctv17";
+  if (/(?:央视社会与法|cctv[-_\s]*社会与法|央视法制|cctv[-_\s]*法制)/i.test(clean)) return "cctv12";
+  if (/(?:央视国防军事|央视军事|cctv[-_\s]*国防军事|cctv[-_\s]*军事)/i.test(clean)) return "cctv7";
+  if (/(?:央视科教|cctv[-_\s]*科教|中央电视台科教)/i.test(clean)) return "cctv10";
+  if (/(?:央视戏曲|cctv[-_\s]*戏曲|中央电视台戏曲)/i.test(clean)) return "cctv11";
+  if (/(?:央视音乐|cctv[-_\s]*音乐|中央电视台音乐)/i.test(clean)) return "cctv15";
+  if (/(?:央视纪录|cctv[-_\s]*纪录|中央电视台纪录|央视记录|cctv[-_\s]*记录)/i.test(clean)) return "cctv9";
+  if (/(?:央视财经|cctv[-_\s]*财经|中央电视台财经)/i.test(clean)) return "cctv2";
+  if (/(?:央视综艺|cctv[-_\s]*综艺|中央电视台综艺)/i.test(clean)) return "cctv3";
+  if (/(?:央视电视剧|cctv[-_\s]*电视剧|中央电视台电视剧)/i.test(clean)) return "cctv8";
+  if (/(?:央视电影|cctv[-_\s]*电影|中央电视台电影)/i.test(clean)) return "cctv6";
+  if (/(?:央视综合|cctv[-_\s]*综合|中央电视台综合)/i.test(clean)) return "cctv1";
 
   // Check digit numbers: MUST check 10..17 before 1..9 to avoid prefix collisions!
-  const numMatch = clean.match(/(?:cctv|中央|央视)[-_\s]*(1[0-7]|[1-9])/i);
+  const numMatch = clean.match(/(?:cctv|中央|央视)[-_\s]*(1[0-7]|[1-9])\b/i) || clean.match(/(?:cctv|中央|央视)[-_\s]*(1[0-7]|[1-9])(?:套|台|频道)?/i);
   if (numMatch) {
     return `cctv${numMatch[1]}`;
   }
@@ -1068,7 +1285,7 @@ function extractCctvKey(clean: string): string | null {
   ];
 
   for (const [cn, epg] of cnPairs) {
-    const reg = new RegExp(`(?:cctv|中央|央视)[-_\\s]*${cn}(?:套|频道)?`, "i");
+    const reg = new RegExp(`(?:cctv|中央|央视)[-_\\s]*${cn}(?:套|台|频道)?`, "i");
     if (reg.test(clean)) {
       return epg;
     }
@@ -1113,6 +1330,8 @@ export function matchBuiltinChannel(rawName: string): StandardChannelInfo | null
   const clean = (rawClean || rawName).toLowerCase().replace(/[\s\-_[\]()（）]/g, "").trim();
   if (!clean) return null;
 
+  const isCctvOrNational = /cctv|中央|央视|cgtn|cetv/i.test(clean);
+
   // 1. CCTV & National TV Exact Match by Identifier
   const cctvKey = extractCctvKey(clean) || extractCctvKey(rawName.toLowerCase().replace(/[\s\-_]/g, ""));
   if (cctvKey) {
@@ -1129,6 +1348,14 @@ export function matchBuiltinChannel(rawName: string): StandardChannelInfo | null
 
   // 3. Strict Exact match on standard name or aliases or keywords
   for (const item of BUILTIN_CHANNEL_KNOWLEDGE) {
+    // If input is CCTV, do NOT match non-央视 item
+    if (isCctvOrNational && item.category !== "央视频道") continue;
+    // If input is not CCTV, do NOT match CCTV item unless exact match
+    if (!isCctvOrNational && item.category === "央视频道") {
+      const itemClean = item.standardName.toLowerCase().replace(/[\s\-_[\]()（）]/g, "");
+      if (itemClean !== clean) continue;
+    }
+
     const itemClean = item.standardName.toLowerCase().replace(/[\s\-_[\]()（）]/g, "");
     if (itemClean === clean) {
       return item;
@@ -1148,14 +1375,30 @@ export function matchBuiltinChannel(rawName: string): StandardChannelInfo | null
   }
 
   // 4. Provincial TV / Distinct Brand match (e.g. 湖南卫视, 翡翠台, 民视无线台)
+  const genericBannedTerms = new Set([
+    "新闻", "综合", "科教", "少儿", "影视", "都市", "生活", "公共", "法治", "经济", 
+    "体育", "国际", "电影", "电视剧", "纪录", "音乐", "戏曲", "ctv", "cts", "pts", "ttv",
+    "新闻频道", "科教频道", "少儿频道", "影视剧场", "体育专区", "电视剧频道", "电影频道"
+  ]);
+
   for (const item of BUILTIN_CHANNEL_KNOWLEDGE) {
+    if (isCctvOrNational && item.category !== "央视频道") continue;
+    if (!isCctvOrNational && item.category === "央视频道") continue;
+
     const itemClean = item.standardName.toLowerCase().replace(/[\s\-_[\]()（）]/g, "");
-    if (clean.includes(itemClean)) {
+    if (itemClean.length >= 3 && !genericBannedTerms.has(itemClean) && clean.includes(itemClean)) {
       return item;
     }
     for (const a of item.alias) {
       const aClean = a.toLowerCase().replace(/[\s\-_[\]()（）]/g, "");
-      if (aClean.length >= 3 && !aClean.startsWith("cctv") && !aClean.startsWith("中央") && !aClean.startsWith("cgtn") && clean.includes(aClean)) {
+      if (
+        aClean.length >= 4 && 
+        !genericBannedTerms.has(aClean) &&
+        !aClean.startsWith("cctv") && 
+        !aClean.startsWith("中央") && 
+        !aClean.startsWith("cgtn") && 
+        clean.includes(aClean)
+      ) {
         return item;
       }
     }
@@ -1184,6 +1427,10 @@ export function deduceChannelRule(rawName: string): ChannelSuggestion {
   let cleanName = cleanChannelRawName(rawName);
   if (!cleanName) cleanName = rawName.trim();
 
+  const isCctvOrSat = /cctv|中央|央视|cgtn|cetv|卫视/i.test(cleanName);
+  const geoInfo = detectProvinceAndIspFromName(rawName);
+  const detectedProvince = geoInfo.detectedProvince;
+
   // Detect Category
   let category = "其它频道";
   let categoryList = ["其它频道"];
@@ -1198,6 +1445,9 @@ export function deduceChannelRule(rawName: string): ChannelSuggestion {
   } else if (/民视|台视|中视|华视|公视|tvb|翡翠|明珠|东森|三立|中天|年代|纬来|八大|澳视|莲花|港台|viu|hoy/i.test(cleanName)) {
     category = "港澳台";
     categoryList = ["港澳台"];
+  } else if (detectedProvince && detectedProvince !== "全国") {
+    category = "地方频道";
+    categoryList = ["地方频道", `${detectedProvince}地方`];
   } else if (/体育|足球|篮球|网球|高尔夫|乒羽|赛车|钓鱼|nba|cba/i.test(cleanName)) {
     category = "体育专区";
     categoryList = ["体育专区"];
@@ -1215,7 +1465,6 @@ export function deduceChannelRule(rawName: string): ChannelSuggestion {
     categoryList = ["地方频道"];
   }
 
-  const isCctvOrSat = /cctv|中央|央视|cgtn|cetv|卫视/i.test(cleanName);
   const base = isCctvOrSat ? getLogoBaseFan() : getLogoBase112();
   const defaultLogo = `${base}/${encodeURIComponent(cleanName)}.png`;
   const aliases = Array.from(new Set([rawName.trim(), cleanName]));
@@ -1227,8 +1476,8 @@ export function deduceChannelRule(rawName: string): ChannelSuggestion {
     logo: defaultLogo,
     alias: aliases,
     epgId: epgIdCandidate || "tv",
-    confidence: 0.88,
-    reason: `规则引擎智能分析归类为: ${category}`
+    confidence: detectedProvince ? 0.95 : 0.88,
+    reason: detectedProvince ? `识别为${detectedProvince}地方电视频道` : `智能规则分析归类为: ${category}`
   };
 }
 
@@ -1618,17 +1867,18 @@ export async function batchSuggestChannels(
 ${JSON.stringify(chunk.map((c, idx) => ({ index: idx, id: c.id, name: c.name })), null, 2)}
 
 规则要求：
-1. 识别标准电视频道中文名称（去除高清/4K/超清/标清/码率/回放/IPV6等格式标签）。
-2. 保持央视频道序号精确对应（如 CCTV-1 综合、CCTV-13 新闻），保持省市卫视与地方台规范名称。
-3. 严格输出标准 JSON 数组，每个元素包含 id、standardName、suggestedCategory、epgId、alias、logo、reason。
+1. 识别标准电视频道中文名称（去除高清/4K/超清/标清/码率/回放/IPV6/电信/联通/移动等格式标签）。
+2. 保持央视频道序号与数字付费频道精确对应（如 CCTV-1 综合、CCTV-13 新闻、CCTV 电视指南、CCTV 兵器科技、CCTV 央视台球、CCTV 女性时尚等归为“央视频道”，严禁错误映射为“中视”或其它频道）。
+3. 严格识别市级/县级/区级地方台（如“蒙城新闻频道”->“蒙城新闻”，“泗县新闻”->“泗县新闻”，“滁州科教”->“滁州科教”归为“地方频道”，严禁将地方台误识别为 CCTV-13 或 CCTV-10 等央视频道）。
+4. 严格输出标准 JSON 数组，每个元素包含 id、standardName、suggestedCategory、epgId、alias、logo、reason。
 
 格式示例：
 [
   {
     "id": "频道id",
-    "standardName": "标准中文电视频道名称 (如 'CCTV-13 新闻', 'CCTV-1 综合', '湖南卫视', '广东卫视', '广州新闻')",
+    "standardName": "标准中文电视频道名称 (如 'CCTV-13 新闻', 'CCTV 电视指南', '湖南卫视', '广东卫视', '蒙城新闻综合')",
     "suggestedCategory": "分类 ('央视频道'|'卫视频道'|'地方频道'|'港澳台'|'体育专区'|'影视剧场'|'少儿动画'|'新闻纪实'|'其它频道')",
-    "epgId": "推荐epgId (如 cctv13, cctv1, hunantv)",
+    "epgId": "推荐epgId (如 cctv13, cctv_guide, hunantv)",
     "alias": ["别名1", "别名2"],
     "logo": "推荐台标URL (可留空)",
     "reason": "归类理由"
@@ -1646,28 +1896,55 @@ ${JSON.stringify(chunk.map((c, idx) => ({ index: idx, id: c.id, name: c.name }))
       if (Array.isArray(parsedArray)) {
         for (const item of parsedArray) {
           if (item && item.id && item.standardName) {
-            let logo = item.logo || "";
-            if (!logo || logo.includes("undefined")) {
-              const isCctvOrSat = /cctv|中央|央视|cgtn|cetv|卫视/i.test(item.standardName);
-              const base = isCctvOrSat ? getLogoBaseFan() : getLogoBase112();
-              logo = `${base}/${encodeURIComponent(item.standardName)}.png`;
-            } else {
-              logo = resolveChannelLogo(logo);
-            }
             const originalCh = chunk.find(c => c.id === item.id);
             const originalName = originalCh ? originalCh.name : item.standardName;
 
+            let stdName = String(item.standardName).trim();
+            let cat = String(item.suggestedCategory || "其它频道").trim();
+            let catList = [cat];
+            let epgId = String(item.epgId || "").trim().toLowerCase();
+
+            // Sanity Check 1: CCTV specialty corruption check (e.g. CCTV电视指南 mapped to 中视)
+            if (/^cctv/i.test(originalName) && (!stdName.toLowerCase().startsWith("cctv") && !stdName.startsWith("中央") && !stdName.startsWith("央视"))) {
+              const rule = deduceChannelRule(originalName);
+              stdName = rule.standardName;
+              cat = rule.suggestedCategory;
+              catList = rule.suggestedCategoryList;
+              epgId = rule.epgId;
+            }
+
+            // Sanity Check 2: Local station corruption check (e.g. 蒙城新闻/滁州科教 mapped to CCTV-13/CCTV-10)
+            const localGeo = detectProvinceAndIspFromName(originalName);
+            if (localGeo.detectedProvince && !/^(?:cctv|中央|央视|cgtn|cetv)/i.test(originalName) && !originalName.includes("卫视")) {
+              if (stdName.toLowerCase().startsWith("cctv") || stdName.startsWith("中央") || stdName.startsWith("央视")) {
+                const rule = deduceChannelRule(originalName);
+                stdName = rule.standardName;
+                cat = "地方频道";
+                catList = ["地方频道", `${localGeo.detectedProvince}地方`];
+                epgId = rule.epgId;
+              }
+            }
+
+            let logo = item.logo || "";
+            if (!logo || logo.includes("undefined")) {
+              const isCctvOrSat = /cctv|中央|央视|cgtn|cetv|卫视/i.test(stdName);
+              const base = isCctvOrSat ? getLogoBaseFan() : getLogoBase112();
+              logo = `${base}/${encodeURIComponent(stdName)}.png`;
+            } else {
+              logo = resolveChannelLogo(logo);
+            }
+
             results[item.id] = {
-              standardName: String(item.standardName).trim(),
-              suggestedCategory: String(item.suggestedCategory || "其它频道").trim(),
-              suggestedCategoryList: [String(item.suggestedCategory || "其它频道").trim()],
+              standardName: stdName,
+              suggestedCategory: cat,
+              suggestedCategoryList: catList,
               logo,
               alias: Array.from(new Set([
                 originalName,
-                item.standardName,
+                stdName,
                 ...(Array.isArray(item.alias) ? item.alias : [])
               ])).filter(Boolean),
-              epgId: String(item.epgId || "").trim().toLowerCase(),
+              epgId,
               confidence: 0.94,
               reason: item.reason ? String(item.reason) : `${effectiveConfig?.model || "AI"} 智能批量推导`
             };

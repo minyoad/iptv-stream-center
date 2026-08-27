@@ -1090,7 +1090,7 @@ export const CarouselProxyView = ({ fetchData }: { fetchData: () => void }) => {
                     </button>
 
                     {isToolsDropdownOpen && (
-                      <div className="absolute right-0 top-full mt-1.5 w-60 bg-white rounded-xl shadow-xl border border-slate-200 py-1.5 z-50 text-xs font-medium divide-y divide-slate-100">
+                      <div className="absolute left-0 md:left-auto md:right-0 top-full mt-1.5 w-60 max-w-[calc(100vw-2rem)] bg-white rounded-xl shadow-xl border border-slate-200 py-1.5 z-50 text-xs font-medium divide-y divide-slate-100">
                         {/* Group 1: Configuration & Scan */}
                         <div className="py-1">
                           <button

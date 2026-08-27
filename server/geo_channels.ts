@@ -1279,7 +1279,28 @@ export const STANDARD_CCTV_NAME_MAP: Record<string, string> = {
   "cctv16": "CCTV-16 奥林匹克",
   "cctv17": "CCTV-17 农业农村",
   "cctv4k": "CCTV-4K 超高清",
-  "cctv8k": "CCTV-8K 超高清"
+  "cctv8k": "CCTV-8K 超高清",
+  "cctv电视指南": "CCTV 电视指南",
+  "cctv文化精品": "CCTV 文化精品",
+  "cctv央视文化精品": "CCTV 文化精品",
+  "cctv女性时尚": "CCTV 女性时尚",
+  "cctv兵器科技": "CCTV 兵器科技",
+  "cctv央视台球": "CCTV 央视台球",
+  "cctv台球": "CCTV 央视台球",
+  "cctv风云足球": "CCTV 风云足球",
+  "cctv风云剧场": "CCTV 风云剧场",
+  "cctv第一剧场": "CCTV 第一剧场",
+  "cctv怀旧剧场": "CCTV 怀旧剧场",
+  "cctv风云音乐": "CCTV 风云音乐",
+  "cctv高尔夫网球": "CCTV 高尔夫·网球",
+  "cctv高尔夫·网球": "CCTV 高尔夫·网球",
+  "cctv世界地理": "CCTV 世界地理",
+  "cctv发现之旅": "CCTV 发现之旅",
+  "cctv中学生": "CCTV 中学生",
+  "cctv卫生健康": "CCTV 卫生健康",
+  "cctv老故事": "CCTV 老故事",
+  "cctv新科动漫": "CCTV 新科动漫",
+  "cctv证券资讯": "CCTV 证券资讯"
 };
 
 /**

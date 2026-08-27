@@ -26,7 +26,8 @@ interface Props {
 
 export const DEFAULT_IP_GEO_APIS: IpGeoApi[] = [
   { id: "ip-api", name: "ip-api.com", url: "http://ip-api.com/json/{{ip}}?lang=zh-CN", enabled: true, failCount: 0 },
-  { id: "pconline", name: "太平洋电脑网", url: "https://whois.pconline.com.cn/ipJson.jsp?ip={{ip}}&json=true", enabled: true, failCount: 0 }
+  { id: "pconline", name: "太平洋电脑网", url: "https://whois.pconline.com.cn/ipJson.jsp?ip={{ip}}&json=true", enabled: true, failCount: 0 },
+  { id: "ipwhois", name: "ipwho.is", url: "https://ipwho.is/{{ip}}?lang=zh-CN", enabled: true, failCount: 0 }
 ];
 
 export const POPULAR_IP_GEO_PRESETS: { name: string; url: string; desc: string }[] = [
@@ -39,6 +40,16 @@ export const POPULAR_IP_GEO_PRESETS: { name: string; url: string; desc: string }
     name: "太平洋电脑网 (国内高精)",
     url: "https://whois.pconline.com.cn/ipJson.jsp?ip={{ip}}&json=true",
     desc: "国内知名 IP 归属地库，电信/移动/联通识别精确"
+  },
+  {
+    name: "ipwho.is (全球高可用)",
+    url: "https://ipwho.is/{{ip}}?lang=zh-CN",
+    desc: "全球高可用 HTTPS 接口，支持海外及国内归属地与运营商解析"
+  },
+  {
+    name: "vvhan IP (国内接口)",
+    url: "https://api.vvhan.com/api/ipInfo?ip={{ip}}",
+    desc: "韩小韩公开 IP 归属地 API，支持省份/城市/运营商"
   }
 ];
 
