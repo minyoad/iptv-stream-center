@@ -3080,7 +3080,7 @@ export default function App() {
       {/* Dynamic Slide-in Status / Info Feedback Banner with iOS Safe Area & Mobile Responsive Layout */}
       {feedbackMsg && (
         <div 
-          className={`fixed top-[calc(env(safe-area-inset-top,0px)+0.75rem)] left-3 right-3 sm:left-auto sm:right-6 z-[99999] p-3 sm:p-4 rounded-2xl shadow-2xl border flex items-center justify-between gap-3 animate-slide-in sm:max-w-md transition-all duration-300 backdrop-blur-md ${
+          className={`fixed top-[calc(env(safe-area-inset-top,0px)+5rem)] sm:top-6 left-3 right-3 sm:left-auto sm:right-6 z-[99999] p-3 sm:p-4 rounded-2xl shadow-2xl border flex items-center justify-between gap-3 animate-slide-in sm:max-w-md transition-all duration-300 backdrop-blur-md ${
             feedbackMsg.type === "success" 
             ? "bg-emerald-50/95 border-emerald-200 text-emerald-950 shadow-emerald-950/10" 
             : feedbackMsg.type === "error" 

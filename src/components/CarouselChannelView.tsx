@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { Plus, Trash2, Edit2, Search, Link as LinkIcon, Save, RefreshCw, Wand2, CheckSquare, Square, X , Download, Eye, EyeOff, Filter, RotateCcw, Power, ShieldAlert, AlertTriangle } from "lucide-react";
+import { Plus, Trash2, Edit2, Search, Link as LinkIcon, Save, RefreshCw, Wand2, CheckSquare, Square, X, Download, Eye, EyeOff, Filter, RotateCcw, Power, ShieldAlert, AlertTriangle, CheckCircle, AlertCircle, Info } from "lucide-react";
 import { authFetch as fetch } from "../utils/api";
 import { PRESET_CAROUSEL_PLATFORMS, getPlatformBadge, getPlatformInfo } from "../utils/carouselPlatforms";
 
@@ -550,7 +550,7 @@ export const CarouselChannelView = ({ fetchData, channelsData = [] }: { fetchDat
   return (
     <div className="space-y-6">
       {toast && (
-        <div className={`fixed top-[calc(env(safe-area-inset-top,0px)+0.75rem)] left-3 right-3 sm:left-auto sm:right-6 z-[99999] px-4 py-3 rounded-2xl shadow-2xl border text-xs sm:text-sm font-bold flex items-center justify-between gap-3 animate-fade-in sm:max-w-md backdrop-blur-md ${
+        <div className={`fixed top-[calc(env(safe-area-inset-top,0px)+5rem)] sm:top-6 left-3 right-3 sm:left-auto sm:right-6 z-[99999] px-4 py-3 rounded-2xl shadow-2xl border text-xs sm:text-sm font-bold flex items-center justify-between gap-3 animate-fade-in sm:max-w-md backdrop-blur-md ${
           toast.type === "success" ? "bg-emerald-50/95 text-emerald-900 border-emerald-200 shadow-emerald-900/10" :
           toast.type === "error" ? "bg-rose-50/95 text-rose-900 border-rose-200 shadow-rose-900/10" :
           "bg-indigo-50/95 text-indigo-900 border-indigo-200 shadow-indigo-900/10"

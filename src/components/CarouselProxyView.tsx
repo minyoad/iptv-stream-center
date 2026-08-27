@@ -2471,7 +2471,7 @@ export const CarouselProxyView = ({ fetchData }: { fetchData: () => void }) => {
 
       {/* In-App Toast Notification */}
       {toast && (
-        <div className="fixed top-[calc(env(safe-area-inset-top,0px)+0.75rem)] left-3 right-3 sm:left-auto sm:right-6 z-[99999] flex items-center justify-between gap-3 px-4 py-3 rounded-2xl shadow-2xl transition-all duration-200 border text-xs sm:text-sm font-medium animate-slide-in backdrop-blur-md bg-white/95 sm:max-w-md">
+        <div className="fixed top-[calc(env(safe-area-inset-top,0px)+5rem)] sm:top-6 left-3 right-3 sm:left-auto sm:right-6 z-[99999] flex items-center justify-between gap-3 px-4 py-3 rounded-2xl shadow-2xl transition-all duration-200 border text-xs sm:text-sm font-medium animate-slide-in backdrop-blur-md bg-white/95 sm:max-w-md">
           <div className="flex items-center gap-2.5 min-w-0 flex-1">
             {toast.type === "success" && <CheckCircle2 className="w-5 h-5 text-emerald-500 shrink-0" />}
             {toast.type === "error" && <AlertCircle className="w-5 h-5 text-rose-500 shrink-0" />}
