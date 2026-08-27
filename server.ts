@@ -30,6 +30,19 @@ import {
   cleanChannelNameForSmartOrganize,
   stripNoiseForDetection
 } from "./server/geo_channels";
+import {
+  getAiConfig,
+  saveAiConfig,
+  testAiConnection,
+  suggestChannelMetadata,
+  batchSuggestChannels,
+  matchBuiltinChannel,
+  deduceChannelRule,
+  getLogoSources,
+  resolveChannelLogo,
+  LogoCdnSource,
+  AiConfig
+} from "./server/aiService";
 
 interface LiveSource {
   id: string;
@@ -1514,6 +1527,7 @@ function findAliasTemplate(rawName: string): { templateName: string; aliases: st
 const DEFAULT_GROUPS: Group[] = [
   { id: "g_yangshi", name: "央视频道" },
   { id: "g_weishi", name: "卫视频道" },
+  { id: "g_gangaotai", name: "港澳台" },
   { id: "g_local", name: "地方频道" },
   { id: "g_other", name: "其它频道" }
 ];
@@ -1642,6 +1656,91 @@ const DEFAULT_CHANNELS: Channel[] = [
         province: "北京",
         isp: "BGP",
         status: "unknown",
+      }
+    ]
+  },
+  {
+    id: "ftv",
+    name: "民视",
+    logo: "https://epg.112114.xyz/logo/民视.png",
+    groupIds: ["g_gangaotai"],
+    alias: ["民视", "FTV", "民视无线台", "民视综合"],
+    epgId: "ftv",
+    sources: [
+      {
+        id: "ftv-s1",
+        url: "rtmp://f13h.mine.nu/sat/tv051",
+        province: "台湾",
+        isp: "多线",
+        status: "unknown"
+      }
+    ]
+  },
+  {
+    id: "ttv",
+    name: "台视",
+    logo: "https://live.fanmingming.com/tv/台视.png",
+    groupIds: ["g_gangaotai"],
+    alias: ["台视", "TTV", "台视主频", "台湾电视"],
+    epgId: "ttv",
+    sources: [
+      {
+        id: "ttv-s1",
+        url: "rtmp://f13h.mine.nu/sat/tv071",
+        province: "台湾",
+        isp: "多线",
+        status: "unknown"
+      }
+    ]
+  },
+  {
+    id: "ctv",
+    name: "中视",
+    logo: "https://live.fanmingming.com/tv/中视.png",
+    groupIds: ["g_gangaotai"],
+    alias: ["中视", "CTV", "中视主频", "中国电视"],
+    epgId: "ctv",
+    sources: [
+      {
+        id: "ctv-s1",
+        url: "rtmp://f13h.mine.nu/sat/tv091",
+        province: "台湾",
+        isp: "多线",
+        status: "unknown"
+      }
+    ]
+  },
+  {
+    id: "cts",
+    name: "华视",
+    logo: "https://live.fanmingming.com/tv/华视.png",
+    groupIds: ["g_gangaotai"],
+    alias: ["华视", "CTS", "华视主频", "中华电视"],
+    epgId: "cts",
+    sources: [
+      {
+        id: "cts-s1",
+        url: "rtmp://f13h.mine.nu/sat/tv111",
+        province: "台湾",
+        isp: "多线",
+        status: "unknown"
+      }
+    ]
+  },
+  {
+    id: "cts-minnan",
+    name: "华视闽南语频道",
+    logo: "https://live.fanmingming.com/tv/华视.png",
+    groupIds: ["g_gangaotai"],
+    alias: ["华视闽南", "华视闽南频道", "华视台语台", "华视闽南语"],
+    epgId: "cts-minnan",
+    sources: [
+      {
+        id: "cts-minnan-s1",
+        url: "rtmp://f13h.mine.nu/sat/tv111",
+        province: "台湾",
+        isp: "多线",
+        status: "unknown"
       }
     ]
   }
@@ -2103,8 +2202,9 @@ function generateDefaultPlaylists() {
         const channelDisplayName = channel.name;
         
         // M3U
+        const exportLogo = resolveChannelLogo(channel.logo || "");
         playlistRows.push(
-          `#EXTINF:-1 tvg-id="${channel.epgId}" tvg-name="${channel.name}" tvg-logo="${channel.logo}" group-title="${groupName}",${channelDisplayName}`
+          `#EXTINF:-1 tvg-id="${channel.epgId}" tvg-name="${channel.name}" tvg-logo="${exportLogo}" group-title="${groupName}",${channelDisplayName}`
         );
         playlistRows.push(bestSource.url);
 
@@ -2911,7 +3011,8 @@ function getOrGenerateIntegratedEpgXml(): { xml: string; gz: Buffer; etag: strin
 
   const channelTags = activeExportChannels.map((c) => {
     const epgIdEscaped = escapeXml(c.epgId || generateDefaultEpgId(c.name));
-    return `  <channel id="${epgIdEscaped}">\n    <display-name lang="zh">${escapeXml(c.name)}</display-name>\n    <icon src="${escapeXml(c.logo)}" />\n  </channel>`;
+    const resolvedLogo = resolveChannelLogo(c.logo || "");
+    return `  <channel id="${epgIdEscaped}">\n    <display-name lang="zh">${escapeXml(c.name)}</display-name>\n    <icon src="${escapeXml(resolvedLogo)}" />\n  </channel>`;
   }).join("\n");
 
   const todayStr = new Date().toISOString().split("T")[0].replace(/-/g, "");
@@ -3961,8 +4062,9 @@ function preGenerateIspPlaylists() {
               
               const sourcesToExport = processedSources.slice(0, 15);
               sourcesToExport.forEach(bestSource => {
+                const subLogo = resolveChannelLogo(channel.logo || "");
                 playlistRows.push(
-                  `#EXTINF:-1 tvg-id="${channel.epgId}" tvg-name="${channel.name}" tvg-logo="${channel.logo}" group-title="${group.name}",${channel.name}`
+                  `#EXTINF:-1 tvg-id="${channel.epgId}" tvg-name="${channel.name}" tvg-logo="${subLogo}" group-title="${group.name}",${channel.name}`
                 );
                 playlistRows.push(bestSource.url);
               });
@@ -4439,6 +4541,7 @@ app.get("/api/channels", async (req, res) => {
 
       return {
         ...ch,
+        logo: resolveChannelLogo(ch.logo || ""),
         sources: list
       };
     }).filter((ch) => ch.sources.length > 0);
@@ -4613,6 +4716,68 @@ app.get("/api/channels", async (req, res) => {
 
     saveData();
     res.json({ success: true, count: initialLength - channels.length });
+  });
+
+  // Batch enrich channel logos using AI and authority knowledge base
+  app.post("/api/channels/batch-enrich-logos", (req, res) => {
+    try {
+      const { channelIds, overwrite = false } = req.body;
+      let targetChannels = channels;
+      if (Array.isArray(channelIds) && channelIds.length > 0) {
+        targetChannels = channels.filter((c) => channelIds.includes(c.id));
+      }
+
+      let updatedCount = 0;
+      const details: Array<{ id: string; name: string; oldLogo: string; newLogo: string }> = [];
+
+      for (const ch of targetChannels) {
+        const hasMissingLogo = !ch.logo || ch.logo.includes("placeholder") || ch.logo.includes("default") || ch.logo.trim() === "";
+        if (!overwrite && !hasMissingLogo) {
+          continue;
+        }
+
+        // Match against standard channel database
+        const builtin = matchBuiltinChannel(ch.name);
+        let targetLogo = "";
+        if (builtin && builtin.logo) {
+          targetLogo = resolveChannelLogo(builtin.logo);
+        } else {
+          const rule = deduceChannelRule(ch.name);
+          if (rule && rule.logo && !rule.logo.includes("undefined")) {
+            targetLogo = resolveChannelLogo(rule.logo);
+          }
+        }
+
+        if (targetLogo && targetLogo !== ch.logo) {
+          const oldLogo = ch.logo || "";
+          ch.logo = targetLogo;
+          updatedCount++;
+          details.push({
+            id: ch.id,
+            name: ch.name,
+            oldLogo,
+            newLogo: targetLogo
+          });
+        }
+      }
+
+      if (updatedCount > 0) {
+        saveData();
+        invalidatePlaylistExportCache();
+        invalidateIntegratedEpgCache();
+      }
+
+      res.json({
+        success: true,
+        updatedCount,
+        totalChecked: targetChannels.length,
+        message: `已成功为 ${updatedCount} 个频道智能匹配并补齐官方高清台标！`,
+        details
+      });
+    } catch (err: any) {
+      console.error("[Batch Enrich Logos Error]:", err);
+      res.status(500).json({ error: "批量补齐台标失败: " + err.message });
+    }
   });
 
   // Merge multiple channels
@@ -4887,10 +5052,142 @@ app.get("/api/channels", async (req, res) => {
     res.json({ success: true, count: updatedCount });
   });
 
+  // --- AI Model & Assistant Endpoints ---
+  app.get("/api/ai/config", (req, res) => {
+    try {
+      const cfg = getAiConfig();
+      const maskedApiKey = cfg.apiKey
+        ? cfg.apiKey.length > 8
+          ? cfg.apiKey.substring(0, 4) + "********" + cfg.apiKey.substring(cfg.apiKey.length - 4)
+          : "********"
+        : "";
+      const logoSources = getLogoSources();
+      res.json({
+        success: true,
+        config: {
+          provider: cfg.provider,
+          model: cfg.model,
+          baseUrl: cfg.baseUrl,
+          temperature: cfg.temperature,
+          logoBaseFan: cfg.logoBaseFan || "",
+          logoBase112: cfg.logoBase112 || "",
+          logoSources,
+          hasApiKey: Boolean(cfg.apiKey),
+          maskedApiKey
+        }
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: "获取 AI 配置失败: " + err.message });
+    }
+  });
+
+  app.post("/api/ai/config", (req, res) => {
+    try {
+      const { provider, apiKey, baseUrl, model, temperature, logoBaseFan, logoBase112, logoSources } = req.body;
+      const current = getAiConfig();
+      const targetProvider = provider || current.provider || "siliconflow";
+      const sameProvider = targetProvider === current.provider;
+
+      let finalApiKey = sameProvider ? current.apiKey : "";
+      if (typeof apiKey === "string" && !apiKey.includes("*") && apiKey.trim() !== "") {
+        finalApiKey = apiKey.trim();
+      }
+
+      const newConfig: AiConfig = {
+        provider: targetProvider,
+        apiKey: finalApiKey,
+        baseUrl: baseUrl || current.baseUrl,
+        model: model || current.model,
+        temperature: typeof temperature === "number" ? temperature : current.temperature,
+        logoBaseFan: typeof logoBaseFan === "string" ? logoBaseFan.trim() : current.logoBaseFan,
+        logoBase112: typeof logoBase112 === "string" ? logoBase112.trim() : current.logoBase112,
+        logoSources: Array.isArray(logoSources) ? logoSources : current.logoSources
+      };
+      saveAiConfig(newConfig);
+      invalidatePlaylistExportCache();
+      invalidateIntegratedEpgCache();
+      res.json({ success: true, message: "AI 与官方台标库配置已成功保存" });
+    } catch (err: any) {
+      res.status(500).json({ error: "保存 AI 配置失败: " + err.message });
+    }
+  });
+
+  app.post("/api/channels/batch-sync-cdn-logos", (req, res) => {
+    try {
+      let updatedCount = 0;
+      channels.forEach((ch) => {
+        if (ch.logo && !ch.logo.includes("unsplash.com") && !ch.logo.startsWith("data:")) {
+          const resolved = resolveChannelLogo(ch.logo);
+          if (resolved && resolved !== ch.logo) {
+            ch.logo = resolved;
+            updatedCount++;
+          }
+        }
+      });
+      if (updatedCount > 0) {
+        saveData();
+      }
+      invalidatePlaylistExportCache();
+      invalidateIntegratedEpgCache();
+      res.json({
+        success: true,
+        updatedCount,
+        message: `已成功将当前生效的台标 CDN 库应用并同步至 ${updatedCount} 个频道！`
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: "应用台标 CDN 失败: " + err.message });
+    }
+  });
+
+  app.post("/api/ai/test", async (req, res) => {
+    try {
+      const customConfig = req.body;
+      const result = await testAiConnection(customConfig);
+      res.json(result);
+    } catch (err: any) {
+      res.status(500).json({ success: false, message: "测试请求异常: " + err.message });
+    }
+  });
+
+  app.post("/api/ai/channel-suggest", async (req, res) => {
+    try {
+      const { channelName, originalGroup, existingGroups } = req.body;
+      if (!channelName) {
+        return res.status(400).json({ error: "频道名称不能为空" });
+      }
+      const allGroupNames = Array.isArray(existingGroups) && existingGroups.length > 0
+        ? existingGroups
+        : groups.map((g) => g.name);
+
+      const suggestion = await suggestChannelMetadata(channelName, originalGroup, allGroupNames);
+      res.json({ success: true, suggestion });
+    } catch (err: any) {
+      res.status(500).json({ error: "AI 推导失败: " + err.message });
+    }
+  });
+
+  app.post("/api/ai/batch-suggest", async (req, res) => {
+    try {
+      const { channelList, existingGroups } = req.body;
+      if (!Array.isArray(channelList) || channelList.length === 0) {
+        return res.status(400).json({ error: "待推导频道列表不能为空" });
+      }
+      const allGroupNames = Array.isArray(existingGroups) && existingGroups.length > 0
+        ? existingGroups
+        : groups.map((g) => g.name);
+
+      const suggestions = await batchSuggestChannels(channelList, allGroupNames);
+      res.json({ success: true, suggestions });
+    } catch (err: any) {
+      res.status(500).json({ error: "批量 AI 推导失败: " + err.message });
+    }
+  });
+
   // --- Smart Organize (智能整理) Endpoints ---
-  app.post("/api/channels/smart-organize/preview", (req, res) => {
+  app.post("/api/channels/smart-organize/preview", async (req, res) => {
     try {
       const options = req.body || {};
+      const useAi = options.useAi !== false; // Default true
       const groupingMode = options.groupingMode || "smart"; // "smart" | "province_only" | "keep_existing"
       const provinceNameFormat = options.provinceNameFormat || "raw";
       const allowMultiGroup = options.allowMultiGroup !== false; // Default true
@@ -4907,6 +5204,24 @@ app.get("/api/channels", async (req, res) => {
 
       const changes: any[] = [];
       const neededGroupNames = new Set<string>();
+
+      // AI Batch Suggestions (if useAi is enabled)
+      let aiMap = new Map<string, any>();
+      if (useAi && channels.length > 0) {
+        try {
+          const channelItems = channels.map((c) => ({
+            id: c.id,
+            name: c.name,
+            originalGroup: (c.groupIds || []).map((id) => groupMap.get(id) || "").filter(Boolean).join(", ")
+          }));
+          const aiResults = await batchSuggestChannels(channelItems, existingGroupNames);
+          if (aiResults && typeof aiResults === "object") {
+            Object.entries(aiResults).forEach(([id, r]) => aiMap.set(id, r));
+          }
+        } catch (aiErr) {
+          console.warn("[SmartOrganize Preview] AI batch error, falling back to rule engine:", aiErr);
+        }
+      }
 
       channels.forEach((c) => {
         const originalName = c.name;
@@ -4950,6 +5265,49 @@ app.get("/api/channels", async (req, res) => {
           existingGroupNames
         );
 
+        // 4. Integrate AI Suggestions if available
+        const aiInfo = aiMap.get(c.id);
+        let aiEnhanced = false;
+        let aiReason = "";
+        let suggestedLogo = "";
+        let suggestedAliases: string[] = [];
+        let suggestedEpgId = "";
+
+        if (aiInfo) {
+          aiEnhanced = true;
+          aiReason = aiInfo.reason || "";
+          suggestedLogo = aiInfo.suggestedLogo || "";
+          suggestedAliases = aiInfo.suggestedAliases || [];
+          suggestedEpgId = aiInfo.suggestedEpgId || "";
+
+          // If AI suggested a standard name and rule didn't change it much, adopt AI standard name
+          if (aiInfo.standardName && aiInfo.standardName !== originalName) {
+            newName = aiInfo.standardName;
+          }
+
+          // If groupingMode is smart, merge AI suggested groups
+          if (groupingMode === "smart" && Array.isArray(aiInfo.suggestedGroups) && aiInfo.suggestedGroups.length > 0) {
+            if (allowMultiGroup) {
+              targetGroupNames = Array.from(new Set([...targetGroupNames, ...aiInfo.suggestedGroups]));
+            } else {
+              targetGroupNames = [aiInfo.suggestedGroups[0]];
+            }
+          }
+        }
+
+        // 4.1 If suggestedLogo is not populated yet, check builtin and deduction knowledge base
+        if (!suggestedLogo) {
+          const builtin = matchBuiltinChannel(newName) || matchBuiltinChannel(originalName);
+          if (builtin && builtin.logo) {
+            suggestedLogo = builtin.logo;
+          } else {
+            const deduced = deduceChannelRule(newName);
+            if (deduced && deduced.logo && !deduced.logo.includes("undefined")) {
+              suggestedLogo = deduced.logo;
+            }
+          }
+        }
+
         if (groupingMode === "keep_existing") {
           const hasCustomGroup = originalGroupNames.some((gn) => gn !== "其它频道" && gn !== "未分类");
           if (hasCustomGroup) {
@@ -4992,7 +5350,7 @@ app.get("/api/channels", async (req, res) => {
         const nameChanged = originalName !== newName;
         const groupsChanged = JSON.stringify([...originalGroupNames].sort()) !== JSON.stringify([...targetGroupNames].sort());
 
-        if (nameChanged || groupsChanged || sourcesUpdatedCount > 0) {
+        if (nameChanged || groupsChanged || sourcesUpdatedCount > 0 || aiEnhanced) {
           changes.push({
             channelId: c.id,
             originalName,
@@ -5004,7 +5362,12 @@ app.get("/api/channels", async (req, res) => {
             detectedIsp: detectedIsp || "BGP",
             proposedSources,
             nameChanged,
-            groupsChanged
+            groupsChanged,
+            aiEnhanced,
+            aiReason,
+            suggestedLogo,
+            suggestedAliases,
+            suggestedEpgId
           });
         }
       });
@@ -5021,7 +5384,8 @@ app.get("/api/channels", async (req, res) => {
           nameChangesCount: changes.filter((c) => c.nameChanged).length,
           groupChangesCount: changes.filter((c) => c.groupsChanged).length,
           sourcesUpdatedCount: changes.reduce((sum, c) => sum + c.sourcesUpdatedCount, 0),
-          newGroupsToCreate
+          newGroupsToCreate,
+          aiProcessedCount: aiMap.size
         },
         changes
       });
@@ -5072,6 +5436,16 @@ app.get("/api/channels", async (req, res) => {
         if (change) {
           if (change.newName) {
             c.name = change.newName;
+          }
+          if (change.suggestedLogo && (!c.logo || c.logo.includes("placeholder") || c.logo.includes("default"))) {
+            c.logo = change.suggestedLogo;
+          }
+          if (Array.isArray(change.suggestedAliases) && change.suggestedAliases.length > 0) {
+            const currentAliases = Array.isArray(c.alias) ? c.alias : [];
+            c.alias = Array.from(new Set([...currentAliases, ...change.suggestedAliases]));
+          }
+          if (change.suggestedEpgId && (!c.epgId || c.epgId.startsWith("epg_"))) {
+            c.epgId = change.suggestedEpgId;
           }
           if (Array.isArray(change.targetGroupNames)) {
             const targetIds = change.targetGroupNames
@@ -7289,6 +7663,14 @@ app.get("/api/channels", async (req, res) => {
           const normText = text.toLowerCase().replace(/[\s\-hd高超清蓝光]/g, "");
           if (!normText || !normTarget) return 0;
           if (normText === normTarget) return 100;
+
+          // Prevent numerical mismatch (e.g. CCTV13 matching CCTV1)
+          const targetDigits = normTarget.match(/\d+/g)?.join("") || "";
+          const textDigits = normText.match(/\d+/g)?.join("") || "";
+          if (targetDigits && textDigits && targetDigits !== textDigits) {
+            return 0;
+          }
+
           if (normTarget.includes(normText) || normText.includes(normTarget)) {
             return 50 + Math.min(normText.length, normTarget.length) * 5;
           }
@@ -7320,64 +7702,38 @@ app.get("/api/channels", async (req, res) => {
         .slice(0, 100)
         .map(x => x.candidate);
 
-      // 3. Get Gemini Client and generate content
-      const ai = getGeminiClient();
+      // 3. Try configured AI model (SiliconFlow / GLM / DeepSeek / Gemini / etc.)
+      const aiCfg = getAiConfig();
+      const meta = await suggestChannelMetadata(targetName, "", []);
 
-      const prompt = `你是一个智能IPTV电视频道匹配专家。
-我们正在为用户导入的频道：【${targetName}】匹配最合适的 EPG (电子节目单) ID。
-
-下面是从当前已被激活的 EPG 节目源里筛选出的匹配候选列表（包含 epgId、displayNames、及来源Epg源名）：
-${JSON.stringify(scoredList.map(c => ({ epgId: c.epgId, names: c.displayNames, src: c.sourceName })), null, 2)}
-
-请根据：
-1. 名字同义性（例如 CCTV-5 对应 CCTV5 或者 体育台，广东体育 对应 粤语体育）
-2. 缩写和官方标准（例如 CCTV1 代表 Central China Television Channel 1，或者 湖南卫视 对应 Hunan-TV）
-3. 剔除噪声（如 HD, 高清, 超清 等分辨率标识不影响频道属性）
-
-请在候选项目中，选出最完美最精准的前 3 个推荐推荐。
-如果候选列表没有完美匹配，请在 EPG 的标准命名规范下（如“cctv1”, “hunantv”等）推荐一个最合理的 EPG ID。并且说明这是非候选项目的常识性推荐。
-
-请精确按照以下 JSON Schema 返回数据：
-[
-  {
-    "epgId": "推荐匹配的 epgId",
-    "displayName": "该 epgId 的代表名称 (例如 湖南卫视)",
-    "reason": "推荐理由简短中文",
-    "confidence": 0.95 // 匹配置信度，范围 0.0 到 1.0
-  }
-]`;
-
-      const geminiRes = await ai.models.generateContent({
-        model: "gemini-3.5-flash",
-        contents: prompt,
-        config: {
-          responseMimeType: "application/json",
-          responseSchema: {
-            type: Type.ARRAY,
-            items: {
-              type: Type.OBJECT,
-              properties: {
-                epgId: { type: Type.STRING },
-                displayName: { type: Type.STRING },
-                reason: { type: Type.STRING },
-                confidence: { type: Type.NUMBER }
-              },
-              required: ["epgId", "displayName", "reason", "confidence"]
-            }
-          }
-        }
-      });
-
-      const responseText = geminiRes.text;
-      if (!responseText) {
-        throw new Error("模型未返回任何结果");
+      // If top candidate matches scored list, incorporate
+      const recs: any[] = [];
+      if (meta && meta.epgId) {
+        recs.push({
+          epgId: meta.epgId,
+          displayName: meta.standardName,
+          reason: meta.reason || "智能大模型/权威库匹配",
+          confidence: meta.confidence || 0.95
+        });
       }
 
-      const results = JSON.parse(responseText.trim());
-      res.json({ success: true, channelName: targetName, recommendations: results });
+      // Add scored candidates
+      for (const cand of scoredList) {
+        if (!recs.some(r => r.epgId === cand.epgId)) {
+          recs.push({
+            epgId: cand.epgId,
+            displayName: (cand.displayNames && cand.displayNames[0]) || cand.epgId,
+            reason: `来源 EPG 源 [${cand.sourceName}] 候选匹配`,
+            confidence: 0.85
+          });
+        }
+        if (recs.length >= 5) break;
+      }
+
+      res.json({ success: true, channelName: targetName, recommendations: recs });
     } catch (err: any) {
       console.error("[EPG AI RECOMMEND ERROR]", err.message || err);
-      res.status(500).json({ error: err.message || "智能匹配推荐失败，请检查 API Key 配置" });
+      res.status(500).json({ error: err.message || "智能匹配推荐失败" });
     }
   });
 
@@ -7480,7 +7836,7 @@ ${JSON.stringify(scoredList.map(c => ({ epgId: c.epgId, names: c.displayNames, s
             if (count >= maxLimit) return;
 
             const channelDisplayName = channel.name;
-            let logoUrl = channel.logo || "";
+            let logoUrl = resolveChannelLogo(channel.logo || "");
             if (logoUrl && versionString) {
               logoUrl += (logoUrl.includes("?") ? "&v=" : "?v=") + versionString;
             }

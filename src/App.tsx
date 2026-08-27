@@ -38,8 +38,10 @@ import {
   Menu,
   Wand2,
   Sparkles,
+  Sliders,
   Film,
-  Globe } from "lucide-react";
+  Globe,
+  Image as ImageIcon } from "lucide-react";
 import { Channel, LiveSource, SyncConfig, TestStatus, EpgGuide, Group, EpgSource } from "./types";
 import { arrayMove } from "@dnd-kit/sortable";
 import DashboardView from "./components/DashboardView";
@@ -48,6 +50,7 @@ import { CarouselHubView } from "./components/CarouselHubView";
 import { DraggableGroupList } from "./components/DraggableGroupList";
 import { SortableIpGeoApiList } from "./components/SortableIpGeoApiList";
 import { SmartOrganizeModal } from "./components/SmartOrganizeModal";
+import { AiSettingsModal } from "./components/AiSettingsModal";
 import { IpGeoApi } from "./types";
 import { authFetch as fetch } from "./utils/api";
 
@@ -217,6 +220,19 @@ export default function App() {
   // Loading states
   const [loading, setLoading] = useState(true);
   const [feedbackMsg, setFeedbackMsg] = useState<{ type: "success" | "error" | "info"; text: string } | null>(null);
+
+  // AI Configuration and Channel AI Assistant states
+  const [isAiSettingsOpen, setIsAiSettingsOpen] = useState(false);
+  const [aiChannelSuggestLoading, setAiChannelSuggestLoading] = useState(false);
+  const [aiChannelSuggestion, setAiChannelSuggestion] = useState<any | null>(null);
+  const [aiChannelSuggestError, setAiChannelSuggestError] = useState("");
+  const [aiSelectedFields, setAiSelectedFields] = useState({
+    name: true,
+    logo: true,
+    category: true,
+    epgId: true,
+    alias: true
+  });
 
   // Form states for modals/editors
   const [channelFilterStatus, setChannelFilterStatus] = useState<"active" | "all_with_isolated" | "isolated">("active");
@@ -1405,6 +1421,36 @@ export default function App() {
     );
   };
 
+  const handleBatchEnrichLogos = () => {
+    if (selectedChannelIds.length === 0) {
+      showFeedback("info", "请先选择要补齐台标的频道");
+      return;
+    }
+    triggerConfirm(
+      "AI 智能批量补齐台标",
+      `确定为选中的 ${selectedChannelIds.length} 个频道通过 AI 与权威高清台标库智能匹配台标吗？（将自动补齐缺失台标的频道，已有自定义台标的频道将予以保留）`,
+      async () => {
+        try {
+          const res = await fetch("/api/channels/batch-enrich-logos", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ channelIds: selectedChannelIds, overwrite: false })
+          });
+          if (res.ok) {
+            const data = await res.json();
+            showFeedback("success", data.message || `成功为 ${data.updatedCount} 个频道智能补齐官方高清台标！`);
+            await fetchData();
+          } else {
+            const err = await res.json();
+            showFeedback("error", err.error || "批量补齐台标失败");
+          }
+        } catch (e) {
+          showFeedback("error", "网络请求异常");
+        }
+      }
+    );
+  };
+
   const handleBatchMerge = () => {
     if (selectedChannelIds.length < 2) {
       showFeedback("info", "合并频道功能需要至少选择 2 个频道项目");
@@ -2283,6 +2329,8 @@ export default function App() {
     setEditingChannel(null);
     setAiRecommends([]);
     setAiRecommendError("");
+    setAiChannelSuggestion(null);
+    setAiChannelSuggestError("");
     setChannelForm({
       name: "",
       groupIds: groups.length > 0 ? [groups[0].id] : [],
@@ -2299,6 +2347,8 @@ export default function App() {
     setEditingChannel(ch);
     setAiRecommends([]);
     setAiRecommendError("");
+    setAiChannelSuggestion(null);
+    setAiChannelSuggestError("");
     setChannelForm({
       name: ch.name || "",
       groupIds: ch.groupIds || [],
@@ -2698,6 +2748,101 @@ export default function App() {
       showFeedback("error", "无法加载 EPG 导视表");
     } finally {
       setEpgLoading(false);
+    }
+  };
+
+  // AI Smart Channel Metadata Suggestion
+  const handleAiSuggestChannel = async (rawName: string) => {
+    if (!rawName || !rawName.trim()) {
+      showFeedback("error", "请先输入待推导的频道名称 (如: 民视, 台视, CCTV-1, 湖南卫视 等)");
+      return;
+    }
+    setAiChannelSuggestLoading(true);
+    setAiChannelSuggestError("");
+    try {
+      const res = await fetch("/api/ai/channel-suggest", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          channelName: rawName.trim(),
+          originalGroup: channelForm.newGroupsString || "",
+          existingGroups: groups.map((g) => g.name)
+        })
+      });
+      const data = await res.json();
+      if (res.ok && data.success && data.suggestion) {
+        setAiChannelSuggestion(data.suggestion);
+        showFeedback("success", `AI 推导完成: ${data.suggestion.standardName}`);
+      } else {
+        setAiChannelSuggestError(data.error || "AI 推导未返回结果");
+        showFeedback("error", data.error || "AI 推导失败");
+      }
+    } catch (err: any) {
+      setAiChannelSuggestError(err.message || "请求 AI 服务异常");
+      showFeedback("error", "请求 AI 服务失败");
+    } finally {
+      setAiChannelSuggestLoading(false);
+    }
+  };
+
+  const applyAiChannelSuggestion = (suggestion: any, selectedFieldsToApply?: { name: boolean; logo: boolean; category: boolean; epgId: boolean; alias: boolean }) => {
+    if (!suggestion) return;
+    const fields = selectedFieldsToApply || aiSelectedFields;
+
+    const nextForm = { ...channelForm };
+    const appliedList: string[] = [];
+
+    if (fields.name && suggestion.standardName) {
+      nextForm.name = suggestion.standardName;
+      appliedList.push("名称");
+    }
+
+    if (fields.logo && suggestion.logo) {
+      nextForm.logo = suggestion.logo;
+      appliedList.push("台标");
+    }
+
+    if (fields.epgId && suggestion.epgId) {
+      nextForm.epgId = suggestion.epgId;
+      appliedList.push("EPG");
+    }
+
+    if (fields.alias && Array.isArray(suggestion.alias) && suggestion.alias.length > 0) {
+      const currentAliases = channelForm.alias ? channelForm.alias.split(/[,;，；:]/).map((s) => s.trim()).filter(Boolean) : [];
+      const newAliases = suggestion.alias || [];
+      const mergedAliases = Array.from(new Set([...currentAliases, ...newAliases]));
+      nextForm.alias = mergedAliases.join(", ");
+      appliedList.push("别名");
+    }
+
+    if (fields.category) {
+      const targetGroupNames = suggestion.suggestedCategoryList || (suggestion.suggestedCategory ? [suggestion.suggestedCategory] : []);
+      const matchedGroupIds: string[] = [];
+      const missingGroupNames: string[] = [];
+
+      targetGroupNames.forEach((gn: string) => {
+        const found = groups.find((g) => g.name.toLowerCase() === gn.toLowerCase());
+        if (found) {
+          matchedGroupIds.push(found.id);
+        } else {
+          missingGroupNames.push(gn);
+        }
+      });
+
+      if (matchedGroupIds.length > 0) {
+        nextForm.groupIds = matchedGroupIds;
+      }
+      if (missingGroupNames.length > 0) {
+        nextForm.newGroupsString = missingGroupNames.join(", ");
+      }
+      appliedList.push("分类");
+    }
+
+    setChannelForm(nextForm);
+    if (appliedList.length > 0) {
+      showFeedback("success", `已按选定填入【${appliedList.join("、")}】！`);
+    } else {
+      showFeedback("info", "未勾选任何填入字段");
     }
   };
 
@@ -3140,6 +3285,24 @@ export default function App() {
               {isAuthRequired ? "启用" : "未设"}
             </span>
           </button>
+
+          <button 
+            onClick={() => {
+              setIsAiSettingsOpen(true);
+              setIsMobileMenuOpen(false);
+            }}
+            className="w-full flex items-center justify-between px-4 py-3 rounded-xl transition text-xs text-left font-semibold text-slate-600 hover:bg-indigo-50/60 hover:text-indigo-700 border border-transparent hover:border-indigo-100 cursor-pointer"
+            id="nav_ai_settings"
+            type="button"
+          >
+            <span className="flex items-center gap-3.5">
+              <Sparkles className="w-4 h-4 text-indigo-600" />
+              AI 大模型与提示词
+            </span>
+            <span className="text-[10px] scale-90 px-1.5 py-0.5 rounded font-bold bg-indigo-50 text-indigo-700 border border-indigo-200/50">
+              国内/免费
+            </span>
+          </button>
         </div>
 
         {/* Sidebar Footer with Build Version */}
@@ -3461,10 +3624,18 @@ export default function App() {
                         <button 
                           onClick={() => setIsSmartOrganizeOpen(true)}
                           className="px-2.5 sm:px-3.5 py-1.5 sm:py-2 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700 text-white text-[11px] font-bold rounded-xl shadow-xs transition cursor-pointer flex items-center shrink-0 gap-1"
-                          title="根据频道名称中的省份、运营商关键字自动分配归类分组与规范命名"
+                          title="根据频道名称与大模型自动分配归类分组与规范命名"
                         >
                           <Wand2 className="w-3.5 h-3.5" />
-                          <span>智能整理</span>
+                          <span>AI 智能整理</span>
+                        </button>
+                        <button 
+                          onClick={() => setIsAiSettingsOpen(true)}
+                          className="px-2.5 sm:px-3 py-1.5 sm:py-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200/60 text-[11px] font-bold rounded-xl transition cursor-pointer flex items-center shrink-0 gap-1"
+                          title="配置国内大模型 (硅基流动/智谱/DeepSeek等)"
+                        >
+                          <Sparkles className="w-3.5 h-3.5 text-indigo-600" />
+                          <span className="hidden sm:inline">AI 模型设置</span>
                         </button>
                         <button 
                           onClick={openChannelCreate}
@@ -3513,7 +3684,7 @@ export default function App() {
               <div className="grid grid-cols-1 lg:grid-cols-12 gap-6" id="channels_editor_grid">
                 
                 {/* Left side list of channels */}
-                <div className="lg:col-span-5 bg-white rounded-2xl border border-slate-200 flex flex-col h-[520px] sm:h-[620px] lg:h-[750px] overflow-hidden" id="channels_list_card">
+                <div className="lg:col-span-5 bg-white rounded-2xl border border-slate-200 flex flex-col h-[480px] sm:h-[580px] lg:h-[750px] overflow-hidden" id="channels_list_card">
                   <div className="p-4 border-b border-slate-100 bg-slate-50/50 flex flex-col gap-2.5">
                     <div className="flex justify-between items-center">
                       <div className="flex items-center gap-2">
@@ -3553,6 +3724,14 @@ export default function App() {
                           >
                             <Layers className="w-3 h-3" />
                             批量分组
+                          </button>
+                          <button
+                            onClick={handleBatchEnrichLogos}
+                            className="bg-purple-600 hover:bg-purple-700 text-white text-[10px] font-bold px-2.5 py-1 rounded-lg transition shadow-xs cursor-pointer flex items-center gap-1"
+                            title="使用 AI 与官方高清台标库批量补全所选频道的 Logo"
+                          >
+                            <Sparkles className="w-3 h-3 text-amber-300" />
+                            AI 补齐台标
                           </button>
                           {selectedCategory !== "all" && (
                             <button
@@ -3668,6 +3847,15 @@ export default function App() {
                           setSelectedChannel(ch);
                           setEpgGuide(null);
                           setSelectedSourceIds([]);
+                          // Auto scroll to stream lines view on mobile screens
+                          if (window.innerWidth < 1024) {
+                            setTimeout(() => {
+                              const el = document.getElementById("stream_lines_control_container");
+                              if (el) {
+                                el.scrollIntoView({ behavior: "smooth", block: "start" });
+                              }
+                            }, 50);
+                          }
                         }}
                         onDoubleClickChannel={(ch) => openChannelEdit(ch)}
                         onToggleCheckChannel={(chId, checked) => {
@@ -3699,50 +3887,50 @@ export default function App() {
                 </div>
 
                 {/* Right side playback playline items details view */}
-                <div className="lg:col-span-7 space-y-4 h-[520px] sm:h-[620px] lg:h-[750px]" id="stream_lines_control_container">
+                <div className="lg:col-span-7 space-y-4 min-h-[500px] sm:min-h-[580px] lg:h-[750px] flex flex-col" id="stream_lines_control_container">
                   {selectedChannel ? (
-                    <div className="bg-white rounded-2xl border border-slate-200 p-6 flex flex-col h-full gap-5" id="line_manager_main">
+                    <div className="bg-white rounded-2xl border border-slate-200 p-3.5 sm:p-5 lg:p-6 flex flex-col h-full gap-4 sm:gap-5" id="line_manager_main">
                       
                       {/* Sub header for channel detail view */}
-                      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 pb-4 border-b border-slate-100 shrink-0">
-                        <div className="flex items-center gap-3">
+                      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 pb-3 sm:pb-4 border-b border-slate-100 shrink-0">
+                        <div className="flex items-center gap-3 min-w-0 flex-1">
                           {selectedChannel.logo ? (
                               <img 
                                 src={selectedChannel.logo} 
                                 alt="logo" 
-                                className="w-10 h-10 rounded-xl object-contain bg-slate-50 border border-slate-100 p-1 shadow-sm transition-all duration-300 ease-in-out hover:scale-[4] hover:border-slate-300 origin-left relative hover:z-50 hover:shadow-xl cursor-zoom-in" 
+                                className="w-10 h-10 rounded-xl object-contain bg-slate-50 border border-slate-100 p-1 shadow-sm transition-all duration-300 ease-in-out hover:scale-[4] hover:border-slate-300 origin-left relative hover:z-50 hover:shadow-xl cursor-zoom-in shrink-0" 
                                 onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
                               />
                             ) : (
-                              <div className="w-10 h-10 rounded-xl bg-slate-50 border border-slate-200 flex items-center justify-center text-slate-400 shadow-sm">
+                              <div className="w-10 h-10 rounded-xl bg-slate-50 border border-slate-200 flex items-center justify-center text-slate-400 shadow-sm shrink-0">
                                 <Tv className="w-5 h-5" />
                               </div>
                             )}
-                          <div>
-                            <div className="flex items-center gap-2">
-                              <h3 className="font-bold text-slate-800 text-sm leading-tight">{selectedChannel.name}</h3>
-                              <span className="bg-slate-100 text-[10px] text-slate-600 px-2 py-0.5 rounded">
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <h3 className="font-bold text-slate-800 text-sm leading-tight truncate">{selectedChannel.name}</h3>
+                              <span className="bg-slate-100 text-[10px] text-slate-600 px-2 py-0.5 rounded shrink-0">
                                 {(Array.isArray(selectedChannel.groupIds) ? selectedChannel.groupIds : []).map(gId => (groups || []).find(g => g.id === gId)?.name).filter(Boolean).join(", ") || "其它"}
                               </span>
                             </div>
-                            <p className="text-[11px] text-slate-500 mt-1">
+                            <p className="text-[11px] text-slate-500 mt-1 truncate">
                               别名(Aliases): <span className="font-mono bg-slate-50 px-1 rounded">{(Array.isArray(selectedChannel.alias) ? selectedChannel.alias : []).join(" / ") || "无"}</span>
                             </p>
                           </div>
                         </div>
 
-                        <div className="flex gap-2.5">
+                        <div className="flex gap-2 w-full sm:w-auto flex-wrap sm:flex-nowrap shrink-0">
                           <button
                             onClick={() => lookupEPG(selectedChannel)}
                             disabled={epgLoading}
-                            className="bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-[11px] font-bold px-3 py-1.5 rounded-xl transition cursor-pointer flex items-center"
+                            className="flex-1 sm:flex-initial bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-[11px] font-bold px-3 py-1.5 rounded-xl transition cursor-pointer flex items-center justify-center whitespace-nowrap"
                           >
                             <Calendar className="w-3.5 h-3.5 mr-1" />
-                            {epgLoading ? "正在载入EPG..." : "匹配 EPG 导视预览"}
+                            {epgLoading ? "载入EPG..." : "匹配 EPG 导视预览"}
                           </button>
                           <button
                             onClick={openSourceCreate}
-                            className="bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-bold px-3.5 py-1.5 rounded-xl transition shadow flex items-center cursor-pointer"
+                            className="flex-1 sm:flex-initial bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-bold px-3.5 py-1.5 rounded-xl transition shadow flex items-center justify-center cursor-pointer whitespace-nowrap"
                           >
                             <Plus className="w-3.5 h-3.5 mr-1" />
                             新增加播线路
@@ -3853,48 +4041,32 @@ export default function App() {
                       {/* Display playback source lines */}
                       <div className="flex-1 min-h-0 flex flex-col gap-3" id="sources_panel_list">
                         <div className="flex flex-col gap-2.5 shrink-0">
-                          <div className="flex justify-between items-center bg-slate-50/50 p-2.5 rounded-xl border border-slate-100 gap-2 flex-wrap sm:flex-nowrap">
+                          <div className="flex flex-col sm:flex-row sm:items-center justify-between bg-slate-50/70 p-2.5 sm:p-3 rounded-xl border border-slate-200/80 gap-2.5">
                             {(() => {
-                              const currentFiltered = filterSourcesByStatus(selectedChannel.sources || [], sourceFilterStatus);
+                              const currentFiltered = filterSourcesByStatus(selectedChannel.sources || [], sourceFilterStatus, sourceFilterResolution);
                               const currentFilteredIds = currentFiltered.map(s => s.id);
                               const isAllFilteredSelected = currentFilteredIds.length > 0 && currentFilteredIds.every(id => selectedSourceIds.includes(id));
-                              const activeSelectedCount = currentFiltered.filter(s => selectedSourceIds.includes(s.id)).length;
 
                               return (
                                 <>
-                                  <div className="flex items-center gap-2">
-                                    <input
-                                      type="checkbox"
-                                      className="w-3.5 h-3.5 text-indigo-600 border-slate-300 rounded focus:ring-blue-500 cursor-pointer"
-                                      checked={isAllFilteredSelected}
-                                      onChange={(e) => {
-                                        if (e.target.checked) {
-                                          setSelectedSourceIds(prev => Array.from(new Set([...prev, ...currentFilteredIds])));
-                                        } else {
-                                          setSelectedSourceIds(prev => prev.filter(id => !currentFilteredIds.includes(id)));
-                                        }
-                                      }}
-                                    />
-                                    <span className="text-xs font-bold text-slate-500">已接入线路列表 ({currentFiltered.length} 条)</span>
+                                  <div className="flex items-center justify-between gap-2">
+                                    <label className="flex items-center gap-2 cursor-pointer select-none">
+                                      <input
+                                        type="checkbox"
+                                        className="w-4 h-4 text-indigo-600 border-slate-300 rounded focus:ring-blue-500 cursor-pointer"
+                                        checked={isAllFilteredSelected}
+                                        onChange={(e) => {
+                                          if (e.target.checked) {
+                                            setSelectedSourceIds(prev => Array.from(new Set([...prev, ...currentFilteredIds])));
+                                          } else {
+                                            setSelectedSourceIds(prev => prev.filter(id => !currentFilteredIds.includes(id)));
+                                          }
+                                        }}
+                                      />
+                                      <span className="text-xs font-bold text-slate-700">已接入线路列表 ({currentFiltered.length} 条)</span>
+                                    </label>
                                   </div>
-                                  <div className="flex items-center gap-2">
-                                    <button
-                                      onClick={() => handleOpenExportSelectedSourcesModal("channel")}
-                                      className={`text-xs font-bold px-2.5 py-1 rounded-lg transition shadow-2xs cursor-pointer flex items-center gap-1.5 ${
-                                        activeSelectedCount > 0
-                                          ? "bg-emerald-600 hover:bg-emerald-700 text-white"
-                                          : "bg-white hover:bg-slate-100 text-slate-700 border border-slate-200"
-                                      }`}
-                                      title="将勾选的线路信息导出为单独的 .txt 或 .m3u 文件"
-                                    >
-                                      <Download className={`w-3.5 h-3.5 ${activeSelectedCount > 0 ? "text-white" : "text-emerald-600"}`} />
-                                      <span>导出选中线路</span>
-                                      {activeSelectedCount > 0 && (
-                                        <span className="bg-emerald-800 text-emerald-100 text-[10px] font-black px-1.5 py-0.2 rounded-full">
-                                          {activeSelectedCount}
-                                        </span>
-                                      )}
-                                    </button>
+                                  <div className="flex items-center gap-2 flex-wrap sm:flex-nowrap">
                                     <select
                                       value={sourceFilterStatus}
                                       onChange={(e) => {
@@ -3904,7 +4076,7 @@ export default function App() {
                                         const newFilteredIds = new Set(newFiltered.map(s => s.id));
                                         setSelectedSourceIds(prev => prev.filter(id => newFilteredIds.has(id)));
                                       }}
-                                      className="text-xs border-slate-200 rounded px-2 py-1 bg-white outline-none focus:border-blue-400 cursor-pointer font-bold text-slate-700"
+                                      className="text-xs border border-slate-200 rounded-lg px-2.5 py-1.5 bg-white outline-none focus:border-blue-400 cursor-pointer font-bold text-slate-700 flex-1 sm:flex-initial"
                                     >
                                       <option value="all">全部状态 (默认)</option>
                                       <option value="all_with_isolated">全部 (含已隔离)</option>
@@ -3922,7 +4094,7 @@ export default function App() {
                                         const newFilteredIds = new Set(newFiltered.map(s => s.id));
                                         setSelectedSourceIds(prev => prev.filter(id => newFilteredIds.has(id)));
                                       }}
-                                      className="text-xs border-slate-200 rounded px-2 py-1 bg-white outline-none focus:border-blue-400 cursor-pointer font-bold text-slate-700"
+                                      className="text-xs border border-slate-200 rounded-lg px-2.5 py-1.5 bg-white outline-none focus:border-blue-400 cursor-pointer font-bold text-slate-700 flex-1 sm:flex-initial"
                                     >
                                       <option value="all">所有画质 (默认)</option>
                                       <option value="4K">4K 超高清</option>
@@ -3943,33 +4115,36 @@ export default function App() {
                             const activeSelectedCount = currentFiltered.filter(s => selectedSourceIds.includes(s.id)).length;
                             if (activeSelectedCount === 0) return null;
                             return (
-                              <div className="flex items-center justify-between bg-emerald-50/80 border border-emerald-100 rounded-xl px-2.5 py-1.5 transition-all duration-200 animate-slide-in">
-                                <span className="text-[10px] font-bold text-emerald-700">已选 {activeSelectedCount} 条线路</span>
-                                <div className="flex gap-1.5 animate-fade-in flex-wrap">
+                              <div className="flex flex-col sm:flex-row sm:items-center justify-between bg-emerald-50/90 border border-emerald-200/80 rounded-xl px-3 py-2 gap-2 transition-all duration-200 animate-slide-in shadow-xs">
+                                <div className="flex items-center gap-1.5">
+                                  <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                                  <span className="text-xs font-bold text-emerald-800">已选 {activeSelectedCount} 条线路</span>
+                                </div>
+                                <div className="flex items-center gap-1.5 flex-wrap">
                                   <button
                                     onClick={() => handleOpenExportSelectedSourcesModal("channel")}
-                                    className="bg-emerald-600 hover:bg-emerald-700 text-white text-[10px] font-bold px-2.5 py-1 rounded-lg transition shadow-xs cursor-pointer flex items-center gap-1"
+                                    className="bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-bold px-2.5 py-1.5 rounded-lg transition shadow-xs cursor-pointer flex items-center gap-1 whitespace-nowrap"
                                   >
                                     <Download className="w-3.5 h-3.5" />
                                     导出选中线路
                                   </button>
                                   <button
                                     onClick={() => openBatchSourceEditModal()}
-                                    className="bg-indigo-600 hover:bg-indigo-700 text-white text-[10px] font-bold px-2.5 py-1 rounded-lg transition shadow-xs cursor-pointer flex items-center gap-1"
+                                    className="bg-indigo-600 hover:bg-indigo-700 text-white text-[11px] font-bold px-2.5 py-1.5 rounded-lg transition shadow-xs cursor-pointer flex items-center gap-1 whitespace-nowrap"
                                   >
                                     <Layers className="w-3.5 h-3.5" />
                                     批量修改 ISP/省份
                                   </button>
                                   <button
                                     onClick={() => handleBatchSourceDelete()}
-                                    className="bg-rose-600 hover:bg-rose-700 text-white text-[10px] font-bold px-2.5 py-1 rounded-lg transition shadow-xs cursor-pointer flex items-center gap-1"
+                                    className="bg-rose-600 hover:bg-rose-700 text-white text-[11px] font-bold px-2.5 py-1.5 rounded-lg transition shadow-xs cursor-pointer flex items-center gap-1 whitespace-nowrap"
                                   >
-                                    <Trash2 className="w-3 h-3" />
+                                    <Trash2 className="w-3.5 h-3.5" />
                                     批量删除
                                   </button>
                                   <button
                                     onClick={() => setSelectedSourceIds([])}
-                                    className="bg-slate-200 hover:bg-slate-300 text-slate-600 text-[10px] font-bold px-2.5 py-1 rounded-lg transition cursor-pointer"
+                                    className="bg-slate-200 hover:bg-slate-300 text-slate-700 text-[11px] font-bold px-2.5 py-1.5 rounded-lg transition cursor-pointer whitespace-nowrap"
                                   >
                                     取消
                                   </button>
@@ -3991,17 +4166,17 @@ export default function App() {
                               return (
                                 <div 
                                   key={src.id} 
-                                  className={`p-3.5 rounded-xl border flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs transition-colors ${
-                                    isChecked ? "bg-blue-50/20 border-blue-200" :
-                                    src.status === "active" ? "bg-emerald-50/15 border-emerald-100" :
-                                    src.isolated ? "bg-orange-50/20 border-orange-200 opacity-75" :
-                                    src.status === "inactive" ? "bg-rose-50/15 border-rose-100" : "bg-slate-50/30 border-slate-200"
+                                  className={`p-3 sm:p-3.5 rounded-xl border flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 text-xs transition-colors ${
+                                    isChecked ? "bg-blue-50/30 border-blue-200 shadow-xs" :
+                                    src.status === "active" ? "bg-emerald-50/20 border-emerald-100" :
+                                    src.isolated ? "bg-orange-50/20 border-orange-200 opacity-80" :
+                                    src.status === "inactive" ? "bg-rose-50/20 border-rose-100" : "bg-slate-50/40 border-slate-200"
                                   }`}
                                 >
-                                  <div className="min-w-0 flex-1 flex items-center gap-3">
+                                  <div className="min-w-0 flex-1 flex items-start sm:items-center gap-2.5">
                                     <input
                                       type="checkbox"
-                                      className="w-3.5 h-3.5 text-blue-600 border-slate-300 rounded focus:ring-blue-500 cursor-pointer flex-shrink-0"
+                                      className="w-4 h-4 text-blue-600 border-slate-300 rounded focus:ring-blue-500 cursor-pointer shrink-0 mt-1 sm:mt-0"
                                       checked={isChecked}
                                       onChange={(e) => {
                                         if (e.target.checked) {
@@ -4011,18 +4186,18 @@ export default function App() {
                                         }
                                       }}
                                     />
-                                    <div className="min-w-0 flex-1 space-y-1">
-                                      <div className="flex items-center gap-2">
-                                        <span className="font-bold text-slate-400 font-mono select-none">#{index + 1}</span>
-                                        <span className="bg-slate-100 text-slate-705 font-semibold px-1.5 py-0.5 rounded text-[10px]">
-                                          {src.province}
+                                    <div className="min-w-0 flex-1 space-y-1.5">
+                                      <div className="flex items-center gap-1.5 flex-wrap">
+                                        <span className="font-bold text-slate-400 font-mono select-none text-[11px]">#{index + 1}</span>
+                                        <span className="bg-slate-100 text-slate-700 font-semibold px-2 py-0.5 rounded text-[10px]">
+                                          {src.province || "未知省份"}
                                         </span>
                                         <span className={`font-semibold px-2 py-0.5 rounded text-[10px] ${
                                           src.isp === "电信" ? "bg-blue-50 text-blue-700" : 
                                           src.isp === "移动" ? "bg-green-50 text-green-700" : 
                                           src.isp === "联通" ? "bg-orange-50 text-orange-700" : "bg-slate-100 text-slate-600"
                                         }`}>
-                                          {src.isp}
+                                          {src.isp || "未知运营商"}
                                         </span>
                                         
                                         {/* Resolution Badge */}
@@ -4038,9 +4213,9 @@ export default function App() {
                                         
                                         {/* Connectivity Latency Status Pill */}
                                         {src.status === "active" && (
-                                          <span className="text-emerald-700 font-bold bg-emerald-100/50 px-1.5 py-0.5 rounded text-[10px] font-mono inline-flex items-center gap-1">
+                                          <span className="text-emerald-700 font-bold bg-emerald-100/60 px-1.5 py-0.5 rounded text-[10px] font-mono inline-flex items-center gap-1">
                                             <span>有效/可用</span>
-                                            {src.latency !== undefined && <span className="bg-emerald-200/50 px-1 rounded text-emerald-800">{src.latency}ms</span>}
+                                            {src.latency !== undefined && <span className="bg-emerald-200/60 px-1 rounded text-emerald-800">{src.latency}ms</span>}
                                             {src.testCount !== undefined && src.testCount > 0 && src.successCount !== undefined && (
                                               <span className="text-emerald-600 border border-emerald-200/50 px-1 rounded" title={`测试 ${src.testCount} 次，成功 ${src.successCount} 次`}>
                                                 可靠度 {Math.round((src.successCount / src.testCount) * 100)}%
@@ -4049,7 +4224,7 @@ export default function App() {
                                           </span>
                                         )}
                                         {src.status === "inactive" && (
-                                          <span className="text-rose-700 font-bold bg-rose-100/50 px-1.5 py-0.5 rounded text-[10px]">
+                                          <span className="text-rose-700 font-bold bg-rose-100/60 px-1.5 py-0.5 rounded text-[10px]">
                                             失效/离线
                                           </span>
                                         )}
@@ -4070,7 +4245,7 @@ export default function App() {
                                         )}
                                       </div>
                                       
-                                      <div className="flex items-center justify-between gap-2 bg-slate-50 border border-slate-150 p-2 rounded-lg mt-1">
+                                      <div className="flex items-center justify-between gap-1.5 bg-slate-50 border border-slate-200/70 p-1.5 sm:p-2 rounded-lg">
                                         <p className="font-mono text-[10px] text-slate-600 truncate select-all flex-1" title={src.url}>{src.url}</p>
                                         <button
                                           onClick={(e) => {
@@ -4078,7 +4253,7 @@ export default function App() {
                                             navigator.clipboard.writeText(src.url);
                                             showFeedback("success", "直播源拉流链接已拷贝！");
                                           }}
-                                          className="p-1 text-slate-400 hover:text-indigo-600 bg-white hover:bg-indigo-50 border border-slate-200 rounded transition shrink-0 cursor-pointer"
+                                          className="p-1.5 text-slate-400 hover:text-indigo-600 bg-white hover:bg-indigo-50 border border-slate-200 rounded-md transition shrink-0 cursor-pointer"
                                           title="拷贝流地址"
                                         >
                                           <Copy className="w-3.5 h-3.5" />
@@ -4087,10 +4262,11 @@ export default function App() {
                                     </div>
                                   </div>
 
-                                  <div className="flex gap-2 flex-shrink-0 self-end sm:self-auto items-center">
+                                  <div className="flex gap-1.5 shrink-0 self-end sm:self-center items-center mt-1 sm:mt-0">
                                     <button 
                                       onClick={() => openSourceEdit(src)}
-                                      className="p-2 border border-slate-200 hover:border-slate-350 bg-white rounded-lg hover:bg-slate-50 transition text-slate-600 p-1.5"
+                                      className="p-1.5 border border-slate-200 hover:border-slate-350 bg-white rounded-lg hover:bg-slate-50 transition text-slate-600 cursor-pointer"
+                                      title="编辑线路"
                                     >
                                       <Edit2 className="w-3.5 h-3.5" />
                                     </button>
@@ -4098,7 +4274,7 @@ export default function App() {
                                       <button
                                         onClick={() => handleIsolateSource(src.id, false)}
                                         title="恢复线路"
-                                        className="p-2 border border-emerald-200 hover:border-emerald-350 bg-white rounded-lg hover:bg-emerald-50 transition text-emerald-600 p-1.5"
+                                        className="p-1.5 border border-emerald-200 hover:border-emerald-350 bg-white rounded-lg hover:bg-emerald-50 transition text-emerald-600 cursor-pointer"
                                       >
                                         <ArchiveRestore className="w-3.5 h-3.5" />
                                       </button>
@@ -4106,7 +4282,7 @@ export default function App() {
                                       <button
                                         onClick={() => handleIsolateSource(src.id, true)}
                                         title="软删除隔离(禁止自动同步此地址)"
-                                        className="p-2 border border-orange-200 hover:border-orange-350 bg-white rounded-lg hover:bg-orange-50 transition text-orange-500 p-1.5"
+                                        className="p-1.5 border border-orange-200 hover:border-orange-350 bg-white rounded-lg hover:bg-orange-50 transition text-orange-500 cursor-pointer"
                                       >
                                         <Archive className="w-3.5 h-3.5" />
                                       </button>
@@ -4114,7 +4290,7 @@ export default function App() {
                                     <button 
                                       onClick={() => handleDeleteSource(src.id)}
                                       title="彻底删除"
-                                      className="p-2 border border-rose-200 hover:border-rose-350 bg-white rounded-lg hover:bg-rose-50 transition text-rose-500 p-1.5"
+                                      className="p-1.5 border border-rose-200 hover:border-rose-350 bg-white rounded-lg hover:bg-rose-50 transition text-rose-500 cursor-pointer"
                                     >
                                       <Trash2 className="w-3.5 h-3.5" />
                                     </button>
@@ -5416,9 +5592,40 @@ export default function App() {
                 
                 {/* 1. M3U Web Paste File Upload & Import */}
                 <div className="bg-white p-6 rounded-2xl border border-slate-200 space-y-4 flex flex-col" id="manual_upload_box">
-                  <h3 className="font-bold text-slate-800 text-sm flex items-center">
-                    <Zap className="w-4 h-4 mr-2 text-indigo-500" /> 手动贴入或本地列表导入
-                  </h3>
+                  <div className="flex items-center justify-between flex-wrap gap-2">
+                    <h3 className="font-bold text-slate-800 text-sm flex items-center">
+                      <Zap className="w-4 h-4 mr-2 text-indigo-500" /> 手动贴入或本地列表导入
+                    </h3>
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setPasteType("txt");
+                          setPasteContent(
+                            "港澳台,#genre\n" +
+                            "民视,rtmp://f13h.mine.nu/sat/tv051\n" +
+                            "台视,rtmp://f13h.mine.nu/sat/tv071\n" +
+                            "中视,rtmp://f13h.mine.nu/sat/tv091\n" +
+                            "华视,rtmp://f13h.mine.nu/sat/tv111\n" +
+                            "华视闽南频道,rtmp://f13h.mine.nu/sat/tv111\n"
+                          );
+                          showFeedback("info", "已载入港澳台 RTMP 直播源测试范例");
+                        }}
+                        className="px-2.5 py-1 text-[10px] font-bold bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-lg transition cursor-pointer flex items-center gap-1"
+                        title="快速填入民视、台视、中视、华视等 RTMP 协议直播源"
+                      >
+                        <Tv className="w-3 h-3" /> 填入 RTMP 港澳台范例
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setIsAiSettingsOpen(true)}
+                        className="px-2 py-1 text-[10px] font-bold bg-purple-50 hover:bg-purple-100 text-purple-700 rounded-lg transition cursor-pointer flex items-center gap-1"
+                        title="AI 大模型配置"
+                      >
+                        <Sparkles className="w-3 h-3" /> AI 设置
+                      </button>
+                    </div>
+                  </div>
                   
                   <div className="space-y-3 flex-1 flex flex-col">
                     <div className="flex gap-4">
@@ -6843,102 +7050,328 @@ export default function App() {
       
       {/* 1. Modal Dialog: Create/Update Channel */}
       {isChannelModalOpen && (
-        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 font-sans" id="channel_modal">
-          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-100 space-y-5 flex flex-col animate-fade-in font-sans">
-            <div className="flex justify-between items-center">
-              <h3 className="text-sm font-bold text-slate-800">{editingChannel ? "修改 IPTV 频道元数据" : "建立新收录 IPTV 频道"}</h3>
-              <button className="text-slate-400 hover:text-slate-600 font-bold font-sans" onClick={()=>setIsChannelModalOpen(false)}>✕</button>
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 font-sans overflow-hidden" id="channel_modal">
+          <div className="bg-white rounded-2xl max-w-2xl w-full max-h-[90vh] shadow-2xl border border-slate-100 flex flex-col animate-fade-in font-sans overflow-hidden">
+            {/* Modal Header */}
+            <div className="px-5 py-3.5 border-b border-slate-100 flex justify-between items-center bg-slate-50/70 shrink-0">
+              <div className="flex items-center gap-2.5">
+                <div className="w-7 h-7 rounded-lg bg-indigo-600 text-white flex items-center justify-center shadow-xs">
+                  <Tv className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-slate-800">{editingChannel ? "修改 IPTV 频道元数据" : "建立新收录 IPTV 频道"}</h3>
+                  <p className="text-[10px] text-slate-400 font-normal">标准名、Logo、分组分类、EPG 关联及别名</p>
+                </div>
+              </div>
+              <button 
+                className="text-slate-400 hover:text-slate-600 p-1.5 rounded-lg hover:bg-slate-200/60 font-bold font-sans cursor-pointer transition" 
+                onClick={()=>setIsChannelModalOpen(false)}
+              >
+                ✕
+              </button>
             </div>
             
-            <form onSubmit={handleSaveChannel} className="space-y-4 text-xs font-semibold text-slate-600">
-              <div className="space-y-1.5 font-sans">
-                <label>频道标准中文名称 (Standard Name) *</label>
-                <input 
-                  type="text"
-                  required
-                  value={channelForm.name}
-                  onChange={(e)=>setChannelForm({...channelForm, name: e.target.value})}
-                  placeholder="如: CCTV-1 综合"
-                  className="w-full text-xs p-2.5 border border-slate-200 rounded-xl focus:border-indigo-500 bg-slate-50 focus:outline-none placeholder-slate-400 text-slate-800 font-sans"
-                />
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div className="space-y-1.5 font-sans">
-                  <label>关联直播分类 (选择一个或多个分组) *</label>
-                  <div className="border border-slate-200 rounded-xl bg-slate-50 p-2.5 max-h-32 overflow-y-auto space-y-1" id="group_checkboxes_pnl">
-                    {groups.map((g) => {
-                      const isChecked = channelForm.groupIds.includes(g.id);
-                      return (
-                        <label key={g.id} className="flex items-center gap-2 cursor-pointer py-0.5 hover:bg-slate-100/50 rounded px-1.5 select-none text-slate-700">
-                          <input
-                            type="checkbox"
-                            checked={isChecked}
-                            onChange={(e) => {
-                              const checked = e.target.checked;
-                              let newIds = [...channelForm.groupIds];
-                              if (checked) {
-                                if (!newIds.includes(g.id)) newIds.push(g.id);
-                              } else {
-                                newIds = newIds.filter(id => id !== g.id);
-                              }
-                              setChannelForm({ ...channelForm, groupIds: newIds });
-                            }}
-                            className="rounded text-indigo-600 focus:ring-indigo-500 w-3.5 h-3.5"
-                          />
-                          <span className="text-[11px] text-slate-700 font-bold">{g.name}</span>
-                        </label>
-                      );
-                    })}
+            {/* Modal Form with Scrollable Content */}
+            <form onSubmit={handleSaveChannel} className="flex flex-col flex-1 min-h-0 overflow-hidden text-xs font-semibold text-slate-600">
+              <div className="px-5 py-4 overflow-y-auto flex-1 space-y-3.5 max-h-[calc(90vh-125px)]">
+                {/* AI Channel Assistant Header Card */}
+                <div className="bg-gradient-to-r from-indigo-50/80 via-purple-50/70 to-blue-50/80 p-3 rounded-xl border border-indigo-100/90 flex flex-col gap-2 shadow-xs font-sans">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <div className="w-5 h-5 rounded-md bg-indigo-600 text-white flex items-center justify-center shadow-xs flex-shrink-0">
+                        <Sparkles className="w-3 h-3" />
+                      </div>
+                      <div className="min-w-0">
+                        <span className="text-xs font-bold text-indigo-950 block truncate">AI 智能辅助分析与推导</span>
+                        <span className="text-[10px] text-indigo-600/80 block truncate">推导标准名称、Logo、分类、别名与 EPG</span>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-1.5 flex-shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => handleAiSuggestChannel(channelForm.name)}
+                        disabled={aiChannelSuggestLoading || !channelForm.name.trim()}
+                        className="px-2.5 py-1 bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-200 text-white text-[11px] font-bold rounded-lg shadow-xs transition flex items-center gap-1 cursor-pointer disabled:cursor-not-allowed"
+                      >
+                        {aiChannelSuggestLoading ? (
+                          <>
+                            <RefreshCw className="w-3 h-3 animate-spin" />
+                            推导中...
+                          </>
+                        ) : (
+                          <>
+                            <Sparkles className="w-3 h-3" />
+                            AI 推导
+                          </>
+                        )}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setIsAiSettingsOpen(true)}
+                        className="p-1 text-slate-500 hover:text-indigo-600 hover:bg-white/80 rounded-lg transition cursor-pointer"
+                        title="配置大模型 API"
+                      >
+                        <Sliders className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
                   </div>
+
+                  {aiChannelSuggestError && (
+                    <div className="p-2 bg-rose-50 text-rose-700 text-[10px] rounded-lg border border-rose-100 flex items-center gap-1.5">
+                      <AlertCircle className="w-3.5 h-3.5 flex-shrink-0" />
+                      <span>{aiChannelSuggestError}</span>
+                    </div>
+                  )}
+
+                  {aiChannelSuggestion && (
+                    <div className="bg-white/95 backdrop-blur-xs p-3 rounded-xl border border-indigo-100/90 shadow-sm space-y-2.5">
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-2.5 min-w-0">
+                          {aiChannelSuggestion.logo ? (
+                            <img
+                              src={aiChannelSuggestion.logo}
+                              alt="logo preview"
+                              referrerPolicy="no-referrer"
+                              className="w-8 h-8 object-contain rounded-lg border border-slate-200 bg-slate-50 p-1 flex-shrink-0 shadow-2xs"
+                              onError={(e) => { (e.target as HTMLElement).style.display = 'none'; }}
+                            />
+                          ) : (
+                            <div className="w-8 h-8 rounded-lg bg-indigo-50 border border-indigo-100 flex items-center justify-center text-indigo-600 flex-shrink-0">
+                              <Tv className="w-4 h-4" />
+                            </div>
+                          )}
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <span className="text-xs font-bold text-slate-900">{aiChannelSuggestion.standardName}</span>
+                              <span className="text-[9px] bg-indigo-50 text-indigo-700 font-bold px-1.5 py-0.2 rounded">
+                                {aiChannelSuggestion.suggestedCategory || "未归类"}
+                              </span>
+                            </div>
+                            <p className="text-[10px] text-slate-500 truncate mt-0.5">{aiChannelSuggestion.reason}</p>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          <button
+                            type="button"
+                            onClick={() => applyAiChannelSuggestion(aiChannelSuggestion, { name: true, logo: true, category: true, epgId: true, alias: true })}
+                            className="px-2 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-[10px] rounded-lg transition cursor-pointer"
+                            title="全量覆盖填入所有推荐字段"
+                          >
+                            全部填入
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => applyAiChannelSuggestion(aiChannelSuggestion)}
+                            className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-[10px] rounded-lg shadow-xs transition cursor-pointer flex items-center gap-1"
+                            title="仅填入下方勾选的字段"
+                          >
+                            <Check className="w-3 h-3" />
+                            填入所选
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Selective checkboxes for fields */}
+                      <div className="bg-slate-50/80 p-2 rounded-lg border border-slate-100 space-y-1.5">
+                        <div className="flex items-center justify-between text-[10px] text-slate-500 font-semibold mb-1">
+                          <span>选择需要填入的字段：</span>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const allChecked = Object.values(aiSelectedFields).every(Boolean);
+                              setAiSelectedFields({
+                                name: !allChecked,
+                                logo: !allChecked,
+                                category: !allChecked,
+                                epgId: !allChecked,
+                                alias: !allChecked
+                              });
+                            }}
+                            className="text-indigo-600 hover:underline cursor-pointer"
+                          >
+                            {Object.values(aiSelectedFields).every(Boolean) ? "取消全选" : "全选"}
+                          </button>
+                        </div>
+                        <div className="grid grid-cols-2 sm:grid-cols-5 gap-1.5 text-[10px]">
+                          <label className="flex items-center gap-1 cursor-pointer bg-white px-1.5 py-1 rounded border border-slate-200/80 text-slate-700 select-none">
+                            <input
+                              type="checkbox"
+                              checked={aiSelectedFields.name}
+                              onChange={(e) => setAiSelectedFields({ ...aiSelectedFields, name: e.target.checked })}
+                              className="w-3 h-3 text-indigo-600 rounded"
+                            />
+                            <span className="truncate" title={aiChannelSuggestion.standardName}>标准名</span>
+                          </label>
+
+                          <label className="flex items-center gap-1 cursor-pointer bg-white px-1.5 py-1 rounded border border-slate-200/80 text-slate-700 select-none">
+                            <input
+                              type="checkbox"
+                              checked={aiSelectedFields.logo}
+                              onChange={(e) => setAiSelectedFields({ ...aiSelectedFields, logo: e.target.checked })}
+                              className="w-3 h-3 text-indigo-600 rounded"
+                            />
+                            <span className="truncate">台标 Logo</span>
+                          </label>
+
+                          <label className="flex items-center gap-1 cursor-pointer bg-white px-1.5 py-1 rounded border border-slate-200/80 text-slate-700 select-none">
+                            <input
+                              type="checkbox"
+                              checked={aiSelectedFields.category}
+                              onChange={(e) => setAiSelectedFields({ ...aiSelectedFields, category: e.target.checked })}
+                              className="w-3 h-3 text-indigo-600 rounded"
+                            />
+                            <span className="truncate" title={aiChannelSuggestion.suggestedCategory}>分类</span>
+                          </label>
+
+                          <label className="flex items-center gap-1 cursor-pointer bg-white px-1.5 py-1 rounded border border-slate-200/80 text-slate-700 select-none">
+                            <input
+                              type="checkbox"
+                              checked={aiSelectedFields.epgId}
+                              onChange={(e) => setAiSelectedFields({ ...aiSelectedFields, epgId: e.target.checked })}
+                              className="w-3 h-3 text-indigo-600 rounded"
+                            />
+                            <span className="truncate" title={aiChannelSuggestion.epgId}>EPG ID</span>
+                          </label>
+
+                          <label className="flex items-center gap-1 cursor-pointer bg-white px-1.5 py-1 rounded border border-slate-200/80 text-slate-700 select-none col-span-2 sm:col-span-1">
+                            <input
+                              type="checkbox"
+                              checked={aiSelectedFields.alias}
+                              onChange={(e) => setAiSelectedFields({ ...aiSelectedFields, alias: e.target.checked })}
+                              className="w-3 h-3 text-indigo-600 rounded"
+                            />
+                            <span className="truncate">别名</span>
+                          </label>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-2 text-[10px] pt-1.5 border-t border-slate-100">
+                        <div className="truncate">
+                          <span className="text-slate-400 font-medium">推荐别名: </span>
+                          <span className="font-bold text-slate-700">
+                            {Array.isArray(aiChannelSuggestion.alias) && aiChannelSuggestion.alias.length > 0
+                              ? aiChannelSuggestion.alias.slice(0, 3).join(", ")
+                              : "无"}
+                          </span>
+                        </div>
+                        <div className="truncate">
+                          <span className="text-slate-400 font-medium">推荐 EPG: </span>
+                          <span className="font-mono font-bold text-indigo-700">{aiChannelSuggestion.epgId || "自动生成"}</span>
+                        </div>
+                      </div>
+                    </div>
+                  )}
                 </div>
 
-                <div className="space-y-1.5 flex flex-col justify-between font-sans">
-                  <div>
-                    <label>创建并关联新分类 (动态逗号分隔)</label>
-                    <input
+                {/* 2-Column Grid: Name and Logo URL */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3 font-sans">
+                  <div className="space-y-1">
+                    <label className="text-[11px] text-slate-700">频道标准中文名称 (Standard Name) *</label>
+                    <input 
                       type="text"
-                      value={channelForm.newGroupsString}
-                      onChange={(e)=>setChannelForm({...channelForm, newGroupsString: e.target.value})}
-                      placeholder="如: 黑龙江卫视, 蓝光专区"
-                      className="w-full text-xs p-2.5 mt-1 border border-slate-200 rounded-xl focus:border-indigo-500 bg-slate-50 focus:outline-none placeholder-slate-400 text-slate-800"
+                      required
+                      value={channelForm.name}
+                      onChange={(e)=>setChannelForm({...channelForm, name: e.target.value})}
+                      placeholder="如: CCTV-13 新闻"
+                      className="w-full text-xs p-2 border border-slate-200 rounded-lg focus:border-indigo-500 bg-slate-50 focus:outline-none placeholder-slate-400 text-slate-800 font-sans"
                     />
                   </div>
-                  <p className="text-[10px] text-slate-400 font-medium leading-relaxed font-sans">可以直接在这输入想加入的新类型，保存时系统会自动帮您创建组并关联，实现多对多绑定。</p>
+                  <div className="space-y-1">
+                    <label className="text-[11px] text-slate-700 flex justify-between items-center">
+                      <span>频道台标图片 (Logo URL)</span>
+                      {channelForm.logo ? (
+                        <span className="text-[9px] text-emerald-600 font-bold flex items-center gap-1">
+                          <Check className="w-2.5 h-2.5" /> 已输入台标
+                        </span>
+                      ) : (
+                        <span className="text-[9px] text-slate-400">支持外链与高清 PNG</span>
+                      )}
+                    </label>
+                    <div className="flex items-center gap-2">
+                      <div className="relative group shrink-0">
+                        {channelForm.logo ? (
+                          <div className="relative">
+                            <img 
+                              src={channelForm.logo} 
+                              alt="preview" 
+                              referrerPolicy="no-referrer"
+                              className="w-8 h-8 object-contain rounded-lg border border-slate-200 bg-white p-0.5 shadow-2xs transition-all hover:scale-125 hover:z-20 cursor-zoom-in" 
+                              onError={(e)=>{ (e.target as HTMLElement).style.display = 'none'; }}
+                            />
+                          </div>
+                        ) : (
+                          <div className="w-8 h-8 rounded-lg bg-slate-100 border border-dashed border-slate-300 flex items-center justify-center text-slate-400">
+                            <ImageIcon className="w-4 h-4" />
+                          </div>
+                        )}
+                      </div>
+                      <input 
+                        type="url"
+                        value={channelForm.logo}
+                        onChange={(e)=>setChannelForm({...channelForm, logo: e.target.value})}
+                        placeholder="https://live.fanmingming.com/tv/CCTV13.png"
+                        className="flex-1 text-xs p-2 border border-slate-200 rounded-lg focus:border-indigo-500 bg-slate-50 focus:outline-none font-mono placeholder-slate-400 text-slate-800"
+                      />
+                      {channelForm.logo && (
+                        <button
+                          type="button"
+                          onClick={() => setChannelForm({ ...channelForm, logo: "" })}
+                          className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg border border-slate-200 transition cursor-pointer shrink-0"
+                          title="清空台标"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                    </div>
+                  </div>
                 </div>
-              </div>
 
-              <div className="space-y-1.5 font-sans">
-                <label className="flex justify-between items-center">
-                  <span>EPG 节目匹配 ID (epgId) *</span>
-                </label>
-                <div className="flex gap-2">
-                  <input 
-                    type="text"
-                    required
-                    value={channelForm.epgId}
-                    onChange={(e)=>setChannelForm({...channelForm, epgId: e.target.value})}
-                    placeholder="如: cctv1"
-                    className="flex-1 text-xs p-2.5 border border-slate-200 rounded-xl focus:border-indigo-500 bg-slate-50 focus:outline-none font-mono placeholder-slate-400 text-slate-800"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => runAiRecommend(channelForm.id || "", channelForm.name)}
-                    disabled={aiRecommendLoading}
-                    className="bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-xs px-3 py-1.5 rounded-xl transition font-bold border border-indigo-200/50 flex items-center justify-center cursor-pointer disabled:bg-slate-100 disabled:text-slate-400"
-                  >
-                    {aiRecommendLoading ? "🤖 AI匹配中..." : "🤖 AI 智能匹配"}
-                  </button>
+                {/* 2-Column Grid: EPG ID and Aliases */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3 font-sans">
+                  <div className="space-y-1">
+                    <label className="text-[11px] text-slate-700 flex justify-between items-center">
+                      <span>EPG 节目匹配 ID (epgId) *</span>
+                    </label>
+                    <div className="flex gap-1.5">
+                      <input 
+                        type="text"
+                        required
+                        value={channelForm.epgId}
+                        onChange={(e)=>setChannelForm({...channelForm, epgId: e.target.value})}
+                        placeholder="如: cctv13"
+                        className="flex-1 text-xs p-2 border border-slate-200 rounded-lg focus:border-indigo-500 bg-slate-50 focus:outline-none font-mono placeholder-slate-400 text-slate-800"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => runAiRecommend(channelForm.id || "", channelForm.name)}
+                        disabled={aiRecommendLoading}
+                        className="bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-[11px] px-2.5 py-1.5 rounded-lg transition font-bold border border-indigo-200/50 flex items-center justify-center cursor-pointer disabled:bg-slate-100 disabled:text-slate-400 shrink-0"
+                      >
+                        {aiRecommendLoading ? "匹配中..." : "AI 匹配"}
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="text-[11px] text-slate-700">兼容别名 (Comma Separated)</label>
+                    <input 
+                      type="text"
+                      value={channelForm.alias}
+                      onChange={(e)=>setChannelForm({...channelForm, alias: e.target.value})}
+                      placeholder="如: cctv13, 中央十三套, CCTV-13 新闻"
+                      className="w-full text-xs p-2 border border-slate-200 rounded-lg focus:border-indigo-500 bg-slate-50 focus:outline-none placeholder-slate-400 text-slate-800"
+                    />
+                  </div>
                 </div>
 
                 {aiRecommendError && (
-                  <p className="text-[10px] text-rose-600 font-bold mt-1 leading-relaxed bg-rose-50 p-2 rounded-lg border border-rose-100 font-sans">{aiRecommendError}</p>
+                  <p className="text-[10px] text-rose-600 font-bold bg-rose-50 p-2 rounded-lg border border-rose-100 font-sans">{aiRecommendError}</p>
                 )}
 
                 {aiRecommends.length > 0 && (
-                  <div className="mt-2 bg-indigo-50/30 p-2.5 rounded-xl border border-indigo-100 space-y-2 max-h-48 overflow-y-auto font-sans">
-                    <p className="text-[10px] font-bold text-indigo-800">Gemini AI 智能推荐匹配 (点击直接采纳填入)：</p>
-                    <div className="flex flex-col gap-1.5 font-sans">
+                  <div className="bg-indigo-50/30 p-2 rounded-lg border border-indigo-100 space-y-1.5 max-h-32 overflow-y-auto font-sans">
+                    <p className="text-[10px] font-bold text-indigo-800">EPG 智能推荐匹配 (点击直接采纳填入)：</p>
+                    <div className="flex flex-col gap-1 font-sans">
                       {aiRecommends.map((rec) => (
                         <div 
                           key={rec.epgId}
@@ -6946,16 +7379,15 @@ export default function App() {
                             setChannelForm({ ...channelForm, epgId: rec.epgId });
                             showFeedback("success", `已填充 "${rec.epgId}"`);
                           }}
-                          className="bg-white hover:bg-indigo-50 p-2 rounded-lg border border-indigo-100/50 flex justify-between items-center transition cursor-pointer hover:border-indigo-300"
+                          className="bg-white hover:bg-indigo-50 p-1.5 rounded-md border border-indigo-100/50 flex justify-between items-center transition cursor-pointer hover:border-indigo-300"
                         >
-                          <div className="space-y-0.5">
+                          <div className="space-y-0.5 truncate">
                             <div className="flex items-center gap-1.5">
-                              <span className="font-mono text-[10px] font-bold text-indigo-700 bg-indigo-50 px-1.5 py-0.5 rounded">{rec.epgId}</span>
+                              <span className="font-mono text-[10px] font-bold text-indigo-700 bg-indigo-50 px-1 py-0.2 rounded">{rec.epgId}</span>
                               <span className="font-bold text-slate-700 text-[10px]">({rec.displayName})</span>
                             </div>
-                            <p className="text-[9px] text-slate-400 leading-normal">{rec.reason}</p>
                           </div>
-                          <span className="text-[9px] bg-emerald-50 text-emerald-700 px-1.5 py-0.5 font-bold rounded-sm">
+                          <span className="text-[9px] bg-emerald-50 text-emerald-700 px-1.5 py-0.2 font-bold rounded-sm shrink-0">
                             {(rec.confidence * 100).toFixed(0)}%
                           </span>
                         </div>
@@ -6963,57 +7395,82 @@ export default function App() {
                     </div>
                   </div>
                 )}
-              </div>
 
-              <div className="space-y-1.5 font-sans">
-                <label>频道台标图片图标 (Logo URL)</label>
-                <input 
-                  type="url"
-                  value={channelForm.logo}
-                  onChange={(e)=>setChannelForm({...channelForm, logo: e.target.value})}
-                  placeholder="https://..."
-                  className="w-full text-xs p-2.5 border border-slate-200 rounded-xl focus:border-indigo-500 bg-slate-50 focus:outline-none font-mono placeholder-slate-400 text-slate-800"
-                />
-              </div>
-
-              <div className="space-y-1.5 font-sans">
-                <label>匹配兼容等别名 (Comma Separated)</label>
-                <input 
-                  type="text"
-                  value={channelForm.alias}
-                  onChange={(e)=>setChannelForm({...channelForm, alias: e.target.value})}
-                  placeholder="如: cctv1, 中央一套, CCTV-1 HD"
-                  className="w-full text-xs p-2.5 border border-slate-200 rounded-xl focus:border-indigo-500 bg-slate-50 focus:outline-none placeholder-slate-400 text-slate-800"
-                />
-                <p className="text-[10px] text-slate-400 font-medium font-sans">导入不同直播源时，只要名字撞到了这些别名，就会自动归为此频道的源。</p>
-              </div>
-
-              <div className="pt-1 font-sans">
-                <label className="flex items-center gap-2 cursor-pointer bg-amber-50/50 p-2.5 rounded-xl border border-amber-100/80">
-                  <input
-                    type="checkbox"
-                    checked={channelForm.isolated}
-                    onChange={(e) => setChannelForm({ ...channelForm, isolated: e.target.checked })}
-                    className="w-4 h-4 text-amber-600 border-slate-300 rounded focus:ring-amber-500 cursor-pointer"
-                  />
-                  <div className="flex flex-col">
-                    <span className="text-xs font-bold text-slate-800">隔离此频道 (软隐藏)</span>
-                    <span className="text-[10px] text-slate-500">勾选后，该频道不会出现在 M3U / TXT / EPG.xml 导出列表中，且播放接口拒绝该频道流</span>
+                {/* 2-Column Grid: Group Selection and Create New Group */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  <div className="space-y-1 font-sans">
+                    <label className="text-[11px] text-slate-700">关联直播分类 (可多选) *</label>
+                    <div className="border border-slate-200 rounded-lg bg-slate-50 p-2 max-h-24 overflow-y-auto space-y-0.5" id="group_checkboxes_pnl">
+                      {groups.map((g) => {
+                        const isChecked = channelForm.groupIds.includes(g.id);
+                        return (
+                          <label key={g.id} className="flex items-center gap-2 cursor-pointer py-0.5 hover:bg-slate-100/60 rounded px-1 select-none text-slate-700">
+                            <input
+                              type="checkbox"
+                              checked={isChecked}
+                              onChange={(e) => {
+                                const checked = e.target.checked;
+                                let newIds = [...channelForm.groupIds];
+                                if (checked) {
+                                  if (!newIds.includes(g.id)) newIds.push(g.id);
+                                } else {
+                                  newIds = newIds.filter(id => id !== g.id);
+                                }
+                                setChannelForm({ ...channelForm, groupIds: newIds });
+                              }}
+                              className="rounded text-indigo-600 focus:ring-indigo-500 w-3.5 h-3.5 cursor-pointer"
+                            />
+                            <span className="text-[11px] text-slate-700 font-bold">{g.name}</span>
+                          </label>
+                        );
+                      })}
+                    </div>
                   </div>
-                </label>
+
+                  <div className="space-y-1 flex flex-col justify-between font-sans">
+                    <div>
+                      <label className="text-[11px] text-slate-700">创建并关联新分类 (动态逗号分隔)</label>
+                      <input
+                        type="text"
+                        value={channelForm.newGroupsString}
+                        onChange={(e)=>setChannelForm({...channelForm, newGroupsString: e.target.value})}
+                        placeholder="如: 新闻专区, 高清频道"
+                        className="w-full text-xs p-2 border border-slate-200 rounded-lg focus:border-indigo-500 bg-slate-50 focus:outline-none placeholder-slate-400 text-slate-800"
+                      />
+                    </div>
+                    <p className="text-[9px] text-slate-400 font-normal leading-tight font-sans">输入新分类名保存时会自动创建并关联。</p>
+                  </div>
+                </div>
+
+                {/* Soft Hide / Isolate Channel Toggle */}
+                <div className="pt-0.5 font-sans">
+                  <label className="flex items-center gap-2.5 cursor-pointer bg-amber-50/60 hover:bg-amber-50 p-2 rounded-lg border border-amber-200/60 transition">
+                    <input
+                      type="checkbox"
+                      checked={channelForm.isolated}
+                      onChange={(e) => setChannelForm({ ...channelForm, isolated: e.target.checked })}
+                      className="w-3.5 h-3.5 text-amber-600 border-slate-300 rounded focus:ring-amber-500 cursor-pointer"
+                    />
+                    <div className="flex flex-col">
+                      <span className="text-[11px] font-bold text-slate-800">隔离此频道 (软隐藏)</span>
+                      <span className="text-[9px] text-slate-500">勾选后不会出现在 M3U / TXT / EPG.xml 导出列表中，且播放接口拒绝该频道流</span>
+                    </div>
+                  </label>
+                </div>
               </div>
 
-              <div className="flex gap-3 pt-3">
+              {/* Modal Fixed Footer */}
+              <div className="px-5 py-3 border-t border-slate-100 bg-slate-50/90 shrink-0 flex gap-3">
                 <button 
                   type="button" 
                   onClick={()=>setIsChannelModalOpen(false)}
-                  className="w-1/3 py-2.5 border border-slate-200 hover:bg-slate-50 text-slate-600 rounded-xl cursor-pointer text-center font-bold font-sans"
+                  className="w-1/3 py-2 border border-slate-200 hover:bg-slate-100 text-slate-600 rounded-xl cursor-pointer text-center font-bold font-sans text-xs transition"
                 >
                   取消
                 </button>
                 <button 
                   type="submit" 
-                  className="w-2/3 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-slate-50 rounded-xl cursor-pointer text-center font-bold font-sans shadow-md"
+                  className="w-2/3 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl cursor-pointer text-center font-bold font-sans text-xs shadow-xs transition"
                 >
                   保存设置
                 </button>
@@ -8102,6 +8559,12 @@ export default function App() {
         onSuccess={async () => {
           await fetchData();
         }}
+        showFeedback={showFeedback}
+      />
+
+      <AiSettingsModal
+        isOpen={isAiSettingsOpen}
+        onClose={() => setIsAiSettingsOpen(false)}
         showFeedback={showFeedback}
       />
 

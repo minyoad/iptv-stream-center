@@ -1,7 +1,7 @@
 import React from "react";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { GripVertical, Trash2 } from "lucide-react";
+import { GripVertical, Trash2, Globe, Link } from "lucide-react";
 import { IpGeoApi } from "../types";
 
 interface Props {
@@ -33,127 +33,85 @@ export function SortableIpGeoApiItem({ api, idx, onUpdate, onRemove }: Props) {
     <div
       ref={setNodeRef}
       style={style}
-      className={`p-3 rounded-xl border transition-all ${
+      className={`p-3 sm:p-3.5 rounded-2xl border transition-all space-y-2.5 ${
         isDragging 
           ? "bg-indigo-50/90 border-indigo-300 shadow-lg scale-[1.01]" 
-          : "bg-white border-slate-200/90 shadow-2xs hover:border-slate-300"
+          : api.enabled 
+            ? "bg-white border-slate-200/90 shadow-2xs hover:border-slate-300"
+            : "bg-slate-50/70 border-slate-200/60 opacity-80"
       }`}
     >
-      {/* Mobile View: Clean 2-row layout with perfectly aligned controls */}
-      <div className="sm:hidden flex flex-col gap-2.5">
-        {/* Top Row: Drag Handle + Checkbox + API Name + Actions */}
-        <div className="flex items-center justify-between gap-2">
-          <div className="flex items-center gap-2 min-w-0 flex-1">
-            <div 
-              {...attributes} 
-              {...listeners}
-              className="p-1.5 -ml-1 text-slate-400 hover:text-slate-600 cursor-grab active:cursor-grabbing touch-none rounded-md hover:bg-slate-100 shrink-0"
-              title="按住拖拽排序"
-            >
-              <GripVertical className="w-4 h-4" />
-            </div>
-            
-            <label className="flex items-center gap-1.5 cursor-pointer select-none shrink-0">
-              <input 
-                type="checkbox"
-                checked={api.enabled}
-                onChange={(e) => onUpdate(idx, "enabled", e.target.checked)}
-                className="w-4 h-4 text-indigo-600 rounded focus:ring-indigo-500 border-slate-300 cursor-pointer"
-              />
-              <span className={`text-xs font-bold ${api.enabled ? "text-emerald-700" : "text-slate-400"}`}>
-                {api.enabled ? "启用" : "禁用"}
-              </span>
-            </label>
-            
+      {/* Top Row: Drag Handle + Enabled Checkbox + Priority Badge + API Name + Fail Badge + Delete */}
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2 min-w-0 flex-1">
+          {/* Drag Handle */}
+          <div 
+            {...attributes} 
+            {...listeners}
+            className="p-1 -ml-1 text-slate-400 hover:text-slate-600 active:text-indigo-600 cursor-grab active:cursor-grabbing touch-none rounded-md hover:bg-slate-100 shrink-0"
+            title="按住拖拽调整检测优先级"
+          >
+            <GripVertical className="w-4 h-4" />
+          </div>
+
+          {/* Priority Index Badge */}
+          <span className="text-[10px] font-mono font-bold px-1.5 py-0.5 rounded bg-slate-100 text-slate-500 shrink-0">
+            #{idx + 1}
+          </span>
+          
+          {/* Enable Toggle */}
+          <label className="flex items-center gap-1.5 cursor-pointer select-none shrink-0">
             <input 
-              type="text"
-              value={api.name}
-              onChange={(e) => onUpdate(idx, "name", e.target.value)}
-              className="flex-1 min-w-0 px-2.5 py-1 text-xs font-bold text-slate-800 bg-slate-50 border border-slate-200 rounded-lg focus:bg-white focus:border-indigo-500 focus:outline-none transition"
-              placeholder="API 名称"
+              type="checkbox"
+              checked={api.enabled}
+              onChange={(e) => onUpdate(idx, "enabled", e.target.checked)}
+              className="w-4 h-4 text-indigo-600 rounded focus:ring-indigo-500 border-slate-300 cursor-pointer"
             />
-          </div>
-
-          <div className="flex items-center gap-1 shrink-0">
-            {api.failCount !== undefined && api.failCount > 0 && (
-              <span className="px-2 py-0.5 text-[10px] font-bold bg-amber-50 text-amber-700 border border-amber-200 rounded-md">
-                失败 {api.failCount} 次
-              </span>
-            )}
-            <button
-              onClick={() => onRemove(idx)}
-              className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 active:bg-rose-100 rounded-lg transition touch-press"
-              title="移除此检测源"
-            >
-              <Trash2 className="w-4 h-4" />
-            </button>
-          </div>
-        </div>
-
-        {/* Bottom Row: Full-width URL input */}
-        <div className="w-full">
+            <span className={`text-xs font-bold ${api.enabled ? "text-emerald-700" : "text-slate-400"}`}>
+              {api.enabled ? "启用" : "禁用"}
+            </span>
+          </label>
+          
+          {/* API Name Input */}
           <input 
             type="text"
-            value={api.url}
-            onChange={(e) => onUpdate(idx, "url", e.target.value)}
-            className="w-full px-3 py-2 text-xs font-mono text-slate-700 bg-slate-50/70 border border-slate-200 rounded-lg focus:bg-white focus:border-indigo-500 focus:outline-none transition placeholder:text-slate-400"
-            placeholder="接口 URL (必须包含 {{ip}} 占位符)"
+            value={api.name}
+            onChange={(e) => onUpdate(idx, "name", e.target.value)}
+            className="flex-1 min-w-[120px] px-2.5 py-1 text-xs font-bold text-slate-800 bg-slate-50 border border-slate-200 rounded-lg focus:bg-white focus:border-indigo-500 focus:outline-none transition"
+            placeholder="API 名称 (如: ip-api.com)"
+            title="点击可修改名称"
           />
+        </div>
+
+        <div className="flex items-center gap-1.5 shrink-0">
+          {api.failCount !== undefined && api.failCount > 0 && (
+            <span className="px-2 py-0.5 text-[10px] font-bold bg-amber-50 text-amber-700 border border-amber-200 rounded-md">
+              连续失败 {api.failCount} 次
+            </span>
+          )}
+          <button
+            type="button"
+            onClick={() => onRemove(idx)}
+            className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 active:bg-rose-100 rounded-lg transition touch-press cursor-pointer"
+            title="移除此检测源"
+          >
+            <Trash2 className="w-4 h-4" />
+          </button>
         </div>
       </div>
 
-      {/* Desktop View (sm:flex): Sleek single-line row */}
-      <div className="hidden sm:flex sm:items-center sm:gap-3">
-        <div 
-          {...attributes} 
-          {...listeners}
-          className="p-1 text-slate-400 hover:text-slate-600 cursor-grab active:cursor-grabbing touch-none rounded hover:bg-slate-100 shrink-0"
-          title="按住拖拽排序"
-        >
-          <GripVertical className="w-4 h-4" />
+      {/* Bottom Row: Full-width URL input with Icon & Placeholder */}
+      <div className="relative w-full">
+        <div className="absolute inset-y-0 left-0 pl-2.5 flex items-center pointer-events-none text-slate-400">
+          <Link className="w-3.5 h-3.5" />
         </div>
-        
-        <label className="flex items-center gap-1.5 cursor-pointer select-none shrink-0">
-          <input 
-            type="checkbox"
-            checked={api.enabled}
-            onChange={(e) => onUpdate(idx, "enabled", e.target.checked)}
-            className="w-4 h-4 text-indigo-600 rounded focus:ring-indigo-500 border-slate-300 cursor-pointer"
-          />
-          <span className={`text-xs font-bold ${api.enabled ? "text-emerald-700" : "text-slate-400"}`}>
-            {api.enabled ? "启用" : "禁用"}
-          </span>
-        </label>
-        
-        <input 
-          type="text"
-          value={api.name}
-          onChange={(e) => onUpdate(idx, "name", e.target.value)}
-          className="w-36 px-2.5 py-1.5 text-xs font-bold text-slate-800 bg-slate-50 border border-slate-200 rounded-lg focus:bg-white focus:border-indigo-500 focus:outline-none transition shrink-0"
-          placeholder="API 名称"
-        />
-        
         <input 
           type="text"
           value={api.url}
           onChange={(e) => onUpdate(idx, "url", e.target.value)}
-          className="flex-1 px-3 py-1.5 text-xs font-mono text-slate-700 bg-slate-50/70 border border-slate-200 rounded-lg focus:bg-white focus:border-indigo-500 focus:outline-none transition placeholder:text-slate-400"
-          placeholder="接口 URL (必须包含 {{ip}} 占位符)"
+          className="w-full pl-8 pr-3 py-1.5 text-xs font-mono text-slate-800 bg-slate-50/80 border border-slate-200 rounded-lg focus:bg-white focus:border-indigo-500 focus:outline-none transition placeholder:text-slate-400"
+          placeholder="接口 URL (例如: http://ip-api.com/json/{{ip}}?lang=zh-CN)"
         />
-
-        {api.failCount !== undefined && api.failCount > 0 && (
-          <span className="px-2 py-0.5 text-[10px] font-bold bg-amber-50 text-amber-700 border border-amber-200 rounded-md shrink-0">
-            失败 {api.failCount} 次
-          </span>
-        )}
-        
-        <button
-          onClick={() => onRemove(idx)}
-          className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition shrink-0"
-          title="移除此检测源"
-        >
-          <Trash2 className="w-4 h-4" />
-        </button>
       </div>
     </div>
   );

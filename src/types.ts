@@ -13,6 +13,15 @@ export interface IpGeoApi {
   failCount?: number;
 }
 
+export interface LogoCdnSource {
+  id: string;
+  name: string;
+  url: string;
+  type: "fanmingming" | "epg112114" | "custom";
+  enabled: boolean;
+  notes?: string;
+}
+
 export interface LiveSource {
   id: string;
   url: string;
