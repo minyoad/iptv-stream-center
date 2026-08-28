@@ -499,6 +499,13 @@ function invalidatePlaylistExportCache() {
         fs.unlinkSync(path.join(PLAYLIST_CACHE_DIR, file));
       }
     }
+    const READABLE_DIR = path.join(DATA_DIR, "playlists_export");
+    if (fs.existsSync(READABLE_DIR)) {
+      const files = fs.readdirSync(READABLE_DIR);
+      for (const file of files) {
+        fs.unlinkSync(path.join(READABLE_DIR, file));
+      }
+    }
   } catch (_) {}
 }
 
@@ -525,6 +532,22 @@ function getPlaylistCacheKey(params: {
     params.v || ""
   ].join("|");
   return crypto.createHash("md5").update(rawKey).digest("hex");
+}
+
+function getBuildVersionInfo() {
+  const now = new Date();
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const year = now.getFullYear();
+  const month = pad(now.getMonth() + 1);
+  const day = pad(now.getDate());
+  const hours = pad(now.getHours());
+  const mins = pad(now.getMinutes());
+  const secs = pad(now.getSeconds());
+
+  const formattedTime = `${year}-${month}-${day} ${hours}:${mins}:${secs}`;
+  const versionId = `${year}${month}${day}${hours}${mins}${secs}`;
+
+  return { formattedTime, versionId };
 }
 
 function getOrGeneratePlaylistExport(
@@ -2299,6 +2322,8 @@ let shouldInvalidateCaches = false;
 function saveData(invalidate = true) {
   if (invalidate) {
     shouldInvalidateCaches = true;
+    invalidateIntegratedEpgCache();
+    invalidatePlaylistExportCache();
   }
   if (saveTimer) return;
   saveTimer = setTimeout(() => {
@@ -2311,7 +2336,13 @@ function generateDefaultPlaylists() {
   const m3uPath = path.join(DATA_DIR, "iptv_custom.m3u");
   const txtPath = path.join(DATA_DIR, "iptv_custom.txt");
 
-  let playlistRows = [`#EXTM3U x-tvg-url="/api/export/epg.xml.gz"`];
+  const { formattedTime, versionId } = getBuildVersionInfo();
+
+  let playlistRows = [
+    `#EXTM3U x-tvg-url="/api/export/epg.xml.gz" build-version="${versionId}"`,
+    `# Playlist Version: v${versionId}`,
+    `# Generated At: ${formattedTime}`
+  ];
   const exportMap = new Map<string, string[]>();
   let count = 0;
   const maxLimit = Infinity;
@@ -2357,7 +2388,11 @@ function generateDefaultPlaylists() {
 
   const m3uContent = playlistRows.join("\n");
   
-  const fileRows: string[] = [];
+  const fileRows: string[] = [
+    `# Playlist Version: v${versionId}`,
+    `# Generated At: ${formattedTime}`,
+    ""
+  ];
   exportMap.forEach((lines, catName) => {
     fileRows.push(`${catName},#genre`);
     fileRows.push(...lines);
@@ -3024,9 +3059,27 @@ function getText(node: any): string {
 
 function parseXmltvTime(timeStr: string): { dateStr: string, timeStr: string } {
   if (!timeStr) return { dateStr: "", timeStr: "" };
-  const match = timeStr.trim().match(/^(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})/);
+  const str = timeStr.trim();
+  const match = str.match(/^(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})(?:\s*([+-]\d{4}))?/);
   if (match) {
-    const [_, y, m, d, hh, mm, ss] = match;
+    const [_, y, m, d, hh, mm, ss, tz] = match;
+    if (tz) {
+      try {
+        const isoStr = `${y}-${m}-${d}T${hh}:${mm}:${ss}${tz.slice(0, 3)}:${tz.slice(3)}`;
+        const dObj = new Date(isoStr);
+        if (!isNaN(dObj.getTime())) {
+          const localY = dObj.getFullYear();
+          const localM = String(dObj.getMonth() + 1).padStart(2, "0");
+          const localD = String(dObj.getDate()).padStart(2, "0");
+          const localH = String(dObj.getHours()).padStart(2, "0");
+          const localMin = String(dObj.getMinutes()).padStart(2, "0");
+          return {
+            dateStr: `${localY}-${localM}-${localD}`,
+            timeStr: `${localH}:${localMin}`
+          };
+        }
+      } catch (_) {}
+    }
     return {
       dateStr: `${y}-${m}-${d}`,
       timeStr: `${hh}:${mm}`
@@ -3151,7 +3204,8 @@ function getOrGenerateIntegratedEpgXml(): { xml: string; gz: Buffer; etag: strin
     console.warn("[EPG DISK CACHE LOAD WARN]", e);
   }
 
-  const xmlHeader = `<?xml version="1.0" encoding="utf-8"?><!DOCTYPE tv SYSTEM "xmltv.dtd"><tv generator-info-name="IPTV Channel Manager" generator-info-url="http://localhost:3000/">`;
+  const { formattedTime, versionId } = getBuildVersionInfo();
+  const xmlHeader = `<?xml version="1.0" encoding="utf-8"?>\n<!-- EPG Generated At: ${formattedTime} | Version: v${versionId} -->\n<!DOCTYPE tv SYSTEM "xmltv.dtd">\n<tv generator-info-name="IPTV Channel Manager" generator-info-url="http://localhost:3000/" date="${versionId}">`;
   
   const activeEpgSources = epgSources.filter(s => s.active);
   const activeCaches = activeEpgSources
@@ -4295,8 +4349,13 @@ function preGenerateIspPlaylists() {
       };
       
       getOrGeneratePlaylistExport(cacheParams, () => {
+        const { formattedTime, versionId } = getBuildVersionInfo();
         if (format === "m3u") {
-          let playlistRows = [`#EXTM3U x-tvg-url="${baseUrl}/api/export/epg.xml.gz"`];
+          let playlistRows = [
+            `#EXTM3U x-tvg-url="${baseUrl}/api/export/epg.xml.gz" build-version="${versionId}"`,
+            `# Playlist Version: v${versionId}`,
+            `# Generated At: ${formattedTime}`
+          ];
           const orderedGroups = [...groups, { id: "g_other", name: "其它频道" }];
           orderedGroups.forEach((group) => {
             if (group.isolated) return;
@@ -4323,7 +4382,11 @@ function preGenerateIspPlaylists() {
           });
           return playlistRows.join("\n");
         } else {
-          let playlistRows: string[] = [];
+          let playlistRows: string[] = [
+            `# Playlist Version: v${versionId}`,
+            `# Generated At: ${formattedTime}`,
+            ""
+          ];
           const orderedGroups = [...groups, { id: "g_other", name: "其它频道" }];
           orderedGroups.forEach((group) => {
             if (group.isolated) return;
@@ -8133,7 +8196,12 @@ app.get("/api/channels", async (req, res) => {
     };
 
     const { content, etag } = getOrGeneratePlaylistExport(cacheParams, () => {
-      let playlistRows = [`#EXTM3U x-tvg-url="${baseUrl}/api/export/epg.xml.gz"`];
+      const { formattedTime, versionId } = getBuildVersionInfo();
+      let playlistRows = [
+        `#EXTM3U x-tvg-url="${baseUrl}/api/export/epg.xml.gz" build-version="${versionId}"`,
+        `# Playlist Version: v${versionId}`,
+        `# Generated At: ${formattedTime}`
+      ];
       let count = 0;
       const maxLimit = limit ? Number(limit) : Infinity;
       const maxPerChannel = queryMaxPerChannel ? Number(queryMaxPerChannel) : 15;
@@ -8199,7 +8267,8 @@ app.get("/api/channels", async (req, res) => {
 
     res.setHeader("Content-Type", "application/x-mpegurl; charset=utf-8");
     res.setHeader("Content-Disposition", 'attachment; filename="iptv_custom.m3u"');
-    res.setHeader("Cache-Control", "public, max-age=1800");
+    res.setHeader("Cache-Control", "no-cache, must-revalidate");
+    res.setHeader("Pragma", "no-cache");
     res.setHeader("ETag", etag);
     res.setHeader("X-Client-IP", resolvedClientIp || "");
     res.setHeader("X-Client-ISP", encodeURIComponent(targetIsp || ""));
@@ -8259,6 +8328,7 @@ app.get("/api/channels", async (req, res) => {
     };
 
     const { content, etag } = getOrGeneratePlaylistExport(cacheParams, () => {
+      const { formattedTime, versionId } = getBuildVersionInfo();
       const exportMap = new Map<string, string[]>();
 
       let count = 0;
@@ -8314,7 +8384,11 @@ app.get("/api/channels", async (req, res) => {
         });
       });
 
-      const fileRows: string[] = [];
+      const fileRows: string[] = [
+        `# Playlist Version: v${versionId}`,
+        `# Generated At: ${formattedTime}`,
+        ""
+      ];
       exportMap.forEach((lines, catName) => {
         fileRows.push(`${catName},#genre`);
         fileRows.push(...lines);
@@ -8329,7 +8403,8 @@ app.get("/api/channels", async (req, res) => {
 
     res.setHeader("Content-Type", "text/plain; charset=utf-8");
     res.setHeader("Content-Disposition", 'attachment; filename="iptv_custom.txt"');
-    res.setHeader("Cache-Control", "public, max-age=1800");
+    res.setHeader("Cache-Control", "no-cache, must-revalidate");
+    res.setHeader("Pragma", "no-cache");
     res.setHeader("ETag", etag);
     res.setHeader("X-Client-IP", resolvedClientIp || "");
     res.setHeader("X-Client-ISP", encodeURIComponent(targetIsp || ""));
@@ -8411,7 +8486,8 @@ app.get("/api/channels", async (req, res) => {
         return res.status(304).end();
       }
       res.setHeader("Content-Type", "application/xml; charset=utf-8");
-      res.setHeader("Cache-Control", "public, max-age=1800");
+      res.setHeader("Cache-Control", "no-cache, must-revalidate");
+      res.setHeader("Pragma", "no-cache");
       res.setHeader("ETag", etag);
       res.send(xml);
     } catch (err: any) {
@@ -8429,7 +8505,8 @@ app.get("/api/channels", async (req, res) => {
       }
       res.setHeader("Content-Type", "application/gzip");
       res.setHeader("Content-Disposition", 'attachment; filename="epg.xml.gz"');
-      res.setHeader("Cache-Control", "public, max-age=1800");
+      res.setHeader("Cache-Control", "no-cache, must-revalidate");
+      res.setHeader("Pragma", "no-cache");
       res.setHeader("ETag", etag);
       res.end(gz);
     } catch (err: any) {
