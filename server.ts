@@ -1004,9 +1004,10 @@ async function testCarouselProxyAvailability(proxy: { platform: string; urlTempl
   }
 }
 
-function syncCarouselSources(): { createdCount: number; updatedCount: number; totalCount: number; channelsCount: number; activeProxiesCount: number; totalProxiesCount: number } {
+function syncCarouselSources(): { createdCount: number; updatedCount: number; removedCount: number; totalCount: number; channelsCount: number; activeProxiesCount: number; totalProxiesCount: number } {
   let createdCount = 0;
   let updatedCount = 0;
+  let removedCount = 0;
   let totalCount = 0;
 
   const allProxies = db.prepare("SELECT * FROM carousel_proxies").all() as any[];
@@ -1100,11 +1101,33 @@ function syncCarouselSources(): { createdCount: number; updatedCount: number; to
     }
   }
 
-  // 3. For each mapped channel, generate the EXACT set of active carousel stream URLs
-  // And sync them with the SQLite sources table cleanly.
-  const insertSourceStmt = db.prepare("INSERT INTO sources (id, channelId, url, province, isp, status) VALUES (?, ?, ?, ?, ?, ?)");
+  // 3. Global Purge: Purge all invalid (inactive/disabled/failed) and isolated (isolated = 1 or true) carousel sources
   const deleteSourceStmt = db.prepare("DELETE FROM sources WHERE id = ?");
+  const insertSourceStmt = db.prepare("INSERT INTO sources (id, channelId, url, province, isp, status, isolated) VALUES (?, ?, ?, ?, ?, ?, ?)");
 
+  const allSourcesInDb = db.prepare("SELECT id, channelId, url, status, isolated, latency FROM sources").all() as any[];
+  for (const src of allSourcesInDb) {
+    if (!src.url) {
+      deleteSourceStmt.run(src.id);
+      removedCount++;
+      continue;
+    }
+    const parsed = parseCarouselUrl(src.url);
+    const isCarousel = !!parsed.platform || /\/(?:migu|mg|cntv|cctv|douyu|huya|bilibili|bili|yy|kuaishou|ks|douyin)\//i.test(src.url);
+
+    if (isCarousel) {
+      const isIsolated = src.isolated === 1 || src.isolated === true || src.isolated === '1';
+      const isInvalid = src.status === 'inactive' || src.status === 'disabled' || src.status === 'error' || src.status === 'failed' || src.latency === 9999 || src.latency === -1;
+
+      // Purge isolated or invalid carousel sources
+      if (isIsolated || isInvalid) {
+        deleteSourceStmt.run(src.id);
+        removedCount++;
+      }
+    }
+  }
+
+  // 4. For each mapped channel, generate the EXACT set of active carousel stream URLs
   for (const [channelId, { channel, mappings }] of channelMappingsMap.entries()) {
     // Generate all expected unique carousel URLs from active proxy templates for this channel
     const expectedCarouselUrls = new Set<string>();
@@ -1119,27 +1142,31 @@ function syncCarouselSources(): { createdCount: number; updatedCount: number; to
       }
     }
 
-    // Fetch existing sources for this channel
-    const existingSources = db.prepare("SELECT id, url FROM sources WHERE channelId = ?").all(channelId) as any[];
+    // Fetch remaining sources for this channel
+    const existingSources = db.prepare("SELECT id, url, status, isolated FROM sources WHERE channelId = ?").all(channelId) as any[];
     const satisfiedUrls = new Set<string>();
 
     for (const src of existingSources) {
       if (!src.url) {
         deleteSourceStmt.run(src.id);
+        removedCount++;
         continue;
       }
 
       const parsed = parseCarouselUrl(src.url);
-      const isCarouselStream = !!parsed.platform || src.url.includes('/migu/') || src.url.includes('/cntv/') || src.url.includes('/douyu/') || src.url.includes('/huya/') || src.url.includes('/bilibili/') || src.url.includes('/yy/') || src.url.includes('/kuaishou/') || src.url.includes('/douyin/');
+      const isCarouselStream = !!parsed.platform || /\/(?:migu|mg|cntv|cctv|douyu|huya|bilibili|bili|yy|kuaishou|ks|douyin)\//i.test(src.url);
 
       if (isCarouselStream) {
-        // If this URL is in our active expected list and not yet satisfied:
-        if (expectedCarouselUrls.has(src.url) && !satisfiedUrls.has(src.url)) {
+        const isIsolated = src.isolated === 1 || src.isolated === true || src.isolated === '1';
+        const isInvalid = src.status === 'inactive' || src.status === 'disabled' || src.status === 'error' || src.status === 'failed';
+
+        // Keep only if NOT isolated, NOT invalid, is in active expected URLs, and NOT yet satisfied
+        if (!isIsolated && !isInvalid && expectedCarouselUrls.has(src.url) && !satisfiedUrls.has(src.url)) {
           satisfiedUrls.add(src.url);
           totalCount++;
         } else {
-          // It's a duplicate, or from an inactive/deleted/stale proxy -> remove it!
           deleteSourceStmt.run(src.id);
+          removedCount++;
         }
       }
     }
@@ -1147,7 +1174,7 @@ function syncCarouselSources(): { createdCount: number; updatedCount: number; to
     // Insert any expected URLs that were not already present
     for (const expectedUrl of expectedCarouselUrls) {
       if (!satisfiedUrls.has(expectedUrl)) {
-        insertSourceStmt.run(crypto.randomUUID(), channelId, expectedUrl, '', '', 'active');
+        insertSourceStmt.run(crypto.randomUUID(), channelId, expectedUrl, '', '', 'active', 0);
         satisfiedUrls.add(expectedUrl);
         createdCount++;
         totalCount++;
@@ -1155,19 +1182,20 @@ function syncCarouselSources(): { createdCount: number; updatedCount: number; to
     }
   }
 
-  // 4. Global deduplication of identical (channelId, url) rows across sources table
+  // 5. Global deduplication of identical (channelId, url) rows across sources table
   db.exec("DELETE FROM sources WHERE rowid NOT IN (SELECT MIN(rowid) FROM sources GROUP BY channelId, url)");
 
-  // 5. Cleanup empty channels that have no sources and no carousel mappings
+  // 6. Cleanup empty channels that have no sources and no carousel mappings
   db.exec("DELETE FROM channels WHERE id NOT IN (SELECT DISTINCT channelId FROM sources) AND id NOT IN (SELECT DISTINCT channelId FROM carousel_channels)");
 
-  // 6. Reload memory state directly from SQLite
+  // 7. Reload memory state directly from SQLite
   loadData();
   saveDataSync();
 
   return {
     createdCount,
     updatedCount,
+    removedCount,
     totalCount,
     channelsCount: channelMappingsMap.size,
     activeProxiesCount: totalActiveProxies,
@@ -7132,10 +7160,21 @@ app.get("/api/channels", async (req, res) => {
       const activeProxiesCount = (db.prepare("SELECT COUNT(*) as count FROM carousel_proxies WHERE status = 'active'").get() as any).count;
 
       let message = "";
-      if (stats.createdCount > 0 || stats.updatedCount > 0) {
-        message = `已成功同步生成 ${stats.createdCount} 个新直播源，归类 ${stats.updatedCount} 条现有源（当前共 ${stats.totalCount} 个有效轮播源，覆盖 ${stats.channelsCount} 个频道）！`;
+      if (stats.createdCount > 0 || stats.removedCount > 0 || stats.updatedCount > 0) {
+        let parts: string[] = [];
+        if (stats.removedCount > 0) {
+          parts.push(`清理移除 ${stats.removedCount} 条失效/隔离源`);
+        }
+        if (stats.createdCount > 0) {
+          parts.push(`新增 ${stats.createdCount} 个直播源`);
+        }
+        if (stats.updatedCount > 0) {
+          parts.push(`归类 ${stats.updatedCount} 条线路`);
+        }
+        const summaryText = parts.length > 0 ? parts.join("，") : "同步完成";
+        message = `已重新生成轮播直播源（${summaryText}），当前共 ${stats.totalCount} 个有效轮播源，覆盖 ${stats.channelsCount} 个频道！`;
       } else if (stats.totalCount > 0) {
-        message = `所有 ${stats.channelsCount} 个轮播频道的直播源（共 ${stats.totalCount} 条线路）均已处于最新同步状态，无需重复生成。`;
+        message = `所有 ${stats.channelsCount} 个轮播频道的直播源（共 ${stats.totalCount} 条线路）均已处于最新同步状态。`;
       } else if (activeProxiesCount === 0) {
         message = `已同步 ${registriesCount} 个频道映射，但系统当前没有启用的轮播代理模板（可用代理: 0/${proxiesCount}）。请先前往【轮播代理】配置并启用可用代理，或点击【从现有源自动提取】！`;
       } else if (registriesCount === 0) {
@@ -7148,6 +7187,7 @@ app.get("/api/channels", async (req, res) => {
         success: true,
         createdSourcesCount: stats.createdCount,
         updatedCount: stats.updatedCount,
+        removedSourcesCount: stats.removedCount,
         totalSourcesCount: stats.totalCount,
         channelsCount: stats.channelsCount,
         activeProxiesCount,
