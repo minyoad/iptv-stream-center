@@ -17,3 +17,18 @@ export async function authFetch(input: RequestInfo | URL, init?: RequestInit): P
 
   return response;
 }
+
+export async function safeJson<T = any>(res: Response, fallback: T = {} as T): Promise<any> {
+  try {
+    const text = await res.text();
+    if (!text || !text.trim()) return fallback;
+    try {
+      return JSON.parse(text);
+    } catch {
+      return { ...fallback, error: text || `HTTP ${res.status} ${res.statusText}` };
+    }
+  } catch (err: any) {
+    return { ...fallback, error: err?.message || "网络请求异常" };
+  }
+}
+

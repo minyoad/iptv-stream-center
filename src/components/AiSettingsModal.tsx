@@ -33,6 +33,8 @@ export interface AiConfigData {
   logoSources?: LogoCdnSource[];
 }
 
+import { safeJson } from "../utils/api";
+
 interface AiSettingsModalProps {
   isOpen: boolean;
   onClose: () => void;
@@ -202,7 +204,7 @@ export const AiSettingsModal: React.FC<AiSettingsModalProps> = ({
     setTestResult(null);
     try {
       const res = await fetch("/api/ai/config", { headers: getAuthHeaders() });
-      const data = await res.json();
+      const data = await safeJson(res);
       if (res.ok && data.success && data.config) {
         const currentSaved = {
           provider: data.config.provider || "siliconflow",
@@ -297,7 +299,7 @@ export const AiSettingsModal: React.FC<AiSettingsModalProps> = ({
         headers: getAuthHeaders(),
         body: JSON.stringify(payload)
       });
-      const data = await res.json();
+      const data = await safeJson(res);
       if (res.ok && data.success) {
         showFeedback("success", "AI 与官方台标库配置已成功保存！");
         if (onConfigSaved) onConfigSaved();
@@ -339,7 +341,7 @@ export const AiSettingsModal: React.FC<AiSettingsModalProps> = ({
         method: "POST",
         headers: getAuthHeaders()
       });
-      const data = await res.json();
+      const data = await safeJson(res);
       if (res.ok && data.success) {
         showFeedback("success", data.message || `已成功同步至 ${data.updatedCount} 个频道！`);
         if (onConfigSaved) onConfigSaved();
@@ -370,7 +372,7 @@ export const AiSettingsModal: React.FC<AiSettingsModalProps> = ({
         headers: getAuthHeaders(),
         body: JSON.stringify(payload)
       });
-      const data = await res.json();
+      const data = await safeJson(res);
       setTestResult({
         success: data.success,
         message: data.message || (data.success ? "测试通过" : data.error || "连接失败"),

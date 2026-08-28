@@ -21,6 +21,8 @@ import {
   Image as ImageIcon
 } from "lucide-react";
 
+import { safeJson } from "../utils/api";
+
 interface SmartOrganizeModalProps {
   isOpen: boolean;
   onClose: () => void;
@@ -85,7 +87,7 @@ export const SmartOrganizeModal: React.FC<SmartOrganizeModalProps> = ({
   const fetchAiInfo = async () => {
     try {
       const res = await fetch("/api/ai/config", { headers: getAuthHeaders() });
-      const data = await res.json();
+      const data = await safeJson(res);
       if (res.ok && data.config) {
         const p = data.config.provider;
         if (p === "siliconflow") setAiProviderName("硅基流动 (" + (data.config.model?.split("/")[1] || "Qwen2.5-7B") + ")");
@@ -130,7 +132,7 @@ export const SmartOrganizeModal: React.FC<SmartOrganizeModalProps> = ({
         }),
       });
 
-      const data = await res.json();
+      const data = await safeJson(res);
       if (res.ok && data.success) {
         setPreviewData(data);
         // Default select all changes
@@ -179,7 +181,7 @@ export const SmartOrganizeModal: React.FC<SmartOrganizeModalProps> = ({
         }),
       });
 
-      const data = await res.json();
+      const data = await safeJson(res);
       if (res.ok && data.success) {
         showFeedback("success", data.message || "智能整理成功！");
         await onSuccess();

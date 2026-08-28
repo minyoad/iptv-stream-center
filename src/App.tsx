@@ -52,7 +52,7 @@ import { SortableIpGeoApiList } from "./components/SortableIpGeoApiList";
 import { SmartOrganizeModal } from "./components/SmartOrganizeModal";
 import { AiSettingsModal } from "./components/AiSettingsModal";
 import { IpGeoApi } from "./types";
-import { authFetch as fetch } from "./utils/api";
+import { authFetch as fetch, safeJson } from "./utils/api";
 
 // Define the global variable provided by Vite
 declare const __APP_BUILD_VERSION__: string;
@@ -145,7 +145,7 @@ export default function App() {
   const fetchCronJobs = async () => {
     try {
       const res = await fetch("/api/cron-jobs");
-      const data = await res.json();
+      const data = await safeJson(res);
       if (data.success) {
         setCronJobs(data.jobs || []);
       }
@@ -157,7 +157,7 @@ export default function App() {
   const fetchCronLogs = async (jobId: string) => {
     try {
       const res = await fetch(`/api/cron-jobs/${jobId}/logs`);
-      const data = await res.json();
+      const data = await safeJson(res);
       if (data.success) {
         setCronLogs(data.logs || []);
       }
@@ -603,7 +603,7 @@ export default function App() {
     try {
       const res = await fetch("/api/backups");
       if (res.ok) {
-        const data = await res.json();
+        const data = await safeJson(res);
         setBackups(data.backups || []);
       } else {
         showFeedback("error", "加载备份列表失败");
@@ -623,7 +623,7 @@ export default function App() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ tag: manualBackupTag })
       });
-      const data = await res.json();
+      const data = await safeJson(res);
       if (res.ok && data.success) {
         showFeedback("success", `备份已成功建立！(备注: ${data.tag})`);
         setManualBackupTag("");
@@ -647,7 +647,7 @@ export default function App() {
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ filename })
           });
-          const data = await res.json();
+          const data = await safeJson(res);
           if (res.ok && data.success) {
             showFeedback("success", "系统成功恢复！所有播放频道、订阅和运行数据已刷新。");
             await fetchData();
@@ -671,7 +671,7 @@ export default function App() {
           const res = await fetch(`/api/backups/${encodeURIComponent(filename)}`, {
             method: "DELETE"
           });
-          const data = await res.json();
+          const data = await safeJson(res);
           if (res.ok && data.success) {
             showFeedback("success", "备份已完全删除");
             fetchBackups();
@@ -2194,11 +2194,11 @@ export default function App() {
 
         if (isNonHttpOrPrivate) {
           // RTSP / RTMP / UDP / RTP / P2P and Intranet IP stream probe protection:
-          // Browsers cannot open raw RTSP/RTMP sockets or reach private intranet IPs via DOM fetch().
-          // Mark as active with a stable default latency (60ms) to prevent false "Timeout / 4137ms" and false isolation.
+          // Web browsers (including iOS Safari / Chrome WebKit) cannot open raw TCP/UDP sockets for RTSP/RTMP via DOM fetch().
+          // Inherit status directly from server-side socket test result to guarantee 100% server alignment consistency!
           clearTimeout(timer);
-          latency = 60;
-          status = "active";
+          status = item.status === "inactive" ? "inactive" : "active";
+          latency = status === "active" ? (item.latency && item.latency > 0 ? item.latency : 60) : 9999;
         } else {
           // Standard HTTP / HTTPS / HLS / FLV probe
           try {
@@ -4554,7 +4554,7 @@ export default function App() {
                           <span className="text-[9px] bg-sky-100 text-sky-700 px-2 py-0.5 rounded-full font-bold shrink-0">100% 契合</span>
                         </div>
                         <p className="text-[11px] text-slate-500 leading-relaxed font-semibold">
-                          在您的本地电脑/播放器上直接发起底层探测，完美测量您的家庭宽带向对端 IPTV 源的真实握手延迟。
+                          在您的本地设备（含 iOS/Mobile 浏览器）上发起探针代测。HTML5 浏览器探针原生支持 HTTP/HTTPS/HLS/FLV 探测；遇到 RTSP/RTMP 协议源时将自动同步继承服务端 TCP Socket 测速数据，确保客户端仅匹配与播放其 ISP 运营商专享源。
                         </p>
                       </div>
 

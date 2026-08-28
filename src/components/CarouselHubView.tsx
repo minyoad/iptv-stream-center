@@ -16,7 +16,7 @@ import {
 } from "lucide-react";
 import { CarouselProxyView } from "./CarouselProxyView";
 import { CarouselChannelView } from "./CarouselChannelView";
-import { authFetch as fetch } from "../utils/api";
+import { authFetch as fetch, safeJson } from "../utils/api";
 
 interface CarouselHubViewProps {
   fetchData: () => void;
@@ -93,7 +93,7 @@ export const CarouselHubView: React.FC<CarouselHubViewProps> = ({
         method: "POST",
         headers: { "Content-Type": "application/json" }
       });
-      const data = await res.json();
+      const data = await safeJson(res);
       if (res.ok) {
         if (onFeedback) {
           onFeedback("success", data.message || "轮播源同步生成完成");

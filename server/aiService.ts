@@ -1528,44 +1528,55 @@ async function callOpenAiCompatible(config: AiConfig, prompt: string, isJson = t
 
     clearTimeout(timeoutId);
 
+    const rawText = await res.text();
+    const isRateLimit =
+      res.status === 429 ||
+      res.status === 503 ||
+      res.status === 502 ||
+      res.status === 504 ||
+      /rate\s*exceeded/i.test(rawText) ||
+      /rate\s*limit/i.test(rawText) ||
+      rawText.includes("1302") ||
+      rawText.includes("速率限制") ||
+      rawText.includes("RESOURCE_EXHAUSTED");
+
     if (!res.ok) {
-      const errText = await res.text();
-      
       // Detect Zhipu GLM 1301 or content safety filter
       const isContentSafety =
         res.status === 400 &&
-        (errText.includes("1301") ||
-          errText.includes("contentFilter") ||
-          errText.includes("敏感内容") ||
-          errText.includes("不安全") ||
-          errText.includes("moderation"));
+        (rawText.includes("1301") ||
+          rawText.includes("contentFilter") ||
+          rawText.includes("敏感内容") ||
+          rawText.includes("不安全") ||
+          rawText.includes("moderation"));
 
       if (isContentSafety) {
-        const safetyErr: any = new Error(`AI 服务安全过滤 (1301/Sensitive): ${errText.slice(0, 200)}`);
+        const safetyErr: any = new Error(`AI 服务安全过滤 (1301/Sensitive): ${rawText.slice(0, 200)}`);
         safetyErr.isContentSafety = true;
         throw safetyErr;
       }
 
-      // Retry on 503 (high demand), 502/504 (gateway), or 429 / 1302 (rate limit)
-      const isRateLimitOrBusy =
-        res.status === 503 ||
-        res.status === 502 ||
-        res.status === 504 ||
-        res.status === 429 ||
-        errText.includes("1302") ||
-        errText.includes("速率限制") ||
-        errText.includes("rate limit");
-
-      if (isRateLimitOrBusy && attempt <= 3) {
+      if (isRateLimit && attempt <= 3) {
         const delayMs = Math.min(1000 * Math.pow(1.8, attempt - 1) + Math.random() * 400, 5000);
         console.warn(`[AI Service] Rate limit / Busy (HTTP ${res.status}, attempt ${attempt}/3). Backing off for ${Math.round(delayMs)}ms...`);
         await new Promise((r) => setTimeout(r, delayMs));
         return callOpenAiCompatible(config, prompt, isJson, attempt + 1);
       }
-      throw new Error(`AI 服务返回 HTTP ${res.status}: ${errText.slice(0, 300)}`);
+      throw new Error(`AI 服务返回 HTTP ${res.status}: ${rawText.slice(0, 300)}`);
     }
 
-    const data = await res.json();
+    let data: any = null;
+    try {
+      data = JSON.parse(rawText);
+    } catch {
+      if (isRateLimit && attempt <= 3) {
+        const delayMs = Math.min(1000 * Math.pow(1.8, attempt - 1) + Math.random() * 400, 5000);
+        console.warn(`[AI Service] Rate limit in response text (attempt ${attempt}/3). Retrying...`);
+        await new Promise((r) => setTimeout(r, delayMs));
+        return callOpenAiCompatible(config, prompt, isJson, attempt + 1);
+      }
+      throw new Error(`AI 服务响应格式异常 (${res.status}): ${rawText.slice(0, 200)}`);
+    }
     
     // Check if output was blocked by finish_reason or contentFilter
     if (data?.choices?.[0]?.finish_reason === "sensitive" || (Array.isArray(data?.contentFilter) && data.contentFilter.length > 0)) {
@@ -1591,7 +1602,9 @@ async function callOpenAiCompatible(config: AiConfig, prompt: string, isJson = t
       err.message?.includes("503") ||
       err.message?.includes("429") ||
       err.message?.includes("1302") ||
-      err.message?.includes("速率限制");
+      err.message?.includes("速率限制") ||
+      /rate\s*exceeded/i.test(err.message || "") ||
+      /rate\s*limit/i.test(err.message || "");
 
     if (isRateLimitOrBusy && attempt <= 3) {
       const delayMs = Math.min(1000 * Math.pow(1.8, attempt - 1) + Math.random() * 400, 5000);
@@ -1637,7 +1650,10 @@ async function callGeminiApi(prompt: string, attempt = 1): Promise<string> {
       errMsg.includes("UNAVAILABLE") ||
       errMsg.includes("high demand") ||
       errMsg.includes("429") ||
-      errMsg.includes("RESOURCE_EXHAUSTED");
+      errMsg.includes("RESOURCE_EXHAUSTED") ||
+      /rate\s*exceeded/i.test(errMsg) ||
+      /rate\s*limit/i.test(errMsg) ||
+      errMsg.includes("Quota");
 
     if (isHighDemandOrRateLimit && attempt <= 3) {
       console.warn(`[Gemini API] Model ${selectedModel} high demand/busy (attempt ${attempt}/3). Retrying with fallback model...`);
@@ -1675,7 +1691,16 @@ function extractJsonFromText(rawText: string): any {
     text = text.substring(startIdx, endIdx);
   }
 
-  return JSON.parse(text);
+  try {
+    return JSON.parse(text);
+  } catch (err) {
+    if (/rate\s*exceeded/i.test(rawText) || /rate\s*limit/i.test(rawText) || rawText.includes("1302") || rawText.includes("速率限制")) {
+      const rateErr: any = new Error(`AI 大模型触发速率限制: ${rawText.slice(0, 200)}`);
+      rateErr.isRateLimit = true;
+      throw rateErr;
+    }
+    return null;
+  }
 }
 
 // Single Channel AI Suggestion

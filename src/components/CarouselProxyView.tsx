@@ -32,7 +32,7 @@ import {
   MoreHorizontal,
   Wrench
 } from "lucide-react";
-import { authFetch as fetch } from "../utils/api";
+import { authFetch as fetch, safeJson } from "../utils/api";
 import { PRESET_CAROUSEL_PLATFORMS, getPlatformBadge } from "../utils/carouselPlatforms";
 
 export interface CarouselDisabledRule {
@@ -216,7 +216,7 @@ export const CarouselProxyView = ({ fetchData }: { fetchData: () => void }) => {
     try {
       setLoading(true);
       const res = await fetch("/api/carousel-proxies");
-      const data = await res.json();
+      const data = await safeJson(res, []);
       setProxies(Array.isArray(data) ? data : []);
     } catch (e) {
       console.error(e);
@@ -230,7 +230,7 @@ export const CarouselProxyView = ({ fetchData }: { fetchData: () => void }) => {
     try {
       setRulesLoading(true);
       const res = await fetch("/api/carousel-disabled-rules");
-      const data = await res.json();
+      const data = await safeJson(res, []);
       setDisabledRules(Array.isArray(data) ? data : []);
     } catch (e) {
       console.error(e);
@@ -243,7 +243,7 @@ export const CarouselProxyView = ({ fetchData }: { fetchData: () => void }) => {
   const loadDiscoveryRules = async () => {
     try {
       const res = await fetch("/api/carousel-discovery-rules");
-      const data = await res.json();
+      const data = await safeJson(res, []);
       setDiscoveryRules(Array.isArray(data) ? data : []);
     } catch (e) {
       console.error(e);
@@ -254,7 +254,7 @@ export const CarouselProxyView = ({ fetchData }: { fetchData: () => void }) => {
   const fetchSettings = async () => {
     try {
       const res = await fetch("/api/settings");
-      const data = await res.json();
+      const data = await safeJson(res, {});
       if (data && data.carouselProxyPresets && Object.keys(data.carouselProxyPresets).length > 0) {
         setPresets(data.carouselProxyPresets);
       } else {
@@ -274,7 +274,7 @@ export const CarouselProxyView = ({ fetchData }: { fetchData: () => void }) => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ carouselProxyPresets: targetConfig })
       });
-      const data = await res.json();
+      const data = await safeJson(res, {});
       if (data.carouselProxyPresets) {
         setPresets(data.carouselProxyPresets);
       } else {

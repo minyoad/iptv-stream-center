@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { Plus, Trash2, Edit2, Search, Link as LinkIcon, Save, RefreshCw, Wand2, CheckSquare, Square, X, Download, Eye, EyeOff, Filter, RotateCcw, Power, ShieldAlert, AlertTriangle, CheckCircle, AlertCircle, Info } from "lucide-react";
-import { authFetch as fetch } from "../utils/api";
+import { authFetch as fetch, safeJson } from "../utils/api";
 import { PRESET_CAROUSEL_PLATFORMS, getPlatformBadge, getPlatformInfo } from "../utils/carouselPlatforms";
 
 export const CarouselChannelView = ({ fetchData, channelsData = [] }: { fetchData: () => void, channelsData?: any[] }) => {
@@ -90,7 +90,7 @@ export const CarouselChannelView = ({ fetchData, channelsData = [] }: { fetchDat
         method: "POST",
         headers: { "Content-Type": "application/json" }
       });
-      const data = await res.json();
+      const data = await safeJson(res);
       if (res.ok && data.success) {
         setUnregistered(Array.isArray(data.unregistered) ? data.unregistered : []);
         showToast(
@@ -110,7 +110,7 @@ export const CarouselChannelView = ({ fetchData, channelsData = [] }: { fetchDat
   const loadRulesOnly = async () => {
     try {
       const res = await fetch("/api/carousel-discovery-rules");
-      const data = await res.json();
+      const data = await safeJson(res);
       if (Array.isArray(data)) {
         setRules(data);
       }
@@ -128,7 +128,7 @@ export const CarouselChannelView = ({ fetchData, channelsData = [] }: { fetchDat
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ mode })
       });
-      const data = await res.json();
+      const data = await safeJson(res);
       if (res.ok && data.success) {
         showToast((data.message || "成功加载预置特征发现规则！") + " 正在重新扫描未映射源...", "success");
         if (Array.isArray(data.rules)) {
@@ -250,7 +250,7 @@ export const CarouselChannelView = ({ fetchData, channelsData = [] }: { fetchDat
         showToast("已成功添加特征规则，正在重新扫描直播源...", "success");
         await loadData();
       } else {
-        const d = await res.json().catch(() => ({}));
+        const d = await safeJson(res, {});
         showToast("保存规则失败: " + (d.error || "未知原因"), "error");
       }
     } catch (e) {
@@ -388,7 +388,7 @@ export const CarouselChannelView = ({ fetchData, channelsData = [] }: { fetchDat
     const targetChannels = channels.filter(c => selectedRegistryIds.includes(c.id));
     try {
       const res = await fetch('/api/carousel-proxies');
-      const proxies = await res.json();
+      const proxies = await safeJson(res, []);
       const activeProxies = (Array.isArray(proxies) ? proxies : []).filter((p: any) => p.status === 'active');
 
       let m3uContent = "#EXTM3U\n";
@@ -424,7 +424,7 @@ export const CarouselChannelView = ({ fetchData, channelsData = [] }: { fetchDat
     setApplying(true);
     try {
       const res = await fetch("/api/carousel-channels-apply", { method: "POST", headers: { "Content-Type": "application/json" }});
-      const data = await res.json();
+      const data = await safeJson(res);
       if (data.success) {
         if (data.createdSourcesCount > 0 || data.updatedCount > 0) {
           showToast(data.message || `已成功同步生成 ${data.createdSourcesCount} 个新直播源，归类 ${data.updatedCount} 条线路（累计 ${data.totalSourcesCount} 个有效轮播源，覆盖 ${data.channelsCount} 个频道）！`, "success");
@@ -506,7 +506,7 @@ export const CarouselChannelView = ({ fetchData, channelsData = [] }: { fetchDat
   const handleDownloadActiveM3u = async () => {
     try {
       const res = await fetch('/api/carousel-proxies');
-      const proxies = await res.json();
+      const proxies = await safeJson(res, []);
       const activeProxies = (Array.isArray(proxies) ? proxies : []).filter((p: any) => p.status === 'active');
       
       if (activeProxies.length === 0) {

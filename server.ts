@@ -2612,6 +2612,8 @@ function isPrivateOrIntranetUrl(urlStr: string): boolean {
   try {
     const urlLower = urlStr.toLowerCase().trim();
     if (
+      urlLower.startsWith("rtsp://") ||
+      urlLower.startsWith("rtmp://") ||
       urlLower.startsWith("udp://") ||
       urlLower.startsWith("rtp://") ||
       urlLower.startsWith("p2p://")
@@ -3469,9 +3471,11 @@ function sortSourcesByGeo(sources: LiveSource[], clientProvince: string, clientI
         score += 1;   // No match
       }
 
-      // Priority bonus for RTSP lines (ISP dedicated high quality streams)
+      // Priority bonus for RTSP lines (ISP dedicated high quality streams) - only if ISP matches or is BGP/Nationwide
       if ((s.url || "").trim().toLowerCase().startsWith("rtsp://")) {
-        score += 200;
+        if (!clientIsp || ispMatch || !srcIsp || srcIsp === "未知" || srcIsp.toUpperCase().includes("BGP") || srcProv === "全国") {
+          score += 200;
+        }
       }
 
       return score;
