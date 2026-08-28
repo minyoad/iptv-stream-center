@@ -852,14 +852,39 @@ const testStatus: TestStatus = {
 
 // Helper to parse carousel platform and ID
 
+function normalizePlatform(platform: string): string {
+  if (!platform || typeof platform !== 'string') return '';
+  const p = platform.trim().toLowerCase();
+  if (p === 'cctv' || p === 'cntv' || p === 'cctv_live' || p === 'cntv_live') return 'cntv';
+  if (p === 'migu' || p === 'mg' || p === 'migu_live' || p === 'miguvideo') return 'migu';
+  if (p === 'douyu' || p === 'dy') return 'douyu';
+  if (p === 'huya' || p === 'hy') return 'huya';
+  if (p === 'bilibili' || p === 'bili' || p === 'bstation') return 'bilibili';
+  if (p === 'kuaishou' || p === 'ks') return 'kuaishou';
+  if (p === 'douyin' || p === 'dyin' || p === 'tiktok') return 'douyin';
+  if (p === 'yy') return 'yy';
+  return p;
+}
+
+function formatProxyUrl(urlTemplate: string, originalId: string): string {
+  if (!urlTemplate || !originalId) return '';
+  return urlTemplate
+    .trim()
+    .replace(/\{\s*(?:id|roomid|channelid|cid|originalid)?\s*\}/gi, originalId)
+    .replace(/\$id/gi, originalId)
+    .replace(/\$1/g, originalId)
+    .replace(/%s/g, originalId);
+}
+
 function removeSourcesForProxyTemplates(templates: { platform?: string; urlTemplate: string }[]) {
   if (!templates || templates.length === 0) return 0;
   let removedCount = 0;
   
   for (const t of templates) {
     if (!t || !t.urlTemplate) continue;
-    const parts = t.urlTemplate.split('{}');
-    const prefix = parts[0];
+    const normalizedTpl = t.urlTemplate.trim().replace(/\{\s*(?:id|roomid|channelid|cid|originalid)?\s*\}|\$id|\$1|%s/gi, '{}');
+    const parts = normalizedTpl.split('{}');
+    const prefix = parts[0] || '';
     const suffix = parts[1] !== undefined ? parts[1] : '';
 
     // 1. Remove from in-memory channels
@@ -881,12 +906,14 @@ function removeSourcesForProxyTemplates(templates: { platform?: string; urlTempl
 
     // 2. Remove from SQLite sources table
     try {
-      if (suffix) {
-        const res = db.prepare("DELETE FROM sources WHERE url LIKE ? AND url LIKE ?").run(`${prefix}%`, `%${suffix}`);
-        removedCount += res.changes;
-      } else {
-        const res = db.prepare("DELETE FROM sources WHERE url LIKE ?").run(`${prefix}%`);
-        removedCount += res.changes;
+      if (prefix) {
+        if (suffix) {
+          const res = db.prepare("DELETE FROM sources WHERE url LIKE ? AND url LIKE ?").run(`${prefix}%`, `%${suffix}`);
+          removedCount += res.changes;
+        } else {
+          const res = db.prepare("DELETE FROM sources WHERE url LIKE ?").run(`${prefix}%`);
+          removedCount += res.changes;
+        }
       }
     } catch (e) {
       console.error("Error deleting sources from SQLite for proxy template:", e);
@@ -899,7 +926,7 @@ function removeSourcesForProxyTemplates(templates: { platform?: string; urlTempl
 
 async function testCarouselProxyAvailability(proxy: { platform: string; urlTemplate: string }, timeoutMs = 6000): Promise<{ available: boolean; latency: number | null; error?: string }> {
   try {
-    const plat = (proxy.platform || '').toLowerCase();
+    const plat = normalizePlatform(proxy.platform);
     const fallbacks: Record<string, string[]> = {
       "yy": ["54880976", "12345", "76"],
       "douyu": ["10153463", "10419541", "9374862", "9999"],
@@ -942,7 +969,7 @@ async function testCarouselProxyAvailability(proxy: { platform: string; urlTempl
     const testCandidates = candidateIds.slice(0, 3);
 
     for (const testId of testCandidates) {
-      const testUrl = proxy.urlTemplate.replace('{}', testId);
+      const testUrl = formatProxyUrl(proxy.urlTemplate, testId);
       try {
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
@@ -985,7 +1012,7 @@ function syncCarouselSources(): { createdCount: number; updatedCount: number; to
   const allProxies = db.prepare("SELECT * FROM carousel_proxies").all() as any[];
   const carouselChannels = db.prepare("SELECT * FROM carousel_channels").all() as any[];
   const enabledDiscoveryRules = getDiscoveryRules(false);
-  const enabledPlatforms = new Set(enabledDiscoveryRules.map((r: any) => (r.platform || '').toLowerCase()));
+  const enabledPlatforms = new Set(enabledDiscoveryRules.map((r: any) => normalizePlatform(r.platform)));
   const hasDiscoveryRules = (db.prepare('SELECT COUNT(*) as count FROM carousel_discovery_rules').get() as any).count > 0;
 
   // Make sure '轮播频道' group exists
@@ -1004,12 +1031,35 @@ function syncCarouselSources(): { createdCount: number; updatedCount: number; to
     } catch (e) {}
   }
 
-  const processedChannelIds = new Set<string>();
+  // 1. Group active proxies by normalized platform, deduplicating URL templates
+  const activeProxiesByPlatform = new Map<string, string[]>();
+  let totalActiveProxies = 0;
+
+  for (const proxy of allProxies) {
+    if (!proxy.urlTemplate) continue;
+    const normPlat = normalizePlatform(proxy.platform);
+    const isBlocked = (hasDiscoveryRules && !enabledPlatforms.has(normPlat)) || isUrlBlockedByDisabledRules(proxy.urlTemplate, proxy.platform);
+    
+    if (proxy.status === 'active' && !isBlocked) {
+      totalActiveProxies++;
+      if (!activeProxiesByPlatform.has(normPlat)) {
+        activeProxiesByPlatform.set(normPlat, []);
+      }
+      const list = activeProxiesByPlatform.get(normPlat)!;
+      const tpl = proxy.urlTemplate.trim();
+      if (!list.includes(tpl)) {
+        list.push(tpl);
+      }
+    }
+  }
+
+  // 2. Resolve or create channels in SQLite channels table, linking channelId and grouping mappings per channel
+  const channelMappingsMap = new Map<string, { channel: any; mappings: { platform: string; originalId: string }[] }>();
 
   for (const cc of carouselChannels) {
     if (!cc.name || !cc.platform || !cc.originalId) continue;
-    const plat = (cc.platform || '').toLowerCase();
-    const isPlatformDisabled = hasDiscoveryRules && !enabledPlatforms.has(plat);
+    const normPlat = normalizePlatform(cc.platform);
+    const origId = String(cc.originalId).trim();
 
     let dbChannel = db.prepare("SELECT * FROM channels WHERE id = ?").get(cc.channelId) as any;
     if (!dbChannel && cc.name) {
@@ -1028,7 +1078,6 @@ function syncCarouselSources(): { createdCount: number; updatedCount: number; to
       db.prepare("UPDATE carousel_channels SET channelId = ? WHERE id = ?").run(dbChannel.id, cc.id);
     } else {
       if (dbChannel.name && dbChannel.name !== cc.name) {
-        // Automatically sync updated channel name into carousel_channels
         db.prepare("UPDATE carousel_channels SET name = ? WHERE id = ?").run(dbChannel.name, cc.id);
         cc.name = dbChannel.name;
       }
@@ -1041,80 +1090,87 @@ function syncCarouselSources(): { createdCount: number; updatedCount: number; to
       } catch (e) {}
     }
 
-    processedChannelIds.add(dbChannel.id);
+    if (!channelMappingsMap.has(dbChannel.id)) {
+      channelMappingsMap.set(dbChannel.id, { channel: dbChannel, mappings: [] });
+    }
+    const chEntry = channelMappingsMap.get(dbChannel.id)!;
+    // Deduplicate mapping for this channel
+    if (!chEntry.mappings.some(m => m.platform === normPlat && m.originalId === origId)) {
+      chEntry.mappings.push({ platform: normPlat, originalId: origId });
+    }
+  }
 
-    const matchingProxies = allProxies.filter(p => (p.platform || '').toLowerCase() === plat);
+  // 3. For each mapped channel, generate the EXACT set of active carousel stream URLs
+  // And sync them with the SQLite sources table cleanly.
+  const insertSourceStmt = db.prepare("INSERT INTO sources (id, channelId, url, province, isp, status) VALUES (?, ?, ?, ?, ?, ?)");
+  const deleteSourceStmt = db.prepare("DELETE FROM sources WHERE id = ?");
 
-    for (const proxy of matchingProxies) {
-      const targetUrl = proxy.urlTemplate.replace(/\{\s*(?:id|roomid|channelid|cid|originalid)?\s*\}/gi, cc.originalId);
-      const isBlocked = isPlatformDisabled || isUrlBlockedByDisabledRules(proxy.urlTemplate, proxy.platform);
-      
-      if (proxy.status === 'active' && !isBlocked) {
-        const exists = db.prepare("SELECT id FROM sources WHERE channelId = ? AND url = ?").get(dbChannel.id, targetUrl);
-        if (!exists) {
-          db.prepare("INSERT INTO sources (id, channelId, url, province, isp, status) VALUES (?, ?, ?, ?, ?, ?)").run(
-            crypto.randomUUID(), dbChannel.id, targetUrl, '', '', 'active'
-          );
-          createdCount++;
+  for (const [channelId, { channel, mappings }] of channelMappingsMap.entries()) {
+    // Generate all expected unique carousel URLs from active proxy templates for this channel
+    const expectedCarouselUrls = new Set<string>();
+
+    for (const mapping of mappings) {
+      const activeTemplates = activeProxiesByPlatform.get(mapping.platform) || [];
+      for (const tpl of activeTemplates) {
+        const targetUrl = formatProxyUrl(tpl, mapping.originalId);
+        if (targetUrl) {
+          expectedCarouselUrls.add(targetUrl);
         }
+      }
+    }
+
+    // Fetch existing sources for this channel
+    const existingSources = db.prepare("SELECT id, url FROM sources WHERE channelId = ?").all(channelId) as any[];
+    const satisfiedUrls = new Set<string>();
+
+    for (const src of existingSources) {
+      if (!src.url) {
+        deleteSourceStmt.run(src.id);
+        continue;
+      }
+
+      const parsed = parseCarouselUrl(src.url);
+      const isCarouselStream = !!parsed.platform || src.url.includes('/migu/') || src.url.includes('/cntv/') || src.url.includes('/douyu/') || src.url.includes('/huya/') || src.url.includes('/bilibili/') || src.url.includes('/yy/') || src.url.includes('/kuaishou/') || src.url.includes('/douyin/');
+
+      if (isCarouselStream) {
+        // If this URL is in our active expected list and not yet satisfied:
+        if (expectedCarouselUrls.has(src.url) && !satisfiedUrls.has(src.url)) {
+          satisfiedUrls.add(src.url);
+          totalCount++;
+        } else {
+          // It's a duplicate, or from an inactive/deleted/stale proxy -> remove it!
+          deleteSourceStmt.run(src.id);
+        }
+      }
+    }
+
+    // Insert any expected URLs that were not already present
+    for (const expectedUrl of expectedCarouselUrls) {
+      if (!satisfiedUrls.has(expectedUrl)) {
+        insertSourceStmt.run(crypto.randomUUID(), channelId, expectedUrl, '', '', 'active');
+        satisfiedUrls.add(expectedUrl);
+        createdCount++;
         totalCount++;
-      } else {
-        // Remove from SQLite sources
-        db.prepare("DELETE FROM sources WHERE channelId = ? AND url = ?").run(dbChannel.id, targetUrl);
       }
     }
   }
 
-  // Also migrate any other existing sources in the DB that match registry mapping to the proper channelId
-  const regMap = new Map();
-  for (const r of carouselChannels) {
-    if (r.platform && r.originalId) {
-      regMap.set(`${(r.platform || '').toLowerCase()}_${r.originalId}`, r);
-    }
-  }
+  // 4. Global deduplication of identical (channelId, url) rows across sources table
+  db.exec("DELETE FROM sources WHERE rowid NOT IN (SELECT MIN(rowid) FROM sources GROUP BY channelId, url)");
 
-  const allSources = db.prepare(`
-    SELECT s.* 
-    FROM sources s 
-    LEFT JOIN channels c ON s.channelId = c.id 
-    WHERE (s.isolated = 0 OR s.isolated IS NULL) 
-      AND (c.isolated = 0 OR c.isolated IS NULL)
-  `).all() as any[];
-
-  for (const source of allSources) {
-    if (!source.url) continue;
-    const parsed = parseCarouselUrl(source.url);
-    if (parsed.platform && parsed.originalId) {
-      const key = `${(parsed.platform || '').toLowerCase()}_${parsed.originalId}`;
-      const registry = regMap.get(key);
-      if (registry) {
-        let targetChannel = db.prepare('SELECT * FROM channels WHERE id = ?').get(registry.channelId) as any;
-        if (!targetChannel && registry.name) {
-          targetChannel = db.prepare('SELECT * FROM channels WHERE name = ?').get(registry.name) as any;
-        }
-        if (targetChannel && source.channelId !== targetChannel.id) {
-          db.prepare('UPDATE sources SET channelId = ? WHERE id = ?').run(targetChannel.id, source.id);
-          updatedCount++;
-        }
-      }
-    }
-  }
-
-  // Cleanup empty channels (excluding registered channels)
+  // 5. Cleanup empty channels that have no sources and no carousel mappings
   db.exec("DELETE FROM channels WHERE id NOT IN (SELECT DISTINCT channelId FROM sources) AND id NOT IN (SELECT DISTINCT channelId FROM carousel_channels)");
 
-  // Reload memory state directly from SQLite
+  // 6. Reload memory state directly from SQLite
   loadData();
   saveDataSync();
-
-  const activeProxiesCount = allProxies.filter(p => p.status === 'active' && !isUrlBlockedByDisabledRules(p.urlTemplate, p.platform)).length;
 
   return {
     createdCount,
     updatedCount,
     totalCount,
-    channelsCount: processedChannelIds.size,
-    activeProxiesCount,
+    channelsCount: channelMappingsMap.size,
+    activeProxiesCount: totalActiveProxies,
     totalProxiesCount: allProxies.length
   };
 }
@@ -6878,7 +6934,22 @@ app.get("/api/channels", async (req, res) => {
 
   app.get("/api/carousel-channels", (req, res) => {
     try {
-      const rows = db.prepare("SELECT c.id, c.channelId, COALESCE(NULLIF(ch.name, ''), NULLIF(c.name, ''), '未知频道') as name, c.platform, c.originalId FROM carousel_channels c LEFT JOIN channels ch ON c.channelId = ch.id").all();
+      const rows = db.prepare(`
+        SELECT 
+          c.id, 
+          c.channelId, 
+          COALESCE(NULLIF(ch.name, ''), NULLIF(c.name, ''), '未知频道') as name, 
+          c.platform, 
+          c.originalId,
+          (
+            SELECT COUNT(*) 
+            FROM sources s 
+            WHERE s.channelId = c.channelId 
+              AND (s.isolated = 0 OR s.isolated IS NULL)
+          ) as sourceCount
+        FROM carousel_channels c 
+        LEFT JOIN channels ch ON c.channelId = ch.id
+      `).all();
       res.json(rows);
     } catch (e: any) {
       res.status(500).json({ error: e.message });

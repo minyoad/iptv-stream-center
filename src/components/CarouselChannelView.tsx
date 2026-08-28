@@ -147,6 +147,7 @@ export const CarouselChannelView = ({ fetchData, channelsData = [] }: { fetchDat
 
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [selectedRegistryIds, setSelectedRegistryIds] = useState<string[]>([]);
+  const [proxies, setProxies] = useState<any[]>([]);
   const [selectedUnregIds, setSelectedUnregIds] = useState<string[]>([]);
 
   useEffect(() => {
@@ -155,17 +156,20 @@ export const CarouselChannelView = ({ fetchData, channelsData = [] }: { fetchDat
 
   const loadData = async () => {
     try {
-        const [res1, res2, res3] = await Promise.all([
+        const [res1, res2, res3, res4] = await Promise.all([
           fetch("/api/carousel-channels"),
           fetch("/api/carousel-channels-unregistered"),
-          fetch("/api/carousel-discovery-rules")
+          fetch("/api/carousel-discovery-rules"),
+          fetch("/api/carousel-proxies")
         ]);
         const d1 = await res1.json();
         const d2 = await res2.json();
         const d3 = await res3.json();
+        const d4 = await res4.json();
         setChannels(Array.isArray(d1) ? d1 : []);
         setUnregistered(Array.isArray(d2) ? d2 : []);
         setRules(Array.isArray(d3) ? d3 : []);
+        setProxies(Array.isArray(d4) ? d4 : []);
     } catch (e) {
       console.error(e);
     } finally {
@@ -987,6 +991,28 @@ export const CarouselChannelView = ({ fetchData, channelsData = [] }: { fetchDat
                   </div>
                 </div>
              )}
+
+             {/* Platform Proxy Availability Summary Bar */}
+             <div className="px-4 py-2.5 bg-slate-50 border-b border-slate-100 flex flex-wrap items-center justify-between gap-2 text-xs">
+               <div className="flex items-center gap-1.5 flex-wrap">
+                 <span className="font-bold text-slate-600">各平台可用代理数:</span>
+                 {Array.from(new Set(channels.map(c => (c.platform || '').toLowerCase()))).filter(Boolean).map(plat => {
+                   const activeCount = proxies.filter(p => (p.platform || '').toLowerCase() === plat && p.status === 'active').length;
+                   const totalCount = proxies.filter(p => (p.platform || '').toLowerCase() === plat).length;
+                   return (
+                     <span key={plat} className={`inline-flex items-center px-2 py-0.5 rounded-md font-medium border ${
+                       activeCount > 0 ? 'bg-indigo-50/80 text-indigo-700 border-indigo-200' : 'bg-rose-50 text-rose-700 border-rose-200'
+                     }`}>
+                       <span className="uppercase font-bold mr-1">{plat}</span>:
+                       <span className="font-bold ml-1">{activeCount}/{totalCount}</span>
+                     </span>
+                   );
+                 })}
+               </div>
+               <span className="text-[11px] text-slate-400">
+                 各频道生成的直播源数 = 该平台当前启用的代理模板数
+               </span>
+             </div>
              
              <div className="overflow-x-auto">
                <table className="w-full text-left text-sm min-w-[540px]">
@@ -1003,6 +1029,7 @@ export const CarouselChannelView = ({ fetchData, channelsData = [] }: { fetchDat
                         <th className="px-4 py-3">统一频道名</th>
                         <th className="px-4 py-3 whitespace-nowrap">平台</th>
                         <th className="px-4 py-3 whitespace-nowrap">直播间 ID</th>
+                        <th className="px-4 py-3 whitespace-nowrap">已生成源</th>
                         <th className="px-4 py-3 text-right whitespace-nowrap">操作</th>
                      </tr>
                   </thead>
@@ -1010,7 +1037,10 @@ export const CarouselChannelView = ({ fetchData, channelsData = [] }: { fetchDat
                      {(Array.isArray(channels) ? channels : [])
                          .filter(p => (p.name || "").toLowerCase().includes(searchQuery.toLowerCase()) || (p.originalId || "").includes(searchQuery) || (p.platform || "").toLowerCase().includes(searchQuery.toLowerCase()))
                          .sort((a, b) => sortKey === "name" ? (a.name || "").localeCompare(b.name || "") : (a.platform || "").localeCompare(b.platform || ""))
-                         .map(p => (
+                         .map(p => {
+                        const plat = (p.platform || '').toLowerCase();
+                        const activeProxiesForPlat = proxies.filter(px => (px.platform || '').toLowerCase() === plat && px.status === 'active').length;
+                        return (
                         <tr key={p.id} className={`hover:bg-slate-50 transition-colors ${selectedRegistryIds.includes(p.id) ? 'bg-indigo-50/50' : ''}`}>
                            <td className="px-4 py-3 whitespace-nowrap">
                              <input 
@@ -1028,6 +1058,22 @@ export const CarouselChannelView = ({ fetchData, channelsData = [] }: { fetchDat
                            </td>
                            <td className="px-4 py-3 text-xs font-mono text-slate-600 font-bold whitespace-nowrap">
                               {p.originalId}
+                           </td>
+                           <td className="px-4 py-3 whitespace-nowrap">
+                             {typeof p.sourceCount === 'number' && p.sourceCount > 0 ? (
+                               <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 mr-1.5"></span>
+                                 {p.sourceCount} 条直播源
+                               </span>
+                             ) : activeProxiesForPlat > 0 ? (
+                               <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-bold bg-amber-50 text-amber-700 border border-amber-200">
+                                 待生成 ({activeProxiesForPlat} 代理就绪)
+                               </span>
+                             ) : (
+                               <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-slate-100 text-slate-500 border border-slate-200">
+                                 0 条 (该平台暂无可用代理)
+                               </span>
+                             )}
                            </td>
                            <td className="px-4 py-3 text-right whitespace-nowrap">
                               <button onClick={() => {
@@ -1049,9 +1095,10 @@ export const CarouselChannelView = ({ fetchData, channelsData = [] }: { fetchDat
                               </button>
                            </td>
                         </tr>
-                     ))}
+                        );
+                     })}
                      {channels.length === 0 && (
-                       <tr><td colSpan={5} className="text-center py-8 text-slate-400">暂无映射数据</td></tr>
+                       <tr><td colSpan={6} className="text-center py-8 text-slate-400">暂无映射数据</td></tr>
                      )}
                   </tbody>
                </table>
