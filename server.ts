@@ -19,6 +19,19 @@ import crypto from "crypto";
 import { GoogleGenAI, Type } from "@google/genai";
 import Database from "better-sqlite3";
 import compression from "compression";
+import * as OpenCC from "opencc-js";
+
+const convertTraditionalToSimplified = OpenCC.Converter({ from: "t", to: "cn" });
+
+export function toSimplifiedChinese(str: string): string {
+  if (!str) return str || "";
+  try {
+    return convertTraditionalToSimplified(str);
+  } catch (_) {
+    return str;
+  }
+}
+
 import {
   PROVINCES_LIST,
   CITY_TO_PROVINCE,
@@ -1442,6 +1455,7 @@ function scanAndRegisterAllCarouselProxies(forceReScan = false): number {
 function stripBitrateAndResolution(name: string): string {
   if (!name) return "";
   let clean = name.trim();
+  clean = toSimplifiedChinese(clean);
 
   // Remove common Chinese/English quality tags optionally appended mid-string or at the end
   // Preserve 4K, 8K, and 超高清 as they distinguish dedicated ultra-high-definition channels
@@ -1466,7 +1480,8 @@ function stripBitrateAndResolution(name: string): string {
 // Normalize channel names by making them lower-case and stripping all spaces/whitespace to support smart matching (e.g., "cctv-1 综合" matches "cctv-1综合")
 function normalizeChannelName(name: string): string {
   if (!name) return "";
-  const stripped = stripBitrateAndResolution(name);
+  const cleanStr = toSimplifiedChinese(name);
+  const stripped = stripBitrateAndResolution(cleanStr);
   let clean = stripped.toLowerCase().replace(/\s+/g, "");
 
   if (clean.includes("4k") || clean.includes("8k")) {
@@ -3874,24 +3889,24 @@ async function performSync(config: SyncConfig, force = false) {
             continue;
           }
 
-          const nameParts = name.split(/[,;，；:]/).map(s => s.trim()).filter(Boolean);
+          const nameParts = name.split(/[,;，；:]/).map(s => toSimplifiedChinese(s.trim())).filter(Boolean);
           if (nameParts.length > 0) {
             name = nameParts[0];
           }
 
           let parsedAliases = [...nameParts];
           if (tvgNameMatch && tvgNameMatch[1]) {
-            parsedAliases.push(...tvgNameMatch[1].split(/[,;，；:]/).map(s => s.trim()).filter(Boolean));
+            parsedAliases.push(...tvgNameMatch[1].split(/[,;，；:]/).map(s => toSimplifiedChinese(s.trim())).filter(Boolean));
           }
           if (aliasMatch && aliasMatch[1]) {
-            parsedAliases.push(...aliasMatch[1].split(/[,;，；:]/).map(s => s.trim()).filter(Boolean));
+            parsedAliases.push(...aliasMatch[1].split(/[,;，；:]/).map(s => toSimplifiedChinese(s.trim())).filter(Boolean));
           }
           parsedAliases = Array.from(new Set(parsedAliases));
 
           currentInfo = {
             name,
             logo: logoMatch ? logoMatch[1] : "",
-            category: groupMatch ? groupMatch[1] : "其它频道",
+            category: toSimplifiedChinese(groupMatch ? groupMatch[1] : "其它频道"),
             alias: parsedAliases,
             epgId: epgMatch ? epgMatch[1] : generateDefaultEpgId(name),
           };
@@ -4035,7 +4050,7 @@ async function performSync(config: SyncConfig, force = false) {
         if (!line) continue;
 
         if (line.includes(",#genre")) {
-          currentCategory = line.split(",")[0].trim();
+          currentCategory = toSimplifiedChinese(line.split(",")[0].trim());
         } else if (line.includes(",")) {
           const parts = line.split(",");
           const nameWithSpecs = parts[0].trim();
@@ -4056,7 +4071,7 @@ async function performSync(config: SyncConfig, force = false) {
             continue;
           }
 
-          const nameParts = name.split(/[,;，；:]/).map(s => s.trim()).filter(Boolean);
+          const nameParts = name.split(/[,;，；:]/).map(s => toSimplifiedChinese(s.trim())).filter(Boolean);
           if (nameParts.length > 0) {
             name = nameParts[0];
           }
@@ -4864,10 +4879,13 @@ app.get("/api/channels", async (req, res) => {
   });
 
   app.post("/api/channels", (req, res) => {
-    const { name, groupIds, category, logo, alias, epgId } = req.body;
+    let { name, groupIds, category, logo, alias, epgId } = req.body;
     if (!name) {
       return res.status(400).json({ error: "频道名称为必填项" });
     }
+
+    name = toSimplifiedChinese(name);
+    if (category) category = toSimplifiedChinese(category);
 
     let resolvedGroupIds: string[] = [];
     if (groupIds && Array.isArray(groupIds) && groupIds.length > 0) {
@@ -6100,24 +6118,24 @@ app.get("/api/channels", async (req, res) => {
             }
             name = stripBitrateAndResolution(name);
 
-            const nameParts = name.split(/[,;，；:]/).map(s => s.trim()).filter(Boolean);
+            const nameParts = name.split(/[,;，；:]/).map(s => toSimplifiedChinese(s.trim())).filter(Boolean);
             if (nameParts.length > 0) {
               name = nameParts[0];
             }
 
             let parsedAliases = [...nameParts];
             if (tvgNameMatch && tvgNameMatch[1]) {
-              parsedAliases.push(...tvgNameMatch[1].split(/[,;，；:]/).map(s => s.trim()).filter(Boolean));
+              parsedAliases.push(...tvgNameMatch[1].split(/[,;，；:]/).map(s => toSimplifiedChinese(s.trim())).filter(Boolean));
             }
             if (aliasMatch && aliasMatch[1]) {
-              parsedAliases.push(...aliasMatch[1].split(/[,;，；:]/).map(s => s.trim()).filter(Boolean));
+              parsedAliases.push(...aliasMatch[1].split(/[,;，；:]/).map(s => toSimplifiedChinese(s.trim())).filter(Boolean));
             }
             parsedAliases = Array.from(new Set(parsedAliases));
 
             currentInfo = {
               name,
               logo: logoMatch ? logoMatch[1] : "",
-              category: groupMatch ? groupMatch[1] : "手动导入",
+              category: toSimplifiedChinese(groupMatch ? groupMatch[1] : "手动导入"),
               alias: parsedAliases,
               epgId: epgMatch ? epgMatch[1] : generateDefaultEpgId(name),
             };
@@ -6248,7 +6266,7 @@ app.get("/api/channels", async (req, res) => {
           if (!line) continue;
 
           if (line.includes(",#genre")) {
-            currentCategory = line.split(",")[0].trim();
+            currentCategory = toSimplifiedChinese(line.split(",")[0].trim());
           } else if (line.includes(",")) {
             const parts = line.split(",");
             const nameWithSpecs = parts[0].trim();
@@ -8745,7 +8763,10 @@ app.get("/api/channels", async (req, res) => {
       parsed.forEach((item, idx) => {
         if (item && typeof item === "object") {
           const chId = item.id || `ch_imp_${idx}_${Date.now()}`;
-          const chName = item.name || item.title || `频道 ${idx + 1}`;
+          const chName = toSimplifiedChinese(item.name || item.title || `频道 ${idx + 1}`);
+          const chAlias = Array.isArray(item.alias)
+            ? item.alias.map((a: string) => toSimplifiedChinese(a))
+            : [];
           let sources: any[] = [];
           if (Array.isArray(item.sources)) {
             sources = item.sources;
@@ -8757,7 +8778,7 @@ app.get("/api/channels", async (req, res) => {
             name: chName,
             logo: item.logo || "",
             groupIds: item.groupIds || ["g_imported"],
-            alias: item.alias || [],
+            alias: chAlias,
             epgId: item.epgId || "",
             isolated: !!item.isolated,
             sources
