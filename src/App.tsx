@@ -306,6 +306,9 @@ export default function App() {
   const [selectedChannelIds, setSelectedChannelIds] = useState<string[]>([]);
   const [isBatchGroupModalOpen, setIsBatchGroupModalOpen] = useState(false);
   const [batchGroupForm, setBatchGroupForm] = useState<{ groupIds: string[]; mode: "replace" | "append" }>({ groupIds: [], mode: "replace" });
+  const [batchGroupFilter, setBatchGroupFilter] = useState("");
+  const [channelModalGroupFilter, setChannelModalGroupFilter] = useState("");
+  const [groupTabSearch, setGroupTabSearch] = useState("");
 
   // Batch live source operations state
   const [selectedSourceIds, setSelectedSourceIds] = useState<string[]>([]);
@@ -1492,6 +1495,7 @@ export default function App() {
       return;
     }
     setBatchGroupForm({ groupIds: [], mode: "append" }); // Default to append since user requested adding/appending logic as a primary feature
+    setBatchGroupFilter("");
     setIsBatchGroupModalOpen(true);
   };
 
@@ -2340,6 +2344,7 @@ export default function App() {
       epgId: "",
       isolated: false
     });
+    setChannelModalGroupFilter("");
     setIsChannelModalOpen(true);
   };
 
@@ -2358,6 +2363,7 @@ export default function App() {
       epgId: ch.epgId || "",
       isolated: !!ch.isolated
     });
+    setChannelModalGroupFilter("");
     setIsChannelModalOpen(true);
   };
 
@@ -2907,6 +2913,31 @@ export default function App() {
   const getUniqueCategories = () => {
     return ["all", ...groups.map(g => g.name)];
   };
+
+  const presetGroupTags = useMemo(() => {
+    const candidateKeywords = ["央视", "卫视", "体育", "地方", "4K", "8K", "轮播", "电影", "新闻", "少儿", "港澳台", "纪录", "综艺", "影院", "动画"];
+    return candidateKeywords.filter(kw => 
+      groups.some(g => (g.name || "").toLowerCase().includes(kw.toLowerCase()))
+    );
+  }, [groups]);
+
+  const filteredBatchGroups = useMemo(() => {
+    if (!batchGroupFilter.trim()) return groups;
+    const q = batchGroupFilter.trim().toLowerCase();
+    return groups.filter(g => (g.name || "").toLowerCase().includes(q));
+  }, [groups, batchGroupFilter]);
+
+  const filteredChannelModalGroups = useMemo(() => {
+    if (!channelModalGroupFilter.trim()) return groups;
+    const q = channelModalGroupFilter.trim().toLowerCase();
+    return groups.filter(g => (g.name || "").toLowerCase().includes(q));
+  }, [groups, channelModalGroupFilter]);
+
+  const filteredGroupTabGroups = useMemo(() => {
+    if (!groupTabSearch.trim()) return groups;
+    const q = groupTabSearch.trim().toLowerCase();
+    return groups.filter(g => (g.name || "").toLowerCase().includes(q));
+  }, [groups, groupTabSearch]);
 
   const categoryCounts = useMemo(() => {
     const map: Record<string, number> = { all: channels.length };
@@ -3497,7 +3528,7 @@ export default function App() {
 
                   <div className="border-t border-slate-100 pt-6 space-y-4">
                     <div className="flex items-center justify-between flex-wrap gap-2">
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-2 flex-wrap">
                         <h4 className="font-bold text-slate-800 text-xs">已存在的实体直播分组目录 ({groups.length} 个)</h4>
                         <button
                           type="button"
@@ -3509,13 +3540,44 @@ export default function App() {
                           <span>一键智能归类建组</span>
                         </button>
                       </div>
-                      <p className="text-[11px] text-slate-400 font-medium hidden sm:block">
-                        💡 提示：按住分组左侧 <span className="font-mono text-slate-600 font-bold">⠿</span> 拖拽图标，可自由调整分组排序
-                      </p>
+
+                      {/* Group Tab search input */}
+                      <div className="relative w-full sm:w-56">
+                        <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                        <input
+                          type="text"
+                          value={groupTabSearch}
+                          onChange={(e) => setGroupTabSearch(e.target.value)}
+                          placeholder="快速搜索过滤分组..."
+                          className="w-full text-xs pl-7 pr-7 py-1 border border-slate-200 rounded-lg bg-slate-50 focus:bg-white focus:outline-none focus:border-indigo-500 font-medium text-slate-800"
+                        />
+                        {groupTabSearch && (
+                          <button
+                            type="button"
+                            onClick={() => setGroupTabSearch("")}
+                            className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 cursor-pointer"
+                          >
+                            <XCircle className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                      </div>
                     </div>
 
+                    {groupTabSearch && (
+                      <div className="text-[11px] text-indigo-600 font-bold bg-indigo-50/70 border border-indigo-100 px-3 py-1.5 rounded-xl flex items-center justify-between">
+                        <span>搜索关键字: "{groupTabSearch}"，包含 {filteredGroupTabGroups.length} 个匹配分组</span>
+                        <button
+                          type="button"
+                          onClick={() => setGroupTabSearch("")}
+                          className="text-indigo-700 hover:underline text-[10px]"
+                        >
+                          清除筛选
+                        </button>
+                      </div>
+                    )}
+
                     <DraggableGroupList channels={channels}
-                      groups={groups}
+                      groups={filteredGroupTabGroups}
                       
                       onRenameGroup={async (id, val) => {
                         try {
@@ -7418,32 +7480,90 @@ export default function App() {
 
                 {/* 2-Column Grid: Group Selection and Create New Group */}
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                  <div className="space-y-1 font-sans">
-                    <label className="text-[11px] text-slate-700">关联直播分类 (可多选) *</label>
-                    <div className="border border-slate-200 rounded-lg bg-slate-50 p-2 max-h-24 overflow-y-auto space-y-0.5" id="group_checkboxes_pnl">
-                      {groups.map((g) => {
-                        const isChecked = channelForm.groupIds.includes(g.id);
-                        return (
-                          <label key={g.id} className="flex items-center gap-2 cursor-pointer py-0.5 hover:bg-slate-100/60 rounded px-1 select-none text-slate-700">
-                            <input
-                              type="checkbox"
-                              checked={isChecked}
-                              onChange={(e) => {
-                                const checked = e.target.checked;
-                                let newIds = [...channelForm.groupIds];
-                                if (checked) {
-                                  if (!newIds.includes(g.id)) newIds.push(g.id);
-                                } else {
-                                  newIds = newIds.filter(id => id !== g.id);
-                                }
-                                setChannelForm({ ...channelForm, groupIds: newIds });
-                              }}
-                              className="rounded text-indigo-600 focus:ring-indigo-500 w-3.5 h-3.5 cursor-pointer"
-                            />
-                            <span className="text-[11px] text-slate-700 font-bold">{g.name}</span>
-                          </label>
-                        );
-                      })}
+                  <div className="space-y-1.5 font-sans">
+                    <div className="flex items-center justify-between gap-1">
+                      <label className="text-[11px] font-bold text-slate-700 flex items-center gap-1">
+                        <span>关联直播分类 (可多选) *</span>
+                        <span className="text-[9px] text-indigo-600 bg-indigo-50 border border-indigo-100 px-1.5 py-0.2 rounded font-bold">
+                          已选 {channelForm.groupIds.length}
+                        </span>
+                      </label>
+                      <div className="flex items-center gap-1.5 text-[9px]">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const visibleIds = filteredChannelModalGroups.map(g => g.id);
+                            const combined = Array.from(new Set([...channelForm.groupIds, ...visibleIds]));
+                            setChannelForm({ ...channelForm, groupIds: combined });
+                          }}
+                          className="text-indigo-600 hover:text-indigo-800 font-bold hover:underline cursor-pointer"
+                          title="全选当前显示的匹配分类"
+                        >
+                          全选匹配
+                        </button>
+                        <span className="text-slate-300">|</span>
+                        <button
+                          type="button"
+                          onClick={() => setChannelForm({ ...channelForm, groupIds: [] })}
+                          className="text-slate-400 hover:text-slate-600 font-bold hover:underline cursor-pointer"
+                          title="清空所有分类勾选"
+                        >
+                          清空
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Quick filter input */}
+                    <div className="relative">
+                      <Search className="w-3 h-3 text-slate-400 absolute left-2 top-1/2 -translate-y-1/2 pointer-events-none" />
+                      <input
+                        type="text"
+                        value={channelModalGroupFilter}
+                        onChange={(e) => setChannelModalGroupFilter(e.target.value)}
+                        placeholder="快速过滤分类..."
+                        className="w-full text-[11px] pl-6 pr-6 py-1 border border-slate-200 rounded-md bg-slate-50 focus:bg-white focus:outline-none focus:border-indigo-500 text-slate-800"
+                      />
+                      {channelModalGroupFilter && (
+                        <button
+                          type="button"
+                          onClick={() => setChannelModalGroupFilter("")}
+                          className="absolute right-1.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 cursor-pointer"
+                        >
+                          <XCircle className="w-3 h-3" />
+                        </button>
+                      )}
+                    </div>
+
+                    <div className="border border-slate-200 rounded-lg bg-slate-50 p-2 max-h-28 overflow-y-auto space-y-0.5" id="group_checkboxes_pnl">
+                      {filteredChannelModalGroups.length > 0 ? (
+                        filteredChannelModalGroups.map((g) => {
+                          const isChecked = channelForm.groupIds.includes(g.id);
+                          return (
+                            <label key={g.id} className="flex items-center gap-2 cursor-pointer py-0.5 hover:bg-slate-100/60 rounded px-1 select-none text-slate-700">
+                              <input
+                                type="checkbox"
+                                checked={isChecked}
+                                onChange={(e) => {
+                                  const checked = e.target.checked;
+                                  let newIds = [...channelForm.groupIds];
+                                  if (checked) {
+                                    if (!newIds.includes(g.id)) newIds.push(g.id);
+                                  } else {
+                                    newIds = newIds.filter(id => id !== g.id);
+                                  }
+                                  setChannelForm({ ...channelForm, groupIds: newIds });
+                                }}
+                                className="rounded text-indigo-600 focus:ring-indigo-500 w-3.5 h-3.5 cursor-pointer"
+                              />
+                              <span className="text-[11px] text-slate-700 font-bold">{g.name}</span>
+                            </label>
+                          );
+                        })
+                      ) : (
+                        <div className="py-2 text-center text-[10px] text-slate-400">
+                          无匹配分类 ({channelModalGroupFilter})
+                        </div>
+                      )}
                     </div>
                   </div>
 
@@ -7686,10 +7806,13 @@ export default function App() {
       {/* 4. Modal Dialog: Batch Update Group */}
       {isBatchGroupModalOpen && (
         <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 font-sans" id="batch_group_modal">
-          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-100 space-y-5 flex flex-col animate-fade-in font-sans">
-            <div className="flex justify-between items-center">
-              <h3 className="text-sm font-bold text-slate-800 font-sans">批量修改/调整频道分类 (共选中 {selectedChannelIds.length} 条频道)</h3>
-              <button className="text-slate-400 hover:text-slate-600 font-bold" onClick={()=>setIsBatchGroupModalOpen(false)}>✕</button>
+          <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl border border-slate-100 space-y-4 flex flex-col animate-fade-in font-sans">
+            <div className="flex justify-between items-center pb-1 border-b border-slate-100">
+              <h3 className="text-sm font-bold text-slate-800 font-sans flex items-center gap-2">
+                <Layers className="w-4 h-4 text-indigo-600" />
+                批量修改/调整频道分类 (共选中 {selectedChannelIds.length} 条频道)
+              </h3>
+              <button className="text-slate-400 hover:text-slate-600 font-bold p-1 rounded-lg hover:bg-slate-100 transition cursor-pointer" onClick={()=>setIsBatchGroupModalOpen(false)}>✕</button>
             </div>
             
             <form onSubmit={handleBatchGroupSubmit} className="space-y-4 text-xs font-semibold text-slate-600">
@@ -7704,7 +7827,7 @@ export default function App() {
                       onChange={() => setBatchGroupForm({ ...batchGroupForm, mode: "append" })}
                       className="w-4 h-4 text-indigo-600 border-slate-300 focus:ring-indigo-500 cursor-pointer"
                     />
-                    <span className="text-xs font-bold text-slate-700">追加分组 (保留并累加分类)</span>
+                    <span className="text-xs font-bold text-slate-700">追加分组 (保留原关联，补充勾选的分类)</span>
                   </label>
                   <label className="flex items-center gap-2 cursor-pointer select-none">
                     <input
@@ -7714,49 +7837,189 @@ export default function App() {
                       onChange={() => setBatchGroupForm({ ...batchGroupForm, mode: "replace" })}
                       className="w-4 h-4 text-indigo-600 border-slate-300 focus:ring-indigo-500 cursor-pointer"
                     />
-                    <span className="text-xs font-bold text-slate-700">替换分组 (彻底重置原分类)</span>
+                    <span className="text-xs font-bold text-slate-700">覆盖替换 (清除原分类，仅保留勾选的分类)</span>
                   </label>
                 </div>
               </div>
 
-              <div className="space-y-2">
-                <label className="text-slate-700 block">选择目标分类 (可单选或多选) *</label>
-                <div className="grid grid-cols-2 gap-2 max-h-48 overflow-y-auto p-2.5 bg-slate-50/50 border border-slate-200 rounded-xl">
-                  {groups.map((group) => {
-                    const isGroupChecked = batchGroupForm.groupIds.includes(group.id);
-                    return (
-                      <label 
-                        key={group.id} 
-                        className={`flex items-center gap-2 p-2 rounded-lg border cursor-pointer select-none transition ${
-                          isGroupChecked 
-                            ? "bg-blue-50/60 border-blue-200 text-blue-700 font-bold" 
-                            : "bg-white border-slate-200 text-slate-600 hover:bg-slate-50"
-                        }`}
+              <div className="space-y-2.5 font-sans">
+                <div className="flex items-center justify-between flex-wrap gap-2">
+                  <label className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
+                    <span>选择目标分类 (可单选或多选) *</span>
+                    <span className="text-[10px] text-indigo-600 font-bold bg-indigo-50 border border-indigo-100 px-2 py-0.5 rounded-full">
+                      已勾选 {batchGroupForm.groupIds.length} 个
+                    </span>
+                  </label>
+                  
+                  {/* Selection action helpers */}
+                  <div className="flex items-center gap-1.5 text-[10px]">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const visibleIds = filteredBatchGroups.map(g => g.id);
+                        const combined = Array.from(new Set([...batchGroupForm.groupIds, ...visibleIds]));
+                        setBatchGroupForm({ ...batchGroupForm, groupIds: combined });
+                      }}
+                      className="px-2 py-0.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-bold rounded border border-indigo-200/60 transition cursor-pointer"
+                      title="勾选当前搜索过滤显示的所有分类"
+                    >
+                      全选匹配项
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const visibleIds = filteredBatchGroups.map(g => g.id);
+                        const nextIds = batchGroupForm.groupIds.filter(id => !visibleIds.includes(id));
+                        setBatchGroupForm({ ...batchGroupForm, groupIds: nextIds });
+                      }}
+                      className="px-2 py-0.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded border border-slate-200 transition cursor-pointer"
+                      title="取消勾选当前搜索过滤显示的分类"
+                    >
+                      取消匹配项
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const visibleIds = filteredBatchGroups.map(g => g.id);
+                        const currentSet = new Set(batchGroupForm.groupIds);
+                        const nextIds = [...batchGroupForm.groupIds];
+                        visibleIds.forEach(id => {
+                          if (currentSet.has(id)) {
+                            const idx = nextIds.indexOf(id);
+                            if (idx !== -1) nextIds.splice(idx, 1);
+                          } else {
+                            nextIds.push(id);
+                          }
+                        });
+                        setBatchGroupForm({ ...batchGroupForm, groupIds: nextIds });
+                      }}
+                      className="px-2 py-0.5 bg-amber-50 hover:bg-amber-100 text-amber-800 font-bold rounded border border-amber-200/60 transition cursor-pointer"
+                      title="反选当前过滤显示的分类"
+                    >
+                      反选当前
+                    </button>
+                    {batchGroupForm.groupIds.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => setBatchGroupForm({ ...batchGroupForm, groupIds: [] })}
+                        className="px-2 py-0.5 bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold rounded border border-rose-200/60 transition cursor-pointer"
+                        title="清空所有已勾选分类"
                       >
-                        <input
-                          type="checkbox"
-                          className="w-3.5 h-3.5 text-blue-600 border-slate-300 rounded focus:ring-blue-500 cursor-pointer"
-                          checked={isGroupChecked}
-                          onChange={(e) => {
-                            if (e.target.checked) {
-                              setBatchGroupForm({
-                                ...batchGroupForm,
-                                groupIds: [...batchGroupForm.groupIds, group.id]
-                              });
-                            } else {
-                              setBatchGroupForm({
-                                ...batchGroupForm,
-                                groupIds: batchGroupForm.groupIds.filter(id => id !== group.id)
-                              });
-                            }
-                          }}
-                        />
-                        <span className="truncate">{group.name}</span>
-                      </label>
-                    );
-                  })}
+                        清空已选
+                      </button>
+                    )}
+                  </div>
                 </div>
-                <p className="text-[10px] text-slate-400 font-medium font-sans leading-relaxed">
+
+                {/* Filter search input */}
+                <div className="relative">
+                  <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                  <input
+                    type="text"
+                    value={batchGroupFilter}
+                    onChange={(e) => setBatchGroupFilter(e.target.value)}
+                    placeholder="输入分类名称快速搜索过滤 (如: 央视, 卫视, 体育, 4K)..."
+                    className="w-full text-xs pl-8 pr-8 py-2 border border-slate-200 rounded-xl bg-slate-50 focus:bg-white focus:outline-none focus:border-indigo-500 font-medium text-slate-800 transition"
+                  />
+                  {batchGroupFilter && (
+                    <button
+                      type="button"
+                      onClick={() => setBatchGroupFilter("")}
+                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-0.5 rounded-full cursor-pointer"
+                    >
+                      <XCircle className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
+
+                {/* Quick preset tag chips */}
+                {presetGroupTags.length > 0 && (
+                  <div className="flex items-center gap-1.5 flex-wrap pt-0.5">
+                    <span className="text-[10px] text-slate-400 font-bold shrink-0">快捷过滤:</span>
+                    {presetGroupTags.map(tag => {
+                      const isActive = batchGroupFilter.trim() === tag;
+                      return (
+                        <button
+                          key={tag}
+                          type="button"
+                          onClick={() => setBatchGroupFilter(isActive ? "" : tag)}
+                          className={`text-[10px] px-2 py-0.5 rounded-md font-bold transition cursor-pointer ${
+                            isActive
+                              ? "bg-indigo-600 text-white shadow-2xs"
+                              : "bg-slate-100 hover:bg-indigo-50 text-slate-600 hover:text-indigo-700 border border-slate-200/70"
+                          }`}
+                        >
+                          {tag}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {/* Category Grid */}
+                <div className="grid grid-cols-2 gap-2 max-h-52 overflow-y-auto p-2.5 bg-slate-50/60 border border-slate-200 rounded-xl">
+                  {filteredBatchGroups.length > 0 ? (
+                    filteredBatchGroups.map((group) => {
+                      const isGroupChecked = batchGroupForm.groupIds.includes(group.id);
+                      return (
+                        <label 
+                          key={group.id} 
+                          className={`flex items-center justify-between gap-2 p-2 rounded-lg border cursor-pointer select-none transition ${
+                            isGroupChecked 
+                              ? "bg-blue-50/80 border-blue-300 text-blue-800 font-bold shadow-2xs" 
+                              : "bg-white border-slate-200 text-slate-700 hover:bg-slate-100/80 hover:border-slate-300"
+                          }`}
+                        >
+                          <div className="flex items-center gap-2 min-w-0">
+                            <input
+                              type="checkbox"
+                              className="w-3.5 h-3.5 text-blue-600 border-slate-300 rounded focus:ring-blue-500 cursor-pointer shrink-0"
+                              checked={isGroupChecked}
+                              onChange={(e) => {
+                                if (e.target.checked) {
+                                  setBatchGroupForm({
+                                    ...batchGroupForm,
+                                    groupIds: [...batchGroupForm.groupIds, group.id]
+                                  });
+                                } else {
+                                  setBatchGroupForm({
+                                    ...batchGroupForm,
+                                    groupIds: batchGroupForm.groupIds.filter(id => id !== group.id)
+                                  });
+                                }
+                              }}
+                            />
+                            <span className="truncate text-xs">{group.name}</span>
+                          </div>
+                          {isGroupChecked && <Check className="w-3.5 h-3.5 text-blue-600 shrink-0" />}
+                        </label>
+                      );
+                    })
+                  ) : (
+                    <div className="col-span-2 py-6 text-center text-slate-400 space-y-1.5">
+                      <p className="text-xs font-medium">未搜到匹配名称包含 "{batchGroupFilter}" 的分类</p>
+                      <button
+                        type="button"
+                        onClick={() => setBatchGroupFilter("")}
+                        className="text-[11px] text-indigo-600 hover:underline font-bold"
+                      >
+                        清空筛选条件显示全部分类 ({groups.length} 个)
+                      </button>
+                    </div>
+                  )}
+                </div>
+
+                {/* Filter status note */}
+                <div className="flex items-center justify-between text-[10px] text-slate-400 font-medium px-0.5">
+                  <span>
+                    显示 {filteredBatchGroups.length} / 共 {groups.length} 个分类
+                  </span>
+                  {batchGroupFilter && (
+                    <span className="text-indigo-600 font-bold">匹配关键字 "{batchGroupFilter}"</span>
+                  )}
+                </div>
+
+                <p className="text-[10px] text-slate-400 font-medium font-sans leading-relaxed pt-1">
                   {batchGroupForm.mode === "append" 
                     ? "追加模式说明：所选频道如果原本不属于这些组，会被追加进去，原有的其他分组关系会被完整保留。" 
                     : "覆盖替换说明：所选频道原有的所有分组关系都将被清除，仅归属于在这个选择框里勾选的新分组。"}
