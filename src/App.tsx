@@ -4909,7 +4909,7 @@ export default function App() {
                           <span className="text-emerald-400 font-bold block pb-1">4. 客户端探针 - 获取待测源清单接口 (Get Target Test Sources)：</span>
                           <span className="text-white font-extrabold pr-2">GET</span>
                           <span className="text-indigo-300 select-all">/api/sources/client-test-list?isp=中国电信&province=广东&onlyActive=true&limit=100&page=1</span>
-                          <p className="text-[10.5px] text-slate-400 pt-1 font-sans">自动返回匹配指定运营商 (如中国电信) + 所有 BGP/多线/未知 专线的线路。支持 <strong>limit</strong> 和 <strong>page</strong> 参数进行分页。</p>
+                          <p className="text-[10.5px] text-slate-400 pt-1 font-sans">自动返回匹配指定运营商 (如中国电信) + 所有 BGP/多线/未知 专线的线路。<strong>系统已开启智能防重复测速机制，自动优先返回从未测速或极久未测速的直播源</strong>。支持 <strong>limit</strong> 和 <strong>page</strong> 参数进行分页。</p>
                         </div>
 
                         <div className="space-y-1 bg-slate-950 p-3 rounded-xl border border-slate-800 text-[11px] font-mono">

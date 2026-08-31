@@ -6725,13 +6725,28 @@ app.get("/api/channels", async (req, res) => {
           id: source.id,
           channelId: channel.id,
           url: source.url,
-        });
+          lastChecked: source.lastChecked || "",
+          testCount: source.testCount || 0,
+          status: source.status || "unknown"
+        } as any);
       });
     });
 
     if (targetSources.length === 0) {
       return res.status(400).json({ error: "未选择或未检索到符合过滤条件的直播源进行测试" });
     }
+
+    // 优先测速长时间未测和测试次数最少的直播源
+    targetSources.sort((a: any, b: any) => {
+      const parseT = (val: any) => (val ? (typeof val === "number" ? val : (isNaN(Date.parse(String(val))) ? 0 : Date.parse(String(val)))) : 0);
+      const tA = parseT(a.lastChecked);
+      const tB = parseT(b.lastChecked);
+      if (tA !== tB) return tA - tB;
+      const cA = Number(a.testCount) || 0;
+      const cB = Number(b.testCount) || 0;
+      if (cA !== cB) return cA - cB;
+      return 0;
+    });
 
     // Run task asynchronously
     const targetConcurrency = Number(concurrency) || 8;
@@ -6747,7 +6762,7 @@ app.get("/api/channels", async (req, res) => {
     });
   });
 
-    // Endpoint to fetch test list for client/browser probes, filtered by ISP + BGP/多线/未知, independent of UI filters
+  // Endpoint to fetch test list for client/browser probes, filtered by ISP + BGP/多线/未知, independent of UI filters
   app.get("/api/sources/client-test-list", (req, res) => {
     const clientIsp = ((req.query.isp as string) || "").trim();
     const clientProvince = ((req.query.province as string) || "").trim();
@@ -6791,10 +6806,57 @@ app.get("/api/channels", async (req, res) => {
             province: s.province || "全国",
             status: s.status || "unknown",
             latency: s.latency,
-            resolution: s.resolution
+            resolution: s.resolution,
+            lastChecked: s.lastChecked || "",
+            testCount: s.testCount || 0,
+            successCount: s.successCount || 0
           });
         }
       });
+    });
+
+    // 智能测速优先排序策略：
+    // 1. 优先待测试/极久未测速的直播源（lastChecked 为空或时间戳越小/越久远排在最前面）
+    // 2. 优先测试次数少的直播源（testCount 升序）
+    // 3. 优先 pending 状态（status 为 unknown / checking 排在 active / inactive 之前）
+    // 4. 随机扰动（jitter）：同等优先级的未测/旧测源库中打乱排列，防止多个探针/客户端并发请求时重复获取完全相同的顶端线路
+    const parseCheckTime = (val: any): number => {
+      if (!val) return 0;
+      if (typeof val === "number") return val;
+      const t = Date.parse(String(val));
+      return isNaN(t) ? 0 : t;
+    };
+
+    targetSources.forEach((s) => {
+      s._checkTime = parseCheckTime(s.lastChecked);
+      s._testCount = Number(s.testCount) || 0;
+      s._isPending = (s.status === "unknown" || s.status === "checking") ? 0 : 1;
+      s._jitter = Math.random();
+    });
+
+    targetSources.sort((a, b) => {
+      // 1. 时间最久远的（0 / 从未测速的排在最前）
+      if (a._checkTime !== b._checkTime) {
+        return a._checkTime - b._checkTime;
+      }
+      // 2. 测速次数最少的
+      if (a._testCount !== b._testCount) {
+        return a._testCount - b._testCount;
+      }
+      // 3. 待检测/未知状态优先
+      if (a._isPending !== b._isPending) {
+        return a._isPending - b._isPending;
+      }
+      // 4. 同等优先级打乱，避免多探针重复
+      return a._jitter - b._jitter;
+    });
+
+    // 清理临时排序辅助属性
+    targetSources.forEach((s) => {
+      delete s._checkTime;
+      delete s._testCount;
+      delete s._isPending;
+      delete s._jitter;
     });
 
     const totalCount = targetSources.length;
