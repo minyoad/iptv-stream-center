@@ -49,6 +49,8 @@ import {
   testAiConnection,
   suggestChannelMetadata,
   batchSuggestChannels,
+  describeChannelWithAi,
+  batchDescribeChannelsWithAi,
   matchBuiltinChannel,
   deduceChannelRule,
   getLogoSources,
@@ -86,6 +88,7 @@ interface Channel {
   groupIds: string[];
   alias: string[];
   epgId: string;
+  description?: string;
   sources: LiveSource[];
   isolated?: boolean;
 }
@@ -322,6 +325,13 @@ function initSqlite() {
   // Column migration for carousel_discovery_rules enabled column
   try {
     db.prepare("ALTER TABLE carousel_discovery_rules ADD COLUMN enabled INTEGER DEFAULT 1").run();
+  } catch (e) {
+    // Column already exists
+  }
+
+  // Column migration for channels description column
+  try {
+    db.prepare("ALTER TABLE channels ADD COLUMN description TEXT DEFAULT ''").run();
   } catch (e) {
     // Column already exists
   }
@@ -2091,6 +2101,7 @@ function loadData() {
           groupIds,
           alias,
           epgId: ch.epgId || "",
+          description: ch.description || "",
           isolated: ch.isolated === 1 ? true : false,
           sources: sourceMap.get(ch.id) || []
         };
@@ -2462,7 +2473,7 @@ function saveDataSync() {
       db.exec("DELETE FROM channels");
       db.exec("DELETE FROM sources");
 
-      const insertChannel = db.prepare("INSERT INTO channels (id, name, logo, groupIds, alias, epgId, isolated) VALUES (?, ?, ?, ?, ?, ?, ?)");
+      const insertChannel = db.prepare("INSERT INTO channels (id, name, logo, groupIds, alias, epgId, description, isolated) VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
       const insertSource = db.prepare(`
         INSERT INTO sources (id, channelId, url, province, isp, status, latency, resolution, lastChecked, clientIspReported, clientProvinceReported, testCount, successCount, isolated)
               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -2476,6 +2487,7 @@ function saveDataSync() {
           JSON.stringify(ch.groupIds || []),
           JSON.stringify(ch.alias || []),
           ch.epgId || "",
+          ch.description || "",
           ch.isolated ? 1 : 0
         );
 
@@ -4879,13 +4891,14 @@ app.get("/api/channels", async (req, res) => {
   });
 
   app.post("/api/channels", (req, res) => {
-    let { name, groupIds, category, logo, alias, epgId } = req.body;
+    let { name, groupIds, category, logo, alias, epgId, description } = req.body;
     if (!name) {
       return res.status(400).json({ error: "频道名称为必填项" });
     }
 
     name = toSimplifiedChinese(name);
     if (category) category = toSimplifiedChinese(category);
+    if (description) description = toSimplifiedChinese(description);
 
     let resolvedGroupIds: string[] = [];
     if (groupIds && Array.isArray(groupIds) && groupIds.length > 0) {
@@ -4915,6 +4928,7 @@ app.get("/api/channels", async (req, res) => {
       logo: logo || "https://images.unsplash.com/photo-1598257006458-087169a1f08d?auto=format&fit=crop&w=48&h=48&q=80",
       alias: alias ? (Array.isArray(alias) ? alias : alias.split(",").map((s: string) => s.trim())) : [name],
       epgId: epgId || generateDefaultEpgId(name),
+      description: description || "",
       isolated: !!req.body.isolated,
       sources: []
     };
@@ -4926,7 +4940,7 @@ app.get("/api/channels", async (req, res) => {
 
   app.put("/api/channels/:id", (req, res) => {
     const { id } = req.params;
-    const { name, groupIds, category, logo, alias, epgId, isolated } = req.body;
+    const { name, groupIds, category, logo, alias, epgId, description, isolated } = req.body;
 
     const channel = channels.find((c) => c.id === id);
     if (!channel) {
@@ -4956,6 +4970,7 @@ app.get("/api/channels", async (req, res) => {
       channel.alias = Array.from(new Set(Array.isArray(alias) ? alias : alias.split(/[,;，；:]/).map((s: string) => s.trim()).filter(Boolean)));
     }
     if (epgId !== undefined) channel.epgId = epgId;
+    if (description !== undefined) channel.description = toSimplifiedChinese(description);
     if (isolated !== undefined) {
       channel.isolated = !!isolated;
       if (channel.sources) {
@@ -5498,6 +5513,80 @@ app.get("/api/channels", async (req, res) => {
       res.json(result);
     } catch (err: any) {
       res.status(500).json({ success: false, message: "测试请求异常: " + err.message });
+    }
+  });
+
+  app.post("/api/ai/describe-channel", async (req, res) => {
+    try {
+      const { channelName, groupNames, epgId, existingNotes } = req.body;
+      if (!channelName) {
+        return res.status(400).json({ error: "频道名称不能为空" });
+      }
+      const description = await describeChannelWithAi(channelName, groupNames, epgId, existingNotes);
+      res.json({ success: true, description });
+    } catch (err: any) {
+      res.status(500).json({ error: "AI 描述生成失败: " + err.message });
+    }
+  });
+
+  app.post("/api/channels/batch-describe", async (req, res) => {
+    try {
+      const { channelIds, overwrite = false } = req.body;
+      let targetChannels = channels;
+      if (Array.isArray(channelIds) && channelIds.length > 0) {
+        targetChannels = channels.filter((c) => channelIds.includes(c.id));
+      }
+
+      const toProcess = targetChannels.filter(
+        (c) => overwrite || !c.description || c.description.trim() === ""
+      );
+
+      if (toProcess.length === 0) {
+        return res.json({
+          success: true,
+          updatedCount: 0,
+          totalChecked: targetChannels.length,
+          message: "所选频道均已有描述与备注"
+        });
+      }
+
+      const prepareList = toProcess.map((ch) => {
+        const gNames = (ch.groupIds || [])
+          .map((gId) => groups.find((g) => g.id === gId)?.name)
+          .filter(Boolean) as string[];
+        return {
+          id: ch.id,
+          name: ch.name,
+          groupNames: gNames,
+          epgId: ch.epgId,
+          description: ch.description
+        };
+      });
+
+      const results = await batchDescribeChannelsWithAi(prepareList);
+      let updatedCount = 0;
+
+      for (const resItem of results) {
+        const found = channels.find((c) => c.id === resItem.id);
+        if (found && resItem.description) {
+          found.description = resItem.description;
+          updatedCount++;
+        }
+      }
+
+      if (updatedCount > 0) {
+        saveData();
+      }
+
+      res.json({
+        success: true,
+        updatedCount,
+        totalChecked: targetChannels.length,
+        message: `已成功为 ${updatedCount} 个频道生成 AI 描述与备注！`
+      });
+    } catch (err: any) {
+      console.error("[Batch Describe Error]:", err);
+      res.status(500).json({ error: "批量生成描述失败: " + err.message });
     }
   });
 

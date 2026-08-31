@@ -125,13 +125,31 @@ export const SortableChannelItem: React.FC<SortableChannelItemProps> = ({
                 已隔离
               </span>
             )}
+            {channel.description && /已?停播|下线|停运|终止/i.test(channel.description) && (
+              <span className="text-[9px] font-bold bg-rose-100 text-rose-700 border border-rose-200 px-1 py-0.2 rounded shrink-0">
+                已停播
+              </span>
+            )}
+            {channel.description && /已?合并|重组|更名|并入/i.test(channel.description) && (
+              <span className="text-[9px] font-bold bg-amber-100 text-amber-700 border border-amber-200 px-1 py-0.2 rounded shrink-0">
+                已合并
+              </span>
+            )}
           </div>
-          <p className="text-[10px] text-slate-400 mt-0.5 truncate">
-            EPG ID:{" "}
-            <span className="font-mono text-[9px] text-slate-500 font-bold bg-slate-100 px-1 py-0.5 rounded">
-              {channel.epgId || "无"}
-            </span>
-          </p>
+          <div className="flex items-center gap-2 mt-0.5 flex-wrap">
+            <p className="text-[10px] text-slate-400 truncate">
+              EPG ID:{" "}
+              <span className="font-mono text-[9px] text-slate-500 font-bold bg-slate-100 px-1 py-0.5 rounded">
+                {channel.epgId || "无"}
+              </span>
+            </p>
+            {channel.description && (
+              <p className="text-[10px] text-slate-500 font-normal truncate max-w-xs sm:max-w-md flex items-center gap-1" title={`频道描述与备注: ${channel.description}`}>
+                <span className="text-slate-400 shrink-0">📝</span>
+                <span className="truncate">{channel.description}</span>
+              </p>
+            )}
+          </div>
         </div>
       </div>
 

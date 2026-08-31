@@ -30,6 +30,7 @@ export interface ChannelSuggestion {
   logo: string;
   alias: string[];
   epgId: string;
+  description?: string;
   confidence: number;
   reason: string;
 }
@@ -1476,6 +1477,7 @@ export function deduceChannelRule(rawName: string): ChannelSuggestion {
     logo: defaultLogo,
     alias: aliases,
     epgId: epgIdCandidate || "tv",
+    description: deduceDetailedChannelDescription(cleanName, categoryList, epgIdCandidate),
     confidence: detectedProvince ? 0.95 : 0.88,
     reason: detectedProvince ? `识别为${detectedProvince}地方电视频道` : `智能规则分析归类为: ${category}`
   };
@@ -1760,6 +1762,7 @@ export async function suggestChannelMetadata(
   "logo": "标准高清透明台标URL (若不确定可留空或推荐 https://live.fanmingming.com/tv/xxx.png 或 https://epg.112114.xyz/logo/xxx.png)",
   "alias": ["别名1", "别名2", "常见简称", "英文字母简称"],
   "epgId": "标准 EPG 匹配标识 (如 cctv13, cctv1, hunantv)",
+  "description": "频道简短描述与备注 (30字以内，如主要播放内容、频道定位、停播/合并状态等)",
   "confidence": 0.95,
   "reason": "推荐理由简述 (15字以内)"
 }`;
@@ -1795,6 +1798,7 @@ export async function suggestChannelMetadata(
         logo: finalLogo,
         alias: allAliases,
         epgId: String(parsed.epgId || "").trim().toLowerCase(),
+        description: parsed.description ? String(parsed.description).trim() : "",
         confidence: typeof parsed.confidence === "number" ? parsed.confidence : 0.9,
         reason: parsed.reason ? String(parsed.reason) : `${effectiveConfig?.model || "AI"} 智能推导完成`
       };
@@ -2069,3 +2073,451 @@ export async function testAiConnection(rawConfig?: Partial<AiConfig>): Promise<{
     };
   }
 }
+
+// Comprehensive intelligent channel description and knowledge deduction engine
+export function deduceDetailedChannelDescription(
+  name: string,
+  groupNames?: string[],
+  epgId?: string
+): string {
+  const raw = (name || "").trim();
+  const clean = raw.toLowerCase().replace(/[\s\-_]/g, "");
+
+  if (!clean) return "电视频道直播与综合资讯服务。";
+
+  // 1. Taiwan Sanli (三立)
+  if (/三立/i.test(clean)) {
+    if (/新闻|inews|财经/i.test(clean)) {
+      if (/inews|财经/i.test(clean)) {
+        return "台湾地区三立电视（SET）旗下的财经与即时新闻频道（台湾有线电视CH88/CH89）。聚焦台股走势、理财投资与全球财经动态。";
+      }
+      return "台湾地区三立电视（SET）旗下的24小时即时新闻频道（台湾有线电视CH54）。主要报道台湾政经新闻、社会焦点与政论评论节目（如《郑知道了》《新台湾加油》）。";
+    }
+    if (/台湾台|台语|本土/i.test(clean)) {
+      return "台湾地区三立电视（SET）旗下的本土频道（台湾有线电视CH29）。主要播出台湾闽南语八点档戏剧、美食行脚与戏剧节目（如《戏说台湾》《超级夜总会》）。";
+    }
+    if (/都会|综合/i.test(clean)) {
+      return "台湾地区三立电视（SET）旗下的都市综合频道（台湾有线电视CH30）。主打流行都市偶像剧、流行音乐与热门综艺节目。";
+    }
+    if (/国际|戏剧/i.test(clean)) {
+      return "台湾地区三立电视（SET）旗下的影视剧场频道，播出热门华人戏剧与自制偶像剧。";
+    }
+    return "台湾地区三立电视（SET）旗下的主流电视机构，涵盖新闻、戏剧与综合娱乐频道。";
+  }
+
+  // 2. Taiwan Eastern TV (东森)
+  if (/东森|ebc/i.test(clean)) {
+    if (/新闻|news/i.test(clean)) {
+      return "台湾地区东森电视（EBC）旗下的新闻旗舰频道（台湾有线电视CH51）。24小时报道台湾与全球热点新闻，代表政论与探索解密节目《关键时刻》（刘宝杰主持）。";
+    }
+    if (/财经|新闻2/i.test(clean)) {
+      return "台湾地区东森电视（EBC）旗下的财经新闻频道（台湾有线电视CH57）。专注于台湾与全球金融股市、理财投资与产业趋势。";
+    }
+    if (/综合/i.test(clean)) {
+      return "台湾地区东森电视（EBC）旗下的综合娱乐频道（台湾有线电视CH32）。主打热门谈话节目（如《医师好辣》）、生活资讯与综艺。";
+    }
+    if (/戏剧/i.test(clean)) {
+      return "台湾地区东森电视（EBC）旗下的戏剧频道（台湾有线电视CH40）。主要播出热播台剧、陆剧、韩剧及优质自制剧集。";
+    }
+    if (/幼幼|yoyo/i.test(clean)) {
+      return "台湾地区东森电视（EBC）旗下的知名儿童亲子频道（台湾有线电视CH25）。播出国内外知名动画、哥哥姐姐唱跳节目与亲子互动频道。";
+    }
+    if (/洋片|电影/i.test(clean)) {
+      if (/洋片/i.test(clean)) {
+        return "台湾地区东森电视（EBC）旗下的西方电影频道（台湾有线电视CH66）。首播好莱坞动作片、科幻大片及欧美院线佳作。";
+      }
+      return "台湾地区东森电视（EBC）旗下的华语电影频道（台湾有线电视CH62）。播放经典港产片、国语电影及华语院线片。";
+    }
+    return "台湾地区东森电视（EBC）旗下的主流电视机构，涵盖新闻、财经、戏剧与儿童娱乐。";
+  }
+
+  // 3. Taiwan CTi (中天)
+  if (/中天|cti/i.test(clean)) {
+    if (/新闻/i.test(clean)) {
+      return "台湾地区旺旺中天媒体集团旗下的24小时新闻频道（原台湾有线电视CH52）。主要播报台湾社会政经新闻与深度政论评论（如《文茜的世界周报》《新闻龙卷风》），2020年底因NCC未予续牌转战YouTube及网络全媒体直播。";
+    }
+    if (/综合/i.test(clean)) {
+      return "台湾地区旺旺中天媒体集团旗下的综合娱乐频道（台湾有线电视CH36）。主要播出热门综艺、谈话节目与经典戏剧。";
+    }
+    if (/娱乐/i.test(clean)) {
+      return "台湾地区旺旺中天媒体集团旗下的娱乐频道（台湾有线电视CH39）。播出流行娱乐新闻、真人秀与流行剧集。";
+    }
+    return "台湾地区旺旺中天媒体集团旗下的电视与网络直播频道，涵盖新闻评论与综合娱乐。";
+  }
+
+  // 4. Taiwan TVBS
+  if (/tvbs|联意/i.test(clean)) {
+    if (/新闻/i.test(clean)) {
+      return "台湾地区联意制作（TVBS）旗下的新闻旗舰频道（台湾有线电视CH55）。台湾首家卫星电视台新闻台，报道台湾政经新闻与深度调查（如《少康战情室》《新闻夜总会》）。";
+    }
+    if (/欢乐|56|42/i.test(clean)) {
+      return "台湾地区TVBS旗下的综合娱乐频道（台湾有线电视CH42/CH56）。主打热门时尚生活与流行综艺（如《女人我最大》《食尚玩家》）。";
+    }
+    return "台湾地区TVBS旗下的主流新闻与综合娱乐频道。";
+  }
+
+  // 5. Taiwan FTV (民视)
+  if (/民视|ftv/i.test(clean)) {
+    if (/新闻/i.test(clean)) {
+      return "台湾地区民间全民电视（FTV）旗下的新闻频道（台湾有线电视CH53）。24小时聚焦台湾本土政经与社会即时动态。";
+    }
+    if (/无线|主频/i.test(clean) || clean === "民视") {
+      return "台湾地区民间全民电视（FTV）的主频道（台湾无线五台之一）。主要播出高收视本土闽南语八点档大戏、戏剧与综合综艺。";
+    }
+    return "台湾地区民间全民电视（FTV）旗下频道，主打本土闽南语戏剧与即时新闻。";
+  }
+
+  // 6. Taiwan Wireless 5 (TTV, CTV, CTS, PTS)
+  if (/台视|ttv/i.test(clean)) {
+    return "台湾地区台湾电视公司（TTV）主频道（台湾无线五台之一）。台湾历史最悠久的电视台，播出即时新闻、八点档戏剧与大型典礼（如金曲奖）。";
+  }
+  if (/中视|ctv/i.test(clean)) {
+    return "台湾地区中国电视公司（CTV）主频道（台湾无线五台之一）。主要播出新闻、华语戏剧与热门综艺节目。";
+  }
+  if (/华视|cts/i.test(clean)) {
+    return "台湾地区中华电视公司（CTS）主频道（台湾无线五台之一，公广集团成员）。主要播出新闻、公性节目与经典影视。";
+  }
+  if (/公视|pts|公共电视/i.test(clean)) {
+    return "台湾地区公共电视文化事业基金会（PTS）旗下的公共电视台。无商业广告，主要播出高品质自制旗舰台剧（如《我们与恶的距离》）、纪录片与优质儿童节目。";
+  }
+
+  // 7. Taiwan Videoland (纬来)
+  if (/纬来/i.test(clean)) {
+    if (/体育/i.test(clean)) {
+      return "台湾地区纬来电视网旗下的专业体育频道（台湾有线电视CH72）。全程直播CPBL中华职棒、NBA及国际顶级体育赛事。";
+    }
+    if (/日本/i.test(clean)) {
+      return "台湾地区纬来电视网旗下的日本影视频道（台湾有线电视CH75）。同步首播日本热门日剧、综艺及流行文化节目。";
+    }
+    return "台湾地区纬来电视网旗下的专业主题频道。";
+  }
+
+  // 8. Hong Kong TVB (无线电视)
+  if (/tvb|无线/i.test(clean)) {
+    if (/翡翠|jade/i.test(clean)) {
+      return "香港电视广播有限公司（TVB）旗下的粤语旗舰综合频道（香港免费电视81台）。香港收视率最高的电视台，主播TVB自制粤语剧集、新闻及大型综艺。";
+    }
+    if (/明珠|pearl/i.test(clean)) {
+      return "香港电视广播有限公司（TVB）旗下的免费英语频道（香港免费电视84台）。首播欧美院线好莱坞大片、美剧、纪录片及英语新闻。";
+    }
+    if (/新闻|i-?news|互动新闻/i.test(clean)) {
+      return "香港电视广播有限公司（TVB）旗下的24小时免费粤语新闻频道（香港免费电视83台）。全天候即时播报香港、内地及全球焦点新闻。";
+    }
+    if (/j2|tvb\s*j2/i.test(clean)) {
+      return "香港TVB旗下面向年轻观众的时尚娱乐频道（香港免费电视82台）。主打潮流、动漫、年轻综艺与外购剧。";
+    }
+    return "香港电视广播有限公司（TVB）旗下的电视频道，涵盖粤语剧集、新闻与综艺。";
+  }
+
+  // 9. Hong Kong Phoenix TV (凤凰卫视)
+  if (/凤凰|phoenix/i.test(clean)) {
+    if (/资讯/i.test(clean)) {
+      return "香港凤凰卫视控股旗下的24小时华语新闻频道。立足香港、面向全球华人，即时播报全球突发事件与深度财经资讯（如《华闻大生线》《时事直通车》）。";
+    }
+    if (/香港/i.test(clean)) {
+      return "香港凤凰卫视旗下的粤语资讯综合频道。主要面向粤港澳大湾区观众，提供粤语新闻、时事分析与专题节目。";
+    }
+    if (/中文|主频/i.test(clean) || clean.includes("凤凰卫视")) {
+      return "香港凤凰卫视控股旗下的华语综合旗舰频道。以客观报道、文化深度与国际视角著称，代表节目《时事直通车》《军情观察室》《文涛拍案》等。";
+    }
+    return "香港凤凰卫视旗下的华语主流电视媒体，覆盖全球华人圈。";
+  }
+
+  // 10. Macau TV (澳广视/莲花)
+  if (/澳视|tdm|澳广视|澳门电视/i.test(clean)) {
+    return "澳门特别行政区公共电视台（TDM澳广视）。以粤语和葡语播报澳门本地政经新闻、文化活动、博览与娱乐节目。";
+  }
+  if (/莲花|lotus/i.test(clean)) {
+    return "澳门特别行政区澳门莲花卫视（Macau Lotus TV）。以华语播报澳门文化、博览资讯、电影与影视艺术节目。";
+  }
+
+  // 11. Hong Kong ViuTV
+  if (/viutv|hk-?tv/i.test(clean)) {
+    return "香港香港电视娱乐（HKTVE，电讯盈科旗下）运营的免费电视台（香港免费电视99台）。主打年轻人喜爱的自制真人秀、潮流剧集与流行音乐节。";
+  }
+
+  // 12. Global Premium (HBO, Discovery, NGC)
+  if (/hbo/i.test(clean)) {
+    if (/family/i.test(clean)) {
+      return "华纳兄弟探索（Warner Bros. Discovery）旗下的HBO家庭电影频道。播放适合全家观赏的喜剧、动画与温馨好莱坞影片。";
+    }
+    return "华纳兄弟探索（Warner Bros. Discovery）旗下的全球旗舰付费电影频道。首播好莱坞院线大片及自制高品质美剧（如《权力的游戏》）。";
+  }
+  if (/discovery|探索/i.test(clean)) {
+    return "华纳兄弟探索公司旗下的全球顶级纪实频道。播放科学探索、自然地理、历史解密与生存挑战纪录片。";
+  }
+  if (/national\s*geo|国家地理|nat\s*geo/i.test(clean)) {
+    return "华特迪士尼公司旗下的国家地理频道（National Geographic）。播放高品质自然地理、野生动物、探险与科学纪录片。";
+  }
+
+  // 13. CCTV Series
+  if (/cctv|央视|中央/i.test(clean)) {
+    if (/13|新闻/i.test(clean)) {
+      return "中央广播电视总台（CMG）旗下24小时新闻专业频道。全天候直播国内国际突发事件与热点报道，核心节目《新闻联播》《焦点访谈》《新闻1+1》。";
+    }
+    if (/1|综合/i.test(clean)) {
+      return "中央广播电视总台（CMG）国家级主频道。首播《新闻联播》《焦点访谈》及国家级重大晚会与黄金档电视剧。";
+    }
+    if (/2|财经/i.test(clean)) {
+      return "中央广播电视总台（CMG）财经专业频道。聚焦国内外经济大趋势、股市行情与理财资讯，代表节目《经济半小时》《第一时间》。";
+    }
+    if (/3|综艺/i.test(clean)) {
+      return "中央广播电视总台（CMG）大型文艺与综艺频道。播出大型歌舞晚会、喜剧综艺与流行文艺节目，代表节目《星光大道》《开门大吉》。";
+    }
+    if (/4|中文国际/i.test(clean)) {
+      return "中央广播电视总台（CMG）面向全球华人的中文国际频道。报道全球要闻与中华文化，代表节目《中国新闻》《海峡两岸》。";
+    }
+    if (/5\+|5plus|体育赛事/i.test(clean)) {
+      return "中央广播电视总台（CMG）赛事赛事专业频道。全程高清/4K直播国内外顶级体育赛事（如奥运会、世界杯、欧冠、NBA）。";
+    }
+    if (/5|体育/i.test(clean)) {
+      return "中央广播电视总台（CMG）旗舰体育频道。全天候转播国内外各大体育联赛、体育新闻《体育世界》与赛事专题。";
+    }
+    if (/6|电影/i.test(clean)) {
+      return "中央广播电视总台（CMG）电影专业频道。首播国产新片、好莱坞影片及经典电影。";
+    }
+    if (/7|国防军事|军事/i.test(clean)) {
+      return "中央广播电视总台（CMG）国防军事专业频道。报道国内外国防军事动态、兵器装备与军事历史。";
+    }
+    if (/8|电视剧/i.test(clean)) {
+      return "中央广播电视总台（CMG）电视剧专业频道。全天候首播与重播国内外热门电视剧与精品剧场。";
+    }
+    if (/9|纪录/i.test(clean)) {
+      return "中央广播电视总台（CMG）纪录片专业频道。播出自然、历史、人文、科技及社会类高品质纪录片。";
+    }
+    if (/10|科教/i.test(clean)) {
+      return "中央广播电视总台（CMG）科学与教育频道。代表节目《百家讲坛》《探索·发现》《走进科学》。";
+    }
+    if (/11|戏曲/i.test(clean)) {
+      return "中央广播电视总台（CMG）中国传统戏曲频道。弘扬京剧、越剧、黄梅戏及全国地方戏曲名家名段。";
+    }
+    if (/12|社会与法|法制/i.test(clean)) {
+      return "中央广播电视总台（CMG）法制普法与社会频道。报道典型法治案件、普法宣传与社会热点专题。";
+    }
+    if (/14|少儿/i.test(clean)) {
+      return "中央广播电视总台（CMG）少儿频道。播出优秀国产动画片、少儿科普与儿童综艺节目（如《智慧树》《大风车》）。";
+    }
+    if (/15|音乐/i.test(clean)) {
+      return "中央广播电视总台（CMG）音乐专业频道。播出古典音乐、流行音乐演唱会及音乐颁奖盛典。";
+    }
+    if (/16|奥林匹克/i.test(clean)) {
+      return "中央广播电视总台（CMG）与国际奥委会合作的奥林匹克频道（4K超高清）。24小时播出奥林匹克赛事与奥运文化。";
+    }
+    if (/17|农业农村/i.test(clean)) {
+      return "中央广播电视总台（CMG）农业农村专业频道。关注乡村振兴、农业科技、三农资讯与风土人情。";
+    }
+    return "中央广播电视总台（CMG）旗下的国家级电视频道。";
+  }
+
+  // 14. CGTN
+  if (/cgtn|环球电视/i.test(clean)) {
+    return "中国国际电视台（CGTN，中央广播电视总台多语种国际传播机构）。向全球观众播报中国与国际要闻，提供客观的中国视角。";
+  }
+
+  // 15. Provincial Satellites (省级卫视)
+  if (/湖南卫视|芒果/i.test(clean)) {
+    return "湖南广播电视台旗下的旗舰省级卫视频道。中国内地最具影响力的省级卫视之一，主打青年流行文化、大型创新综艺与金鹰独播剧场。";
+  }
+  if (/浙江卫视/i.test(clean)) {
+    return "浙江广播电视集团旗下的省级卫视频道。主打大型户外真人秀综艺（如《奔跑吧》《中国好声音》）与中国蓝剧场。";
+  }
+  if (/东方卫视|上海卫视/i.test(clean)) {
+    return "上海广播电视台（SMG）旗下的省级卫视频道。立足上海、面向全国，主打海派都市文化、即时新闻资讯与精品海派综艺。";
+  }
+  if (/江苏卫视/i.test(clean)) {
+    return "江苏省广播电视总台旗下的省级卫视频道。主打情感类综艺、大型跨年演唱会与幸福剧场。";
+  }
+  if (/北京卫视/i.test(clean)) {
+    return "北京广播电视台旗下的省级卫视频道。立足首都、面向全国，主打文化养生、历史纪录片与品质剧场。";
+  }
+  if (/广东卫视/i.test(clean)) {
+    return "广东广播电视台旗下的省级卫视频道。立足大湾区，主打粤港澳文化、经济资讯与华南特色文化。";
+  }
+
+  // 16. Migu / Streaming / Sports
+  if (/咪咕/i.test(clean)) {
+    return "中国移动咪咕公司旗下的体育与高清直播专线。全程高清转播奥运会、世界杯、五大联赛、NBA及顶级赛事。";
+  }
+  if (/爱奇艺|腾讯视频|优酷|哔哩哔哩|bilibili|bestv|百视通/i.test(clean)) {
+    return "互联网流媒体平台专线轮播频道。24小时不间断高清轮播经典电影、热门陆剧、动漫或特色专题。";
+  }
+
+  // 17. Regional Fallbacks
+  const isTaiwan = /台湾|台视|中视|华视|民视|东森|三立|中天|tvbs|纬来|公视/i.test(clean) || (groupNames && groupNames.some(g => /台湾|港台|台/i.test(g)));
+  const isHongKong = /香港|tvb|翡翠|明珠|凤凰|viutv|港/i.test(clean) || (groupNames && groupNames.some(g => /香港|港台|港/i.test(g)));
+  const isMacau = /澳门|澳视|莲花|澳/i.test(clean) || (groupNames && groupNames.some(g => /澳门|港台/i.test(g)));
+
+  if (isTaiwan) {
+    return `台湾地区广播电视机构旗下的频道（${raw}）。主要播报台湾地区政经新闻、本土戏剧与综合娱乐节目。`;
+  }
+  if (isHongKong) {
+    return `香港特别行政区电视广播机构旗下的频道（${raw}）。面向粤港澳大湾区与全球观众提供粤语/英语剧集、即时新闻及综合节目。`;
+  }
+  if (isMacau) {
+    return `澳门特别行政区电视广播机构旗下的频道（${raw}）。提供澳门本地新闻、文化博览与娱乐节目。`;
+  }
+
+  const provMatch = raw.match(/(北京|上海|天津|重庆|广东|浙江|江苏|山东|河南|四川|湖北|湖南|福建|江西|安徽|河北|山西|辽宁|吉林|黑龙江|广西|云南|贵州|陕西|甘肃|青海|海南|内蒙古|新疆|西藏|香港|澳门|台湾)/);
+  if (provMatch) {
+    return `${provMatch[1]}地区广播电视台旗下的电视频道（${raw}）。报道当地民生新闻、方言戏剧与地方文化资讯。`;
+  }
+
+  return `${raw} 电视频道，提供电视节目直播与综合资讯广播服务。`;
+}
+
+// AI Helper function to generate single channel description & notes
+export async function describeChannelWithAi(
+  channelName: string,
+  groupNames?: string[],
+  epgId?: string,
+  existingNotes?: string,
+  config?: Partial<AiConfig>
+): Promise<string> {
+  const trimmed = (channelName || "").trim();
+  if (!trimmed) {
+    throw new Error("频道名称不能为空");
+  }
+
+  const detailedFallback = deduceDetailedChannelDescription(trimmed, groupNames, epgId);
+
+  const effectiveConfig: AiConfig = resolveEffectiveAiConfig(config || {});
+  const activeProvider = effectiveConfig?.provider || "builtin";
+  const hasKey = Boolean(effectiveConfig?.apiKey?.trim() || (activeProvider === "gemini" && process.env.GEMINI_API_KEY));
+
+  if (activeProvider === "builtin" || !hasKey) {
+    return detailedFallback;
+  }
+
+  const prompt = `请为以下电视频道撰写一份准确、详实且极富参考价值的频道描述与备注（控制在 40-90 字以内）：
+
+频道名称：【${trimmed}】
+${groupNames && groupNames.length > 0 ? `所属分类：${groupNames.join(", ")}\n` : ""}${epgId ? `EPG标识：${epgId}\n` : ""}${existingNotes ? `原有备注：${existingNotes}\n` : ""}知识库提示：${detailedFallback}
+
+【严格编写规范（非常重要）】：
+1. 港台及海外频道（重点）：必须明确标明【具体地区】（如台湾地区、香港特别行政区、澳门特别行政区、美国等）、【出品或运营机构/电视台】（如台湾三立电视 SET、香港TVB/电视广播有限公司、东森电视 EBC、旺旺中天 CTi、联意制作 TVBS、民视 FTV、凤凰卫视、HBO等）、【所属频道系列】（如三立新闻系列、TVB翡翠台系列等）、【主要播放内容】（如24小时即时新闻、政论爆料节目《关键时刻》《少康战情室》《郑知道了》、闽南语/粤语戏剧、八点档大戏、流行综艺等）以及【频道号或历史背景更迭】（如：台湾有线电视CH54频道、中天新闻台于2020年底转战YouTube及网络全媒体直播、TVB翡翠台为香港收视最高的粤语旗舰频道等）。
+2. 央视/省级卫视/地方台：必须标明归属机构（如中央广播电视总台 CMG、湖南广播电视台、上海广播电视台 SMG 等）、频道定位及旗舰节目（如 CCTV-13 新闻频道的《新闻联播》《焦点访谈》《新闻1+1》；湖南卫视的青春流行综艺与金鹰独播剧场等）。
+3. 轮播/网络/体育/特色频道：必须标明源头平台（如咪咕视频、爱奇艺、百视通 BesTV 等）及播放特色（如24小时周星驰电影轮播、4K杜比影院、KPL电竞赛事专线等）。
+4. 绝不敷衍：绝对禁止输出类似“xxx电视频道，分类于 [xxx]”、“标准电视频道”等任何毫无信息量的套话模板！
+
+严格按 JSON 格式输出：
+{
+  "description": "详细的频道描述与备注文字"
+}`;
+
+  try {
+    let rawOutput = "";
+    if (activeProvider === "gemini") {
+      rawOutput = await callGeminiApi(prompt);
+    } else {
+      rawOutput = await callOpenAiCompatible(effectiveConfig, prompt, true);
+    }
+
+    const parsed = extractJsonFromText(rawOutput);
+    let resultDesc = "";
+    if (parsed && parsed.description) {
+      resultDesc = String(parsed.description).trim();
+    } else {
+      resultDesc = rawOutput.replace(/[{}"']/g, "").trim();
+    }
+
+    if (!resultDesc || resultDesc.includes("分类于 [") || resultDesc.includes("标准电视频道") || resultDesc.length < 12) {
+      return detailedFallback;
+    }
+
+    return resultDesc;
+  } catch (err: any) {
+    console.warn(`[AI Channel Describe Error on '${trimmed}']:`, err.message || err);
+    return detailedFallback;
+  }
+}
+
+// AI Helper function to batch generate channel descriptions
+export async function batchDescribeChannelsWithAi(
+  channelsList: Array<{ id: string; name: string; groupNames?: string[]; epgId?: string; description?: string }>,
+  config?: Partial<AiConfig>
+): Promise<Array<{ id: string; description: string }>> {
+  if (!Array.isArray(channelsList) || channelsList.length === 0) {
+    return [];
+  }
+
+  const effectiveConfig: AiConfig = resolveEffectiveAiConfig(config || {});
+  const activeProvider = effectiveConfig?.provider || "builtin";
+  const hasKey = Boolean(effectiveConfig?.apiKey?.trim() || (activeProvider === "gemini" && process.env.GEMINI_API_KEY));
+
+  const fallbackMap = new Map<string, string>();
+  channelsList.forEach((ch) => {
+    fallbackMap.set(ch.id, deduceDetailedChannelDescription(ch.name, ch.groupNames, ch.epgId));
+  });
+
+  if (activeProvider === "builtin" || !hasKey) {
+    return channelsList.map((ch) => ({
+      id: ch.id,
+      description: fallbackMap.get(ch.id) || `${ch.name} 电视频道`
+    }));
+  }
+
+  const promptChannels = channelsList
+    .map((c, i) => `${i + 1}. [ID: ${c.id}] 名称: ${c.name}, 分类: ${c.groupNames?.join("/") || "其它"}`)
+    .join("\n");
+
+  const prompt = `请为以下 ${channelsList.length} 个电视频道批量生成详细、专业、信息密集的频道描述与备注（每个频道 40-80 字以内）：
+
+${promptChannels}
+
+【严格编写规范（非常重要）】：
+1. 港台及海外频道：必须明确标明【地区】（如台湾地区、香港特别行政区、澳门特别行政区、美国等）、【运营电视台/机构】（如台湾三立电视SET、香港TVB、东森EBC、旺旺中天CTi、TVBS、民视FTV、凤凰卫视、HBO等）、【主要播放内容与代表节目】（如24小时即时新闻、政论节目《关键时刻》《少康战情室》《郑知道了》、闽南语/粤语剧集、八点档大戏、流行综艺等）以及【频道号/历史背景】（如台湾有线电视CH54频道、中天转YouTube直播等）。
+2. 央视/省级卫视/地方台：标明归属机构（如中央广播电视总台CMG、湖南广电）、频道定位与核心节目（如《新闻联播》《焦点访谈》《快乐大本营》等）。
+3. 轮播/网络/体育/特色频道：标明源平台（咪咕视频、爱奇艺、百视通等）与主题内容（如周星驰电影轮播、4K影院、电竞赛事等）。
+4. 绝对禁止输出类似“xxx电视频道，分类于 [xxx]”等无用句式模板！
+
+严格按以下 JSON 数组格式输出：
+[
+  {
+    "id": "频道ID",
+    "description": "详细的频道描述与备注"
+  }
+]`;
+
+  try {
+    let rawOutput = "";
+    if (activeProvider === "gemini") {
+      rawOutput = await callGeminiApi(prompt);
+    } else {
+      rawOutput = await callOpenAiCompatible(effectiveConfig, prompt, true);
+    }
+
+    const parsed = extractJsonFromText(rawOutput);
+    const results: Array<{ id: string; description: string }> = [];
+
+    if (Array.isArray(parsed)) {
+      for (const item of parsed) {
+        const id = String(item.id || "");
+        let desc = String(item.description || "").trim();
+        if (!desc || desc.includes("分类于 [") || desc.includes("标准电视频道") || desc.length < 12) {
+          desc = fallbackMap.get(id) || "";
+        }
+        if (id && desc) {
+          results.push({ id, description: desc });
+        }
+      }
+    }
+
+    channelsList.forEach((ch) => {
+      if (!results.some((r) => r.id === ch.id)) {
+        results.push({
+          id: ch.id,
+          description: fallbackMap.get(ch.id) || `${ch.name} 电视频道`
+        });
+      }
+    });
+
+    return results;
+  } catch (err: any) {
+    console.warn("[Batch Describe AI Error]:", err.message || err);
+    return channelsList.map((ch) => ({
+      id: ch.id,
+      description: fallbackMap.get(ch.id) || `${ch.name} 电视频道`
+    }));
+  }
+}
+

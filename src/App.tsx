@@ -231,8 +231,10 @@ export default function App() {
     logo: true,
     category: true,
     epgId: true,
-    alias: true
+    alias: true,
+    description: true
   });
+  const [isAiDescribing, setIsAiDescribing] = useState(false);
 
   // Form states for modals/editors
   const [channelFilterStatus, setChannelFilterStatus] = useState<"active" | "all_with_isolated" | "isolated">("active");
@@ -248,6 +250,7 @@ export default function App() {
     logo: "",
     alias: "",
     epgId: "",
+    description: "",
     isolated: false
   });
 
@@ -1263,6 +1266,7 @@ export default function App() {
         logo: channelForm.logo,
         alias: Array.from(new Set(channelForm.alias.split(/[,;，；:]/).map(s => s.trim()).filter(Boolean))),
         epgId: channelForm.epgId,
+        description: channelForm.description,
         isolated: channelForm.isolated
       };
 
@@ -2342,6 +2346,7 @@ export default function App() {
       logo: "",
       alias: "",
       epgId: "",
+      description: "",
       isolated: false
     });
     setChannelModalGroupFilter("");
@@ -2361,6 +2366,7 @@ export default function App() {
       logo: ch.logo || "",
       alias: ch.alias ? ch.alias.join(", ") : "",
       epgId: ch.epgId || "",
+      description: ch.description || "",
       isolated: !!ch.isolated
     });
     setChannelModalGroupFilter("");
@@ -2844,11 +2850,82 @@ export default function App() {
       appliedList.push("分类");
     }
 
+    if (fields.description && suggestion.description) {
+      nextForm.description = suggestion.description;
+      appliedList.push("描述/备注");
+    }
+
     setChannelForm(nextForm);
     if (appliedList.length > 0) {
       showFeedback("success", `已按选定填入【${appliedList.join("、")}】！`);
     } else {
       showFeedback("info", "未勾选任何填入字段");
+    }
+  };
+
+  // Single channel AI description generator
+  const handleAiGenerateDescription = async () => {
+    if (!channelForm.name.trim()) {
+      showFeedback("error", "请先输入频道名称");
+      return;
+    }
+    setIsAiDescribing(true);
+    try {
+      const gNames = (channelForm.groupIds || [])
+        .map((gId) => groups.find((g) => g.id === gId)?.name)
+        .filter(Boolean) as string[];
+      if (channelForm.newGroupsString) {
+        gNames.push(channelForm.newGroupsString);
+      }
+
+      const res = await fetch("/api/ai/describe-channel", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          channelName: channelForm.name.trim(),
+          groupNames: gNames,
+          epgId: channelForm.epgId,
+          existingNotes: channelForm.description
+        })
+      });
+      const data = await res.json();
+      if (res.ok && data.success && data.description) {
+        setChannelForm((prev) => ({ ...prev, description: data.description }));
+        showFeedback("success", "已成功生成 AI 频道描述与备注");
+      } else {
+        showFeedback("error", data.error || "生成描述失败");
+      }
+    } catch (err: any) {
+      showFeedback("error", "请求 AI 描述接口异常: " + err.message);
+    } finally {
+      setIsAiDescribing(false);
+    }
+  };
+
+  // Batch channel AI description generator
+  const handleBatchGenerateDescriptions = async () => {
+    if (selectedChannelIds.length === 0) {
+      showFeedback("error", "请先选择需要生成描述的频道");
+      return;
+    }
+    setLoading(true);
+    try {
+      const res = await fetch("/api/channels/batch-describe", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ channelIds: selectedChannelIds, overwrite: true })
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        await fetchData();
+        showFeedback("success", data.message || `已为 ${data.updatedCount} 个频道生成 AI 描述`);
+      } else {
+        showFeedback("error", data.error || "批量生成描述失败");
+      }
+    } catch (err: any) {
+      showFeedback("error", "批量请求失败: " + err.message);
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -3803,6 +3880,14 @@ export default function App() {
                           >
                             <Sparkles className="w-3 h-3 text-amber-300" />
                             AI 补齐台标
+                          </button>
+                          <button
+                            onClick={handleBatchGenerateDescriptions}
+                            className="bg-indigo-600 hover:bg-indigo-700 text-white text-[10px] font-bold px-2.5 py-1 rounded-lg transition shadow-xs cursor-pointer flex items-center gap-1"
+                            title="使用 AI 批量生成所选频道的描述与备注信息"
+                          >
+                            <Sparkles className="w-3 h-3 text-cyan-300" />
+                            AI 生成描述
                           </button>
                           {selectedCategory !== "all" && (
                             <button
@@ -7324,6 +7409,16 @@ export default function App() {
                             />
                             <span className="truncate">别名</span>
                           </label>
+
+                          <label className="flex items-center gap-1 cursor-pointer bg-white px-1.5 py-1 rounded border border-slate-200/80 text-slate-700 select-none col-span-2 sm:col-span-1">
+                            <input
+                              type="checkbox"
+                              checked={aiSelectedFields.description}
+                              onChange={(e) => setAiSelectedFields({ ...aiSelectedFields, description: e.target.checked })}
+                              className="w-3 h-3 text-indigo-600 rounded"
+                            />
+                            <span className="truncate" title={aiChannelSuggestion.description}>描述/备注</span>
+                          </label>
                         </div>
                       </div>
 
@@ -7583,6 +7678,32 @@ export default function App() {
                 </div>
 
                 {/* Soft Hide / Isolate Channel Toggle */}
+                <div className="space-y-1 font-sans">
+                  <div className="flex justify-between items-center">
+                    <label className="text-[11px] text-slate-700 font-bold flex items-center gap-1.5">
+                      <FileText className="w-3.5 h-3.5 text-indigo-600" />
+                      <span>频道描述与备注 (Description & Notes)</span>
+                    </label>
+                    <button
+                      type="button"
+                      onClick={handleAiGenerateDescription}
+                      disabled={isAiDescribing || !channelForm.name.trim()}
+                      className="text-[10px] text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200/60 px-2 py-0.5 rounded-md font-bold transition flex items-center gap-1 cursor-pointer disabled:opacity-50"
+                      title="使用 AI 根据频道名称、EPG和分类自动生成详细的频道介绍与备注"
+                    >
+                      <Sparkles className="w-3 h-3 text-indigo-600" />
+                      {isAiDescribing ? "AI 正在生成..." : "AI 智能填入描述"}
+                    </button>
+                  </div>
+                  <textarea
+                    rows={2}
+                    value={channelForm.description || ""}
+                    onChange={(e) => setChannelForm({ ...channelForm, description: e.target.value })}
+                    placeholder="如: 中央电视台新闻频道，24小时不间断播出国内与国际焦点新闻；或填写状态备注如: 已停播、已合并至CCTV-4、高清备用源等..."
+                    className="w-full text-xs p-2 border border-slate-200 rounded-lg focus:border-indigo-500 bg-slate-50 focus:outline-none placeholder-slate-400 text-slate-800 font-sans resize-y"
+                  />
+                </div>
+
                 <div className="pt-0.5 font-sans">
                   <label className="flex items-center gap-2.5 cursor-pointer bg-amber-50/60 hover:bg-amber-50 p-2 rounded-lg border border-amber-200/60 transition">
                     <input
