@@ -3134,12 +3134,75 @@ function parseXmltvTime(timeStr: string): { dateStr: string, timeStr: string } {
   return { dateStr: "", timeStr: "" };
 }
 
+/**
+ * Detects whether an EPG programme item is a service provider watermark, disclaimer, or promotional notice
+ * (e.g. "由xxx提供节目单服务", "本节目单由...提供", "EPG由...提供", "由...整理提供" etc.)
+ */
+function isEpgDisclaimerProgram(title?: string, desc?: string): boolean {
+  const rawTitle = (title || "").trim();
+  const rawDesc = (desc || "").trim();
+  if (!rawTitle && !rawDesc) return false;
+
+  const disclaimerPatterns: RegExp[] = [
+    // 1. Matches "由xxx提供节目单服务", "由xxx提供节目单", "由xxx提供", "由xxx整理提供", "由【xxx】提供", "由 xxx 赞助/更新/发布"
+    /^由\s*[\S\s]+?\s*提供(节目单|服务|支持|赞助|整理|更新)?/i,
+    /由\s*[\S\s]+?\s*(整理|发布|更新|赞助)提供/i,
+    /由\s*【[\S\s]+?】\s*提供/i,
+    /由\s*[a-zA-Z0-9_\u4e00-\u9fa5\.\:\-\@]+\s*提供(节目单|服务|支持|赞助)?/i,
+
+    // 2. Matches "本节目单由...提供", "节目单由...提供", "本EPG由...提供", "本节目由...提供", "节目单来自..."
+    /^(本节目单|节目单|本EPG|EPG|本台节目单|本频道节目单|节目表)\s*(由|来自|更新于|制作于|由[\S\s]+?提供)/i,
+    /(本节目单|节目单|本EPG|EPG|节目表)[\S\s]*?(由[\S\s]+?提供|来自[\S\s]+?|提供节目单|提供EPG)/i,
+
+    // 3. Matches "提供节目单服务", "提供EPG服务", "提供节目单支持"
+    /提供(节目单|EPG)(服务|支持)?$/i,
+    /提供(节目单|EPG)服务/i,
+
+    // 4. Matches promotional notices and group invites: "关注公众号...获取节目单", "欢迎访问...", "加入QQ群...", "更多节目单请访问..."
+    /^(欢迎访问|关注微信|关注公众号|加入QQ群|加入TG群|获取更多节目单|更多节目单请访问|更多节目单)/i,
+    /(关注微信公众号|关注公众号|加入QQ群|加入TG群|加入微信群)[\S\s]*?(节目单|EPG|群|更新)/i,
+    /更多节目单[\S\s]*?(访问|下载|关注|更新|获取)/i,
+
+    // 5. Matches domain/url watermarks in titles
+    /(epg\.pw|112114\.xyz|51zmt\.top|cntv\.cn|diyp|superepg|mytv|tiankong|livednow)[\S\s]*?(提供|节目单|服务|整理)/i,
+    /^(https?:\/\/|www\.)\S+\s*(提供|节目单|EPG)?/i,
+  ];
+
+  for (const pattern of disclaimerPatterns) {
+    if (pattern.test(rawTitle)) {
+      return true;
+    }
+  }
+
+  // Check description if title is a generic indicator like "节目单", "EPG", "公告", "提示", "说明", "00:00"
+  if (rawDesc) {
+    const descPatterns: RegExp[] = [
+      /由\s*[\S\s]+?\s*提供(节目单|服务|支持)?/i,
+      /(本节目单|节目单|EPG)[\S\s]*?(由[\S\s]+?提供|来自[\S\s]+?)/i,
+      /提供(节目单|EPG)服务/i,
+    ];
+    for (const pattern of descPatterns) {
+      if (pattern.test(rawDesc) && /^(节目单|EPG|说明|公告|提示|00:00|今日节目|电视节目单|节目导视)$/i.test(rawTitle)) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
 function buildEpgIndex(channelMap: Record<string, EpgEntry>): EpgCacheIndexed {
   const idMap = new Map<string, EpgEntry>();
   const nameMap = new Map<string, EpgEntry>();
 
   for (const [originalId, entry] of Object.entries(channelMap)) {
     if (!originalId) continue;
+    
+    // Automatically sanitize and strip any disclaimer/watermark programs
+    if (entry.programs && Array.isArray(entry.programs)) {
+      entry.programs = entry.programs.filter(p => !isEpgDisclaimerProgram(p.title, p.desc));
+    }
+
     idMap.set(originalId.toLowerCase(), entry);
 
     const normId = normalizeChannelName(originalId);
@@ -3282,7 +3345,8 @@ function getOrGenerateIntegratedEpgXml(): { xml: string; gz: Buffer; etag: strin
     }
 
     if (found && matchedPrograms.length > 0) {
-      return matchedPrograms.map((prog: any) => {
+      const cleanPrograms = matchedPrograms.filter((prog: any) => !isEpgDisclaimerProgram(prog.title, prog.desc));
+      return cleanPrograms.map((prog: any) => {
         return `  <programme start="${escapeXml(prog.start)}" stop="${escapeXml(prog.stop)}" channel="${epgIdEscaped}">\n    <title lang="zh">${escapeXml(prog.title)}</title>\n    ${prog.desc ? `<desc lang="zh">${escapeXml(prog.desc)}</desc>` : ""}\n  </programme>`;
       }).join("\n");
     } else {
@@ -3801,6 +3865,12 @@ async function performEpgSync(source: EpgSource): Promise<boolean> {
       const stop = (prog as any).stop || "";
       const title = getText((prog as any).title);
       const desc = getText((prog as any).desc);
+      
+      // Filter out EPG provider watermarks and service notices (e.g. "由xxx提供节目单服务")
+      if (isEpgDisclaimerProgram(title, desc)) {
+        continue;
+      }
+
       if (!channelMap[chId]) {
         channelMap[chId] = { displayNames: [], programs: [] };
       }
@@ -8164,6 +8234,7 @@ app.get("/api/channels", async (req, res) => {
           const entry = findMatchingEpgEntry(ch, cache);
           if (entry && entry.programs && entry.programs.length > 0) {
             const filtered = entry.programs.filter((p: any) => {
+              if (isEpgDisclaimerProgram(p.title, p.desc)) return false;
               const parsed = parseXmltvTime(p.start);
               return parsed.dateStr === targetDate;
             }).map((p: any) => {
