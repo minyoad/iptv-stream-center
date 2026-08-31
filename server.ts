@@ -1394,6 +1394,25 @@ function parseCarouselUrl(url: string) {
   return { platform, originalId };
 }
 
+function isCarouselSource(s: any, channel?: any): boolean {
+  if (!s || !s.url) return false;
+  const url = String(s.url);
+  const parsed = parseCarouselUrl(url);
+  if (parsed && parsed.platform) return true;
+  if (/\/(?:migu|mg|cntv|cctv|douyu|huya|bilibili|bili|yy|kuaishou|ks|douyin)\//i.test(url)) return true;
+  if (url.includes("@carousel:")) return true;
+
+  if (channel && channel.groupIds && Array.isArray(channel.groupIds)) {
+    const isCarouselGroup = channel.groupIds.some((gId: string) => {
+      if (gId === "g_carousel") return true;
+      const g = (groups || []).find((grp: any) => grp.id === gId);
+      return g && g.name && g.name.includes("轮播");
+    });
+    if (isCarouselGroup) return true;
+  }
+  return false;
+}
+
 function detectAndRegisterCarouselProxy(url: string, ignoreDeletedCheck = false) {
   try {
     if (!url || typeof url !== 'string') return;
@@ -6767,6 +6786,7 @@ app.get("/api/channels", async (req, res) => {
     const clientIsp = ((req.query.isp as string) || "").trim();
     const clientProvince = ((req.query.province as string) || "").trim();
     const onlyActive = req.query.onlyActive === "true";
+    const includeCarousel = req.query.includeCarousel === "true";
     const limit = req.query.limit ? parseInt(req.query.limit as string) : 0;
     const page = req.query.page ? parseInt(req.query.page as string) : 1;
 
@@ -6777,6 +6797,11 @@ app.get("/api/channels", async (req, res) => {
       if (!channel.sources) return;
       channel.sources.forEach((s) => {
         if (s.isolated) return;
+
+        // 轮播线路靠服务端轮播代理测速，客户端测速自动排除轮播线路
+        if (!includeCarousel && isCarouselSource(s, channel)) {
+          return;
+        }
 
         if (onlyActive && s.status !== "active" && s.status !== "unknown" && s.status !== "checking") {
           return;

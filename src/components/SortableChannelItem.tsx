@@ -3,6 +3,7 @@ import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { GripVertical, Tv, ChevronUp, ChevronDown, Edit2, Trash2, ShieldAlert, ShieldCheck } from "lucide-react";
 import { Channel, Group } from "../types";
+import { GroupBadgeTag } from "./GroupBadgeTag";
 
 interface SortableChannelItemProps {
   channel: Channel;
@@ -55,10 +56,10 @@ export const SortableChannelItem: React.FC<SortableChannelItemProps> = ({
   const activeCount = (channel.sources || []).filter((s) => s.status === "active" && !s.isolated).length;
   const totalCount = (channel.sources || []).filter((s) => !s.isolated).length;
   const groupIds = Array.isArray(channel.groupIds) ? channel.groupIds : [];
-  const groupNames = groupIds
-    .map((gId) => (groups || []).find((g) => g.id === gId)?.name)
-    .filter(Boolean)
-    .join(", ");
+  const channelGroups = groupIds
+    .map((gId) => (groups || []).find((g) => g.id === gId))
+    .filter(Boolean) as Group[];
+  const groupNames = channelGroups.map((g) => g.name).join(", ");
 
   return (
     <div
@@ -160,13 +161,25 @@ export const SortableChannelItem: React.FC<SortableChannelItemProps> = ({
           {activeCount}/{totalCount}
         </span>
 
-        {/* Group Name badge */}
-        <span
-          className="text-[9px] font-semibold bg-blue-50 text-blue-600 px-1 py-0.5 rounded max-w-12 sm:max-w-16 truncate shrink"
-          title={groupNames || "其它"}
-        >
-          {groupNames || "其它"}
-        </span>
+        {/* Color-Coded Group Badges */}
+        <div className="flex items-center gap-1 shrink-0 max-w-20 sm:max-w-28 overflow-hidden justify-end">
+          {channelGroups.length > 0 ? (
+            channelGroups.slice(0, 2).map((g) => (
+              <GroupBadgeTag
+                key={g.id}
+                group={g}
+                size="xs"
+                showHoverStats={false}
+              />
+            ))
+          ) : (
+            <span
+              className="text-[9px] font-semibold bg-slate-100 text-slate-500 px-1 py-0.5 rounded shrink"
+            >
+              其它
+            </span>
+          )}
+        </div>
 
         {/* Button Actions */}
         <div className="flex items-center gap-0.5 sm:gap-0 shrink-0">

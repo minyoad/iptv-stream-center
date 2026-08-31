@@ -41,6 +41,7 @@ import {
   Sliders,
   Film,
   Globe,
+  Folder,
   Image as ImageIcon } from "lucide-react";
 import { Channel, LiveSource, SyncConfig, TestStatus, EpgGuide, Group, EpgSource } from "./types";
 import { arrayMove } from "@dnd-kit/sortable";
@@ -51,6 +52,7 @@ import { DraggableGroupList } from "./components/DraggableGroupList";
 import { SortableIpGeoApiList } from "./components/SortableIpGeoApiList";
 import { SmartOrganizeModal } from "./components/SmartOrganizeModal";
 import { AiSettingsModal } from "./components/AiSettingsModal";
+import { GroupBadgeTag } from "./components/GroupBadgeTag";
 import { IpGeoApi } from "./types";
 import { authFetch as fetch, safeJson } from "./utils/api";
 
@@ -4049,7 +4051,7 @@ export default function App() {
                       
                       {/* Sub header for channel detail view */}
                       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 pb-3 sm:pb-4 border-b border-slate-100 shrink-0 w-full min-w-0">
-                        <div className="flex items-start sm:items-center gap-3 min-w-0 flex-1 w-full overflow-hidden">
+                        <div className="flex items-start sm:items-center gap-3 min-w-0 flex-1 w-full overflow-visible">
                           {selectedChannel.logo ? (
                               <img 
                                 src={selectedChannel.logo} 
@@ -4062,13 +4064,52 @@ export default function App() {
                                 <Tv className="w-5 h-5" />
                               </div>
                             )}
-                          <div className="min-w-0 flex-1 overflow-hidden">
+                          <div className="min-w-0 flex-1 overflow-visible relative">
                             <div className="flex items-center gap-2 flex-wrap min-w-0 max-w-full">
-                              <h3 className="font-bold text-slate-800 text-sm leading-tight break-words max-w-full">{selectedChannel.name}</h3>
-                              <span className="bg-slate-100 text-[10px] text-slate-600 px-2 py-0.5 rounded shrink-0">
-                                {(Array.isArray(selectedChannel.groupIds) ? selectedChannel.groupIds : []).map(gId => (groups || []).find(g => g.id === gId)?.name).filter(Boolean).join(", ") || "其它"}
-                              </span>
+                              <h3 className="font-bold text-slate-800 text-sm sm:text-base leading-tight break-words">{selectedChannel.name}</h3>
+                              {selectedChannel.isolated && (
+                                <span className="text-[9px] font-bold bg-orange-100 text-orange-700 border border-orange-200 px-1.5 py-0.2 rounded shrink-0">
+                                  已隔离
+                                </span>
+                              )}
                             </div>
+
+                            {/* Color-Coded Associated Categories Badge List with Hover Statistics */}
+                            <div className="flex items-center gap-1.5 flex-wrap min-w-0 max-w-full mt-1.5" id="channel_detail_associated_groups">
+                              <span className="text-[10.5px] text-slate-400 font-medium shrink-0 flex items-center gap-1">
+                                <Folder className="w-3 h-3 text-indigo-500" />
+                                已关联分类:
+                              </span>
+                              {(() => {
+                                const cGroupIds = Array.isArray(selectedChannel.groupIds) ? selectedChannel.groupIds : [];
+                                const assocGroups = cGroupIds
+                                  .map((gId) => (groups || []).find((g) => g.id === gId))
+                                  .filter(Boolean) as Group[];
+
+                                if (assocGroups.length === 0) {
+                                  const fallbackGroup = (groups || []).find((g) => g.id === "g_other" || g.name === "其它频道") || { id: "g_other", name: "其它" };
+                                  return (
+                                    <GroupBadgeTag
+                                      group={fallbackGroup}
+                                      allChannels={channels}
+                                      size="sm"
+                                      onClick={(gId) => setSelectedCategory(gId)}
+                                    />
+                                  );
+                                }
+
+                                return assocGroups.map((group) => (
+                                  <GroupBadgeTag
+                                    key={group.id}
+                                    group={group}
+                                    allChannels={channels}
+                                    size="sm"
+                                    onClick={(gId) => setSelectedCategory(gId)}
+                                  />
+                                ));
+                              })()}
+                            </div>
+
                             <div className="text-[11px] text-slate-500 mt-1 flex flex-wrap items-center gap-1.5 min-w-0 max-w-full">
                               <span className="shrink-0 text-slate-400 font-medium">别名:</span>
                               {(Array.isArray(selectedChannel.alias) && selectedChannel.alias.length > 0) ? (
@@ -4909,7 +4950,7 @@ export default function App() {
                           <span className="text-emerald-400 font-bold block pb-1">4. 客户端探针 - 获取待测源清单接口 (Get Target Test Sources)：</span>
                           <span className="text-white font-extrabold pr-2">GET</span>
                           <span className="text-indigo-300 select-all">/api/sources/client-test-list?isp=中国电信&province=广东&onlyActive=true&limit=100&page=1</span>
-                          <p className="text-[10.5px] text-slate-400 pt-1 font-sans">自动返回匹配指定运营商 (如中国电信) + 所有 BGP/多线/未知 专线的线路。<strong>系统已开启智能防重复测速机制，自动优先返回从未测速或极久未测速的直播源</strong>。支持 <strong>limit</strong> 和 <strong>page</strong> 参数进行分页。</p>
+                          <p className="text-[10.5px] text-slate-400 pt-1 font-sans">自动返回匹配指定运营商 (如中国电信) + 所有 BGP/多线/未知 专线的线路。<strong>轮播线路已自动排除（由服务端轮播代理独立测速）</strong>，且开启了智能防重复测速机制，自动优先返回未测或极久未测直播源。支持 <strong>limit</strong> 与 <strong>page</strong> 分页。</p>
                         </div>
 
                         <div className="space-y-1 bg-slate-950 p-3 rounded-xl border border-slate-800 text-[11px] font-mono">
