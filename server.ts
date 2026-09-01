@@ -1132,11 +1132,11 @@ async function testCarouselProxyAvailability(proxy: { platform: string; urlTempl
 
     for (const testId of testCandidates) {
       const testUrl = formatProxyUrl(proxy.urlTemplate, testId);
-      const res = await testSingleUrl(testUrl, timeoutMs);
-      if (res.status === "active" && res.resolution) {
+      const res = await testSingleUrl(testUrl, timeoutMs || 5000);
+      if (res.status === "active") {
         return { available: true, latency: res.latency };
       } else {
-        lastError = res.resolution ? "响应内容异常" : "未能获取视频分辨率或流已下线";
+        lastError = "未能连通流媒体响应或流已下线";
       }
     }
 
@@ -2859,7 +2859,6 @@ function isResponseContentInvalid(text: string, contentType = ""): { invalid: bo
     lowerText.includes("token过期") ||
     lowerText.includes("token expired") ||
     lowerText.includes("access denied") ||
-    lowerText.includes("copyright") ||
     lowerText.includes("sign error") ||
     lowerText.includes("auth fail")
   ) {
@@ -2877,22 +2876,24 @@ function isResponseContentInvalid(text: string, contentType = ""): { invalid: bo
     lowerText.includes("请尝试其他") ||
     lowerText.includes("源不可用") ||
     lowerText.includes("404 not found") ||
-    lowerText.includes("500 internal") ||
-    lowerText.includes("errcode") ||
-    lowerText.includes("errorcode") ||
-    lowerText.includes("err_code") ||
-    lowerText.includes("error_code")
+    lowerText.includes("500 internal")
   ) {
     return { invalid: true, reason: "频道不存在或源不可用" };
   }
 
-  // 3. 非音视频流 HTML 网页错误页
+  // 智能检测非零错误码（避免匹配 errcode=0 / err_code=0 的正常响应）
+  const errCodeMatch = lowerText.match(/(?:err_?code|error_?code)\s*[:=]\s*(["']?)(-?\d+|[a-zA-Z_]+)\1/);
+  if (errCodeMatch) {
+    const codeVal = errCodeMatch[2];
+    if (codeVal !== "0" && codeVal !== "200" && codeVal !== "success" && codeVal !== "ok") {
+      return { invalid: true, reason: `接口返回错误码(${codeVal})` };
+    }
+  }
+
+  // 3. 非音视频流 HTML 网页错误页（排除合法的 M3U8 声明）
   if (
-    trimmed.startsWith("<") ||
-    lowerText.includes("<!doctype") ||
-    lowerText.includes("<html") ||
-    lowerText.includes("<head") ||
-    lowerText.includes("<body")
+    (lowerCT.includes("text/html") || trimmed.startsWith("<!doctype html") || trimmed.startsWith("<html")) &&
+    !lowerText.includes("#extm3u") && !lowerText.includes("#extinf")
   ) {
     return { invalid: true, reason: "返回 HTML 错误页" };
   }
@@ -2905,7 +2906,7 @@ function isResponseContentInvalid(text: string, contentType = ""): { invalid: bo
   }
 
   // 5. JSON 接口失败载荷检测
-  if (lowerCT.includes("json") || trimmed.startsWith("{")) {
+  if (lowerCT.includes("json") || (trimmed.startsWith("{") && trimmed.endsWith("}"))) {
     try {
       const obj = JSON.parse(trimmed);
       if (obj && typeof obj === "object") {
@@ -2919,7 +2920,7 @@ function isResponseContentInvalid(text: string, contentType = ""): { invalid: bo
           const msg = String(obj.message || obj.msg || obj.error).toLowerCase();
           if (
             msg.includes("fail") ||
-            msg.includes("error") ||
+            (msg.includes("error") && !msg.includes("no error") && !msg.includes("error: 0")) ||
             msg.includes("不存在") ||
             msg.includes("失败") ||
             msg.includes("版权") ||
@@ -3102,7 +3103,7 @@ async function probeStreamResolutionWithFfprobe(url: string, timeoutMs = 1500): 
 }
 
 // URL Testing Engine
-async function testSingleUrl(url: string, timeoutMs: number = 3000): Promise<{ status: "active" | "inactive"; latency: number; resolution?: string }> {
+async function testSingleUrl(url: string, timeoutMs: number = 5000): Promise<{ status: "active" | "inactive"; latency: number; resolution?: string }> {
   const startTime = Date.now();
 
   const urlLower = url.toLowerCase();
@@ -3300,23 +3301,12 @@ async function testSingleUrl(url: string, timeoutMs: number = 3000): Promise<{ s
       } catch (err) {
       }
 
-      // ONLY execute ffprobe if fast parsing (URL regex / M3U8 tags / H264 SPS) produced NO resolution at all
+      // Execute ffprobe if fast parsing produced no resolution
       if (!resolution) {
         const probedRes = await probeStreamResolutionWithFfprobe(url, 1200).catch(() => undefined);
         if (probedRes) {
           resolution = probedRes;
         }
-      }
-
-      // Strict Rule: For Migu proxy or carousel sources, ONLY streams with successfully obtained resolution are active
-      const isMiguOrCarouselStream =
-        /[?&/](?:migu|mg|miguvideo)[_./?]/i.test(url) ||
-        /\/(?:migu|mg|migu_live)\//i.test(url) ||
-        /:\d+\/+[1-9]\d{7,9}/.test(url) ||
-        url.includes("@carousel:");
-
-      if (isMiguOrCarouselStream && !resolution) {
-        return { status: "inactive", latency: Date.now() - startTime };
       }
 
       return { status: "active", latency, resolution };
@@ -8300,7 +8290,7 @@ app.get("/api/channels", async (req, res) => {
       const fetchPromises = urlsToTest.map(async (item) => {
          try {
            const controller = new AbortController();
-           const timeoutId = setTimeout(() => controller.abort(), 3000);
+           const timeoutId = setTimeout(() => controller.abort(), 5000);
            const start = Date.now();
            const response = await fetch(item.url, { 
              method: 'GET',
