@@ -157,15 +157,15 @@ export const CarouselChannelView = ({ fetchData, channelsData = [] }: { fetchDat
   const loadData = async () => {
     try {
         const [res1, res2, res3, res4] = await Promise.all([
-          fetch("/api/carousel-channels"),
-          fetch("/api/carousel-channels-unregistered"),
-          fetch("/api/carousel-discovery-rules"),
-          fetch("/api/carousel-proxies")
+          fetch("/api/carousel-channels").catch(() => null),
+          fetch("/api/carousel-channels-unregistered").catch(() => null),
+          fetch("/api/carousel-discovery-rules").catch(() => null),
+          fetch("/api/carousel-proxies").catch(() => null)
         ]);
-        const d1 = await res1.json();
-        const d2 = await res2.json();
-        const d3 = await res3.json();
-        const d4 = await res4.json();
+        const d1 = await safeJson(res1, []);
+        const d2 = await safeJson(res2, []);
+        const d3 = await safeJson(res3, []);
+        const d4 = await safeJson(res4, []);
         setChannels(Array.isArray(d1) ? d1 : []);
         setUnregistered(Array.isArray(d2) ? d2 : []);
         setRules(Array.isArray(d3) ? d3 : []);

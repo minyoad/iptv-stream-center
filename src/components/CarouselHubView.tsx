@@ -52,11 +52,11 @@ export const CarouselHubView: React.FC<CarouselHubViewProps> = ({
   const loadStats = async () => {
     try {
       const [chRes, prRes] = await Promise.all([
-        fetch("/api/carousel-channels"),
-        fetch("/api/carousel-proxies")
+        fetch("/api/carousel-channels").catch(() => null),
+        fetch("/api/carousel-proxies").catch(() => null)
       ]);
-      const chData = await chRes.json();
-      const prData = await prRes.json();
+      const chData = await safeJson(chRes, []);
+      const prData = await safeJson(prRes, []);
 
       const channelsCount = Array.isArray(chData) ? chData.length : 0;
       const proxiesList = Array.isArray(prData) ? prData : [];
@@ -78,7 +78,7 @@ export const CarouselHubView: React.FC<CarouselHubViewProps> = ({
         sourcesCount: totalCarouselSources
       });
     } catch (err) {
-      console.error("Failed to load carousel stats", err);
+      console.warn("Failed to load carousel stats:", err);
     }
   };
 

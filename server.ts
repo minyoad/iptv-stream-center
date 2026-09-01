@@ -1097,7 +1097,7 @@ async function testCarouselProxyAvailability(proxy: { platform: string; urlTempl
       "kuaishou": ["3x876g5g6f7", "kpl"],
       "douyin": ["123456"],
       "cntv": ["cctv1", "cctv5"],
-      "migu": ["608807420"],
+      "migu": ["644368373", "608807420", "631780532"],
       "iptv": ["live"]
     };
     
@@ -1126,37 +1126,17 @@ async function testCarouselProxyAvailability(proxy: { platform: string; urlTempl
       }
     }
 
-    // Try up to 3 candidate IDs in sequence
+    // Try up to 4 candidate IDs in sequence
     let lastError = "";
-    const testCandidates = candidateIds.slice(0, 3);
+    const testCandidates = candidateIds.slice(0, 4);
 
     for (const testId of testCandidates) {
       const testUrl = formatProxyUrl(proxy.urlTemplate, testId);
-      try {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-        const start = Date.now();
-        
-        const response = await fetch(testUrl, {
-          method: 'GET',
-          signal: controller.signal,
-          headers: {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Accept': '*/*'
-          }
-        });
-        clearTimeout(timeoutId);
-        const latency = Date.now() - start;
-
-        // Any 2xx or 3xx (redirect to stream CDN) is considered valid
-        if (response.ok || (response.status >= 200 && response.status < 400)) {
-          return { available: true, latency };
-        } else {
-          lastError = `HTTP 响应状态 ${response.status} ${response.statusText || ''}`.trim();
-        }
-      } catch (e: any) {
-        const isTimeout = e?.name === 'AbortError' || e?.message?.includes('aborted');
-        lastError = isTimeout ? `连接超时 (${Math.round(timeoutMs/1000)}秒未响应)` : (e?.message || '网络连接异常');
+      const res = await testSingleUrl(testUrl, timeoutMs);
+      if (res.status === "active" && res.resolution) {
+        return { available: true, latency: res.latency };
+      } else {
+        lastError = res.resolution ? "响应内容异常" : "未能获取视频分辨率或流已下线";
       }
     }
 
@@ -1408,7 +1388,7 @@ function extractCarouselPlatformAndId(url: string): { platform: string | null; o
 
   // Heuristic fallbacks if no custom rule matched (do not include IPTV as it belongs to general TV streams)
   if (!platform) {
-    if (/[?&/](?:migu|mg)[_./?]/i.test(url) || /\/migu\b/i.test(url) || /migu\.php/i.test(url)) {
+    if (/[?&/](?:migu|mg)[_./?]/i.test(url) || /\/migu\b/i.test(url) || /migu\.php/i.test(url) || /:\d+\/+[1-9]\d{7,9}/.test(url)) {
       platform = "migu";
     } else if (/[?&/](?:yy)[_./?]/i.test(url) || /yy\.php/i.test(url)) {
       platform = "yy";
@@ -2860,6 +2840,101 @@ function isPrivateOrIntranetUrl(urlStr: string): boolean {
   return false;
 }
 
+function isResponseContentInvalid(text: string, contentType = ""): { invalid: boolean; reason?: string } {
+  if (!text) return { invalid: false };
+
+  const trimmed = text.trim();
+  const lowerText = text.toLowerCase();
+  const lowerCT = contentType.toLowerCase();
+
+  // 1. 版权原因、登录提示、权限鉴权错误检测
+  if (
+    lowerText.includes("由于版权原因") ||
+    lowerText.includes("版权原因") ||
+    lowerText.includes("登录后观看") ||
+    lowerText.includes("请登录后观看") ||
+    lowerText.includes("版权限制") ||
+    lowerText.includes("未授权") ||
+    lowerText.includes("无权访问") ||
+    lowerText.includes("token过期") ||
+    lowerText.includes("token expired") ||
+    lowerText.includes("access denied") ||
+    lowerText.includes("copyright") ||
+    lowerText.includes("sign error") ||
+    lowerText.includes("auth fail")
+  ) {
+    return { invalid: true, reason: "版权限制/需要登录" };
+  }
+
+  // 2. 频道不存在、播放失败、下线资源检测
+  if (
+    lowerText.includes("频道不存在") ||
+    lowerText.includes("播放失败") ||
+    lowerText.includes("无效资源") ||
+    lowerText.includes("资源不存在") ||
+    lowerText.includes("已下线") ||
+    lowerText.includes("节目已下线") ||
+    lowerText.includes("请尝试其他") ||
+    lowerText.includes("源不可用") ||
+    lowerText.includes("404 not found") ||
+    lowerText.includes("500 internal") ||
+    lowerText.includes("errcode") ||
+    lowerText.includes("errorcode") ||
+    lowerText.includes("err_code") ||
+    lowerText.includes("error_code")
+  ) {
+    return { invalid: true, reason: "频道不存在或源不可用" };
+  }
+
+  // 3. 非音视频流 HTML 网页错误页
+  if (
+    trimmed.startsWith("<") ||
+    lowerText.includes("<!doctype") ||
+    lowerText.includes("<html") ||
+    lowerText.includes("<head") ||
+    lowerText.includes("<body")
+  ) {
+    return { invalid: true, reason: "返回 HTML 错误页" };
+  }
+
+  // 4. 空白 M3U8 列表检测
+  if (lowerText.includes("#extm3u")) {
+    if (!lowerText.includes("#extinf") && !lowerText.includes(".ts") && !lowerText.includes(".m3u8") && !lowerText.includes("http")) {
+      return { invalid: true, reason: "空白 M3U8 列表" };
+    }
+  }
+
+  // 5. JSON 接口失败载荷检测
+  if (lowerCT.includes("json") || trimmed.startsWith("{")) {
+    try {
+      const obj = JSON.parse(trimmed);
+      if (obj && typeof obj === "object") {
+        if (obj.code !== undefined && obj.code !== 0 && obj.code !== 200 && obj.code !== "0" && obj.code !== "200") {
+          return { invalid: true, reason: `JSON 错误码(${obj.code})` };
+        }
+        if (obj.success === false || obj.status === "error" || obj.status === false) {
+          return { invalid: true, reason: "接口状态为失败" };
+        }
+        if (obj.message || obj.msg || obj.error) {
+          const msg = String(obj.message || obj.msg || obj.error).toLowerCase();
+          if (
+            msg.includes("fail") ||
+            msg.includes("error") ||
+            msg.includes("不存在") ||
+            msg.includes("失败") ||
+            msg.includes("版权") ||
+            msg.includes("登录")
+          ) {
+            return { invalid: true, reason: `接口返回: ${obj.message || obj.msg || obj.error}` };
+          }
+        }
+      }
+    } catch (e) {}
+  }
+
+  return { invalid: false };
+}
+
 function parseH264Sps(buf: Buffer): string | undefined {
   if (!buf || buf.length < 16) return undefined;
   for (let i = 0; i < buf.length - 12; i++) {
@@ -2869,7 +2944,13 @@ function parseH264Sps(buf: Buffer): string | undefined {
       const nalType = buf[start] & 0x1F;
       if (nalType === 7) {
         try {
-          const sps = buf.subarray(start + 1, Math.min(buf.length, start + 35));
+          const rawSps = buf.subarray(start + 1, Math.min(buf.length, start + 80));
+          const cleanBytes: number[] = [];
+          for (let k = 0; k < rawSps.length; k++) {
+            if (k >= 2 && rawSps[k] === 3 && rawSps[k - 1] === 0 && rawSps[k - 2] === 0) continue;
+            cleanBytes.push(rawSps[k]);
+          }
+          const sps = Buffer.from(cleanBytes);
           let bitPos = 0;
           function readBit(): number {
             const byteIdx = Math.floor(bitPos / 8);
@@ -2887,16 +2968,36 @@ function parseH264Sps(buf: Buffer): string | undefined {
             }
             return (1 << zeros) - 1 + val;
           }
-          readBit(); // profile_idc
-          bitPos += 16;
-          readUE();
           const profileIdc = sps[0];
+          bitPos = 24; // Skip profile_idc, constraint_flags, level_idc
+          readUE(); // seq_parameter_set_id
           if ([100, 110, 122, 244, 44, 83, 86, 118, 128, 138, 139, 134, 135].includes(profileIdc)) {
             const chromaFormatIdc = readUE();
             if (chromaFormatIdc === 3) readBit();
             readUE(); readUE(); readBit();
+            const seqScalingMatrixPresent = readBit();
+            if (seqScalingMatrixPresent === 1) {
+              const count = chromaFormatIdc !== 3 ? 8 : 12;
+              for (let c = 0; c < count; c++) {
+                if (readBit() === 1) {
+                  let lastScale = 8, nextScale = 8;
+                  const sizeOfScalingList = c < 6 ? 16 : 64;
+                  for (let j = 0; j < sizeOfScalingList; j++) {
+                    if (nextScale !== 0) {
+                      let zeros = 0;
+                      while (readBit() === 0 && zeros < 32) zeros++;
+                      let val = 0;
+                      for (let k = 0; k < zeros; k++) val = (val << 1) | readBit();
+                      const deltaScale = (1 << zeros) - 1 + val;
+                      nextScale = (lastScale + deltaScale + 256) % 256;
+                    }
+                    lastScale = nextScale === 0 ? lastScale : nextScale;
+                  }
+                }
+              }
+            }
           }
-          readUE();
+          readUE(); // log2_max_frame_num_minus4
           const picOrderCntType = readUE();
           if (picOrderCntType === 0) readUE();
           else if (picOrderCntType === 1) {
@@ -2904,12 +3005,13 @@ function parseH264Sps(buf: Buffer): string | undefined {
             const numRef = readUE();
             for (let r = 0; r < numRef; r++) readUE();
           }
-          readUE();
-          readBit();
+          readUE(); // max_num_ref_frames
+          readBit(); // gaps_in_frame_num_value_allowed_flag
           const widthMbs = readUE();
           const heightMapUnits = readUE();
+          const frameMbsOnlyFlag = readBit();
           const width = (widthMbs + 1) * 16;
-          const height = (heightMapUnits + 1) * 16;
+          const height = (heightMapUnits + 1) * 16 * (2 - frameMbsOnlyFlag);
           if (width >= 100 && height >= 100 && width <= 8192 && height <= 8192) {
             if (height >= 2160 || width >= 3840) return "4K";
             if (height >= 1080 || width >= 1920) return "1080p";
@@ -3112,32 +3214,84 @@ async function testSingleUrl(url: string, timeoutMs: number = 3000): Promise<{ s
         const contentType = (response.headers.get("content-type") || "").toLowerCase();
         if (contentType.includes("mpegurl") || contentType.includes("text") || contentType.includes("json") || contentType.includes("html") || urlLower.endsWith(".m3u8")) {
           const text = await response.text();
-          const lowerText = text.toLowerCase();
-          
-          // 检查 HTML 错误页或咪咕/轮播代理的失败特征（如 404, 500, ErrCode, 频道不存在, 播放失败, 空白 M3U8）
-          if (
-            text.trim().startsWith("<") ||
-            lowerText.includes("<!doctype") ||
-            lowerText.includes("<html") ||
-            lowerText.includes("404 not found") ||
-            lowerText.includes("500 internal") ||
-            lowerText.includes("errcode") ||
-            lowerText.includes("errorcode") ||
-            lowerText.includes("频道不存在") ||
-            lowerText.includes("播放失败") ||
-            lowerText.includes("无效资源") ||
-            (lowerText.includes("#extm3u") && !lowerText.includes("#extinf") && !lowerText.includes(".ts") && !lowerText.includes(".m3u8"))
-          ) {
+          const contentCheck = isResponseContentInvalid(text, contentType);
+          if (contentCheck.invalid) {
             return { status: "inactive", latency: Date.now() - startTime };
           }
 
           const parsed = parseResolution(url, text);
           if (parsed) resolution = parsed;
+
+          // If no resolution yet from master M3U8, follow sub-playlists to extract resolution from sub-M3U8 or TS segment H.264 SPS
+          if (!resolution && text.includes("#EXTM3U")) {
+            const lines = text.split("\n").map(l => l.trim());
+            const subLine = lines.find(l => l && !l.startsWith("#") && (l.includes(".m3u8") || l.includes("http") || (!l.includes(".") && l.length > 2)));
+            if (subLine) {
+              try {
+                const subUrl = new URL(subLine, response.url).href;
+                const subCtrl = new AbortController();
+                const subTimeout = setTimeout(() => subCtrl.abort(), 2500);
+                const subRes = await fetch(subUrl, {
+                  signal: subCtrl.signal,
+                  headers: {
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                  },
+                });
+                clearTimeout(subTimeout);
+                if (subRes.ok) {
+                  const subText = await subRes.text();
+                  const subCheck = isResponseContentInvalid(subText, subRes.headers.get("content-type") || "");
+                  if (subCheck.invalid) {
+                    return { status: "inactive", latency: Date.now() - startTime };
+                  }
+                  const subParsed = parseResolution(subUrl, subText);
+                  if (subParsed) {
+                    resolution = subParsed;
+                  } else {
+                    const subLines = subText.split("\n").map(l => l.trim());
+                    const tsLine = subLines.find(l => l && !l.startsWith("#") && (l.includes(".ts") || l.includes("http") || (!l.includes(".") && l.length > 2)));
+                    if (tsLine) {
+                      const tsUrl = new URL(tsLine, subUrl).href;
+                      const tsCtrl = new AbortController();
+                      const tsTimeout = setTimeout(() => tsCtrl.abort(), 2500);
+                      const tsRes = await fetch(tsUrl, {
+                        signal: tsCtrl.signal,
+                        headers: {
+                          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                        },
+                      });
+                      clearTimeout(tsTimeout);
+                      if (tsRes.ok && tsRes.body) {
+                        const reader = tsRes.body.getReader();
+                        const { value } = await reader.read();
+                        if (value && value.length > 0) {
+                          const buf = Buffer.from(value);
+                          const spsRes = parseH264Sps(buf);
+                          if (spsRes) resolution = spsRes;
+                        }
+                        try { await reader.cancel(); } catch (_) {}
+                      } else if (!tsRes.ok) {
+                        return { status: "inactive", latency: Date.now() - startTime };
+                      }
+                    }
+                  }
+                } else {
+                  return { status: "inactive", latency: Date.now() - startTime };
+                }
+              } catch (_) {}
+            }
+          }
         } else if (response.body) {
           const reader = response.body.getReader();
           const { value } = await reader.read();
           if (value && value.length > 0) {
             const buf = Buffer.from(value);
+            const chunkText = buf.toString("utf-8");
+            const contentCheck = isResponseContentInvalid(chunkText, contentType);
+            if (contentCheck.invalid) {
+              try { await reader.cancel(); } catch (_) {}
+              return { status: "inactive", latency: Date.now() - startTime };
+            }
             const spsRes = parseH264Sps(buf);
             if (spsRes) resolution = spsRes;
           }
@@ -3148,10 +3302,21 @@ async function testSingleUrl(url: string, timeoutMs: number = 3000): Promise<{ s
 
       // ONLY execute ffprobe if fast parsing (URL regex / M3U8 tags / H264 SPS) produced NO resolution at all
       if (!resolution) {
-        const probedRes = await probeStreamResolutionWithFfprobe(url, 1000).catch(() => undefined);
+        const probedRes = await probeStreamResolutionWithFfprobe(url, 1200).catch(() => undefined);
         if (probedRes) {
           resolution = probedRes;
         }
+      }
+
+      // Strict Rule: For Migu proxy or carousel sources, ONLY streams with successfully obtained resolution are active
+      const isMiguOrCarouselStream =
+        /[?&/](?:migu|mg|miguvideo)[_./?]/i.test(url) ||
+        /\/(?:migu|mg|migu_live)\//i.test(url) ||
+        /:\d+\/+[1-9]\d{7,9}/.test(url) ||
+        url.includes("@carousel:");
+
+      if (isMiguOrCarouselStream && !resolution) {
+        return { status: "inactive", latency: Date.now() - startTime };
       }
 
       return { status: "active", latency, resolution };
@@ -4520,20 +4685,8 @@ async function runCronJob(job: any) {
                continue;
             }
 
-            const originalId = fallbacks[plat];
-            if (!originalId) continue;
-            
-            const url = proxy.urlTemplate.replace(/\{\s*(?:id|roomid|channelid|cid|originalid)?\s*\}/gi, originalId);
-            let isOk = false;
-            try {
-               const controller = new AbortController();
-               const timeoutId = setTimeout(() => controller.abort(), 6000);
-               const res = await fetch(url, { method: 'GET', signal: controller.signal, headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' } });
-               clearTimeout(timeoutId);
-               if (res.ok) isOk = true;
-            } catch(e) {
-               isOk = false;
-            }
+            const testRes = await testCarouselProxyAvailability(proxy);
+            const isOk = testRes.available;
             
             db.prepare('UPDATE carousel_proxies SET status = ? WHERE id = ?').run(isOk ? 'active' : 'inactive', proxy.id);
             if (isOk) activeCount++;
@@ -8107,8 +8260,15 @@ app.get("/api/channels", async (req, res) => {
            const latency = Date.now() - start;
            
            if (response.ok) {
-              results.push({ ...item, status: 'active', latency });
-              db.prepare('UPDATE carousel_proxies SET status = ? WHERE id = ?').run('active', item.templateId);
+              const text = await response.text().catch(() => "");
+              const contentCheck = isResponseContentInvalid(text, response.headers.get("content-type") || "");
+              if (contentCheck.invalid) {
+                results.push({ ...item, status: 'inactive', latency: null, error: contentCheck.reason });
+                db.prepare('UPDATE carousel_proxies SET status = ? WHERE id = ?').run('inactive', item.templateId);
+              } else {
+                results.push({ ...item, status: 'active', latency });
+                db.prepare('UPDATE carousel_proxies SET status = ? WHERE id = ?').run('active', item.templateId);
+              }
            } else {
               results.push({ ...item, status: 'inactive', latency: null });
               db.prepare('UPDATE carousel_proxies SET status = ? WHERE id = ?').run('inactive', item.templateId);
