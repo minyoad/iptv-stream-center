@@ -4269,9 +4269,149 @@ async function performSync(config: SyncConfig, force = false) {
         epgId: string;
       } | null = null;
 
+      const processM3uItem = (
+        info: {
+          name: string;
+          logo: string;
+          category: string;
+          alias: string[];
+          epgId: string;
+        },
+        rawUrl?: string
+      ) => {
+        if (!info || !info.name || info.name === "未知频道") return;
+
+        let url = rawUrl ? rawUrl.split("$")[0].trim() : "";
+        const { province, isp: parsedIsp } = parseIspAndProvince(info.name + " " + info.category);
+        const isp = config.isp ? config.isp : parsedIsp;
+
+        let isCarouselM3u = false;
+        let carouselKeyM3u = null;
+        if (url) {
+          const parsedCarouselM3u = parseCarouselUrl(url);
+          if (parsedCarouselM3u.platform && parsedCarouselM3u.originalId) {
+            isCarouselM3u = true;
+            carouselKeyM3u = `@carousel:${parsedCarouselM3u.platform}_${parsedCarouselM3u.originalId}`;
+            const registry = db.prepare(`
+              SELECT c.channelId, COALESCE(NULLIF(ch.name, ''), NULLIF(c.name, ''), '未知频道') as name 
+              FROM carousel_channels c 
+              LEFT JOIN channels ch ON c.channelId = ch.id 
+              WHERE c.platform = ? AND c.originalId = ?
+            `).get(parsedCarouselM3u.platform, parsedCarouselM3u.originalId) as any;
+            if (registry) {
+              info.name = registry.name;
+            }
+            detectAndRegisterCarouselProxy(url);
+          }
+        }
+
+        const catNames = (isCarouselM3u ? ["轮播频道"] : info.category.split(/[,;，；]/)).map(s => s.trim()).filter(Boolean);
+        if (catNames.length === 0) catNames.push("其它频道");
+
+        const matchedGroupIds: string[] = [];
+        for (const catName of catNames) {
+          let existingGroup = groups.find(g => g.name.toLowerCase() === catName.toLowerCase());
+          if (!existingGroup) {
+            if (autoCreateChannel) {
+              existingGroup = {
+                id: "g_" + Math.random().toString(36).substring(2, 10),
+                name: catName,
+              };
+              groups.push(existingGroup);
+              matchedGroupIds.push(existingGroup.id);
+            }
+          } else {
+            matchedGroupIds.push(existingGroup.id);
+          }
+        }
+
+        const stdInfo = findAliasTemplate(info.name);
+        const lookupName = stdInfo ? stdInfo.templateName : info.name;
+
+        let channel = channels.find(
+          (c) => {
+            if (typeof carouselKeyM3u !== 'undefined' && carouselKeyM3u) return c.alias.includes(carouselKeyM3u);
+            return normalizeChannelName(c.name) === normalizeChannelName(lookupName) ||
+            c.alias.some((a) => normalizeChannelName(a) === normalizeChannelName(lookupName)) ||
+            (stdInfo && stdInfo.aliases.some(a => normalizeChannelName(c.name) === normalizeChannelName(a) || c.alias.some(ca => normalizeChannelName(ca) === normalizeChannelName(a))))
+          }
+        );
+
+        if (!channel) {
+          if (!autoCreateChannel || config.aliasOnly) {
+            return;
+          }
+          const channelId = "ch_" + Math.random().toString(36).substring(2, 10);
+          const cleanName = stdInfo ? stdInfo.templateName : info.name;
+          const cleanAliases = stdInfo 
+            ? Array.from(new Set([cleanName, info.name, ...stdInfo.aliases, ...(info.alias || [])]))
+            : info.alias;
+
+          channel = {
+            id: channelId,
+            name: cleanName,
+            logo: info.logo || "https://images.unsplash.com/photo-1598257006458-087169a1f08d?auto=format&fit=crop&w=48&h=48&q=80",
+            groupIds: matchedGroupIds,
+            alias: cleanAliases,
+            epgId: info.epgId || generateDefaultEpgId(cleanName),
+            sources: [],
+          };
+          channels.push(channel);
+          importedChannelsCount++;
+        } else {
+          if (stdInfo) {
+            stdInfo.aliases.forEach(a => {
+              if (!channel!.alias.includes(a)) {
+                channel!.alias.push(a);
+              }
+            });
+          }
+          if (info.alias) {
+            info.alias.forEach(a => {
+              if (!channel!.alias.includes(a)) {
+                channel!.alias.push(a);
+              }
+            });
+          }
+          matchedGroupIds.forEach(gid => {
+            if (!channel!.groupIds.includes(gid)) {
+              channel!.groupIds.push(gid);
+            }
+          });
+          if (info.logo && (!channel.logo || channel.logo.includes("unsplash.com"))) {
+            channel.logo = info.logo;
+          }
+          if (info.epgId) {
+            channel.epgId = info.epgId;
+          }
+        }
+
+        if (config.aliasOnly || !url) {
+          return;
+        }
+
+        const existingSrc = channel.sources.find((s) => s.url === url);
+        if (!existingSrc) {
+          channel.sources.push({
+            id: "src_" + Math.random().toString(36).substring(2, 10),
+            url,
+            province,
+            isp,
+            status: "unknown",
+          });
+          importedSourcesCount++;
+        } else if (config.isp) {
+          existingSrc.isp = config.isp;
+        }
+      };
+
       for (let i = 0; i < lines.length; i++) {
         const line = lines[i].trim();
         if (line.startsWith("#EXTINF:")) {
+          if (currentInfo) {
+            processM3uItem(currentInfo);
+            currentInfo = null;
+          }
           // Parse #EXTINF Properties
           // Extended metadata extraction using dynamic regex
           const logoMatch = line.match(/tvg-logo="([^"]+)"/) || line.match(/logo="([^"]+)"/);
@@ -4320,134 +4460,16 @@ async function performSync(config: SyncConfig, force = false) {
             logo: logoMatch ? logoMatch[1] : "",
             category: toSimplifiedChinese(groupMatch ? groupMatch[1] : "其它频道"),
             alias: parsedAliases,
-            epgId: epgMatch ? epgMatch[1] : generateDefaultEpgId(name),
+            epgId: epgMatch ? epgMatch[1] : "",
           };
         } else if (line && !line.startsWith("#") && currentInfo) {
-          // Play stream URL matching current channel
-          let url = line.split("$")[0].trim();
-          const { province, isp: parsedIsp } = parseIspAndProvince(currentInfo.name + " " + currentInfo.category);
-          const isp = config.isp ? config.isp : parsedIsp;
-
-          let isCarouselM3u = false;
-          let carouselKeyM3u = null;
-          const parsedCarouselM3u = parseCarouselUrl(url);
-          if (parsedCarouselM3u.platform && parsedCarouselM3u.originalId) {
-             isCarouselM3u = true;
-             carouselKeyM3u = `@carousel:${parsedCarouselM3u.platform}_${parsedCarouselM3u.originalId}`;
-             const registry = db.prepare(`
-                SELECT c.channelId, COALESCE(NULLIF(ch.name, ''), NULLIF(c.name, ''), '未知频道') as name 
-                FROM carousel_channels c 
-                LEFT JOIN channels ch ON c.channelId = ch.id 
-                WHERE c.platform = ? AND c.originalId = ?
-             `).get(parsedCarouselM3u.platform, parsedCarouselM3u.originalId) as any;
-             if (registry) {
-               currentInfo.name = registry.name;
-             }
-             detectAndRegisterCarouselProxy(url);
-          }
-
-          // Find or create correct Group entities for this category (comma/semicolon split for many-to-many relationship)
-          const catNames = (isCarouselM3u ? ["轮播频道"] : currentInfo.category.split(/[,;，；]/)).map(s => s.trim()).filter(Boolean);
-          if (catNames.length === 0) catNames.push("其它频道");
-          
-          const matchedGroupIds: string[] = [];
-          for (const catName of catNames) {
-            let existingGroup = groups.find(g => g.name.toLowerCase() === catName.toLowerCase());
-            if (!existingGroup) {
-              if (autoCreateChannel) {
-                existingGroup = {
-                  id: "g_" + Math.random().toString(36).substring(2, 10),
-                  name: catName,
-                };
-                groups.push(existingGroup);
-                matchedGroupIds.push(existingGroup.id);
-              }
-            } else {
-              matchedGroupIds.push(existingGroup.id);
-            }
-          }
-
-          // Find standard template/alias group from default aliases
-          const stdInfo = findAliasTemplate(currentInfo!.name);
-          const lookupName = stdInfo ? stdInfo.templateName : currentInfo!.name;
-
-          // Find existing channel by name, standard template name, or any associated alias
-          let channel = channels.find(
-            (c) => {
-              if (typeof carouselKeyM3u !== 'undefined' && carouselKeyM3u) return c.alias.includes(carouselKeyM3u);
-              return normalizeChannelName(c.name) === normalizeChannelName(lookupName) ||
-              c.alias.some((a) => normalizeChannelName(a) === normalizeChannelName(lookupName)) ||
-              (stdInfo && stdInfo.aliases.some(a => normalizeChannelName(c.name) === normalizeChannelName(a) || c.alias.some(ca => normalizeChannelName(ca) === normalizeChannelName(a))))
-            }
-          );
-
-          if (!channel) {
-            if (!autoCreateChannel || config.aliasOnly) {
-              currentInfo = null; // reset
-              continue;
-            }
-            const channelId = "ch_" + Math.random().toString(36).substring(2, 10);
-            const cleanName = stdInfo ? stdInfo.templateName : currentInfo!.name;
-            const cleanAliases = stdInfo 
-              ? Array.from(new Set([cleanName, currentInfo!.name, ...stdInfo.aliases]))
-              : currentInfo!.alias;
-
-            channel = {
-              id: channelId,
-              name: cleanName,
-              logo: currentInfo!.logo || "https://images.unsplash.com/photo-1598257006458-087169a1f08d?auto=format&fit=crop&w=48&h=48&q=80",
-              groupIds: matchedGroupIds,
-              alias: cleanAliases,
-              epgId: "",
-              sources: [],
-            };
-            channels.push(channel);
-            importedChannelsCount++;
-          } else {
-            // Auto pre-populate missing aliases from standard configuration
-            if (stdInfo) {
-              stdInfo.aliases.forEach(a => {
-                if (!channel!.alias.includes(a)) {
-                  channel!.alias.push(a);
-                }
-              });
-            }
-            // Add any aliases parsed from the current m3u metadata
-            if (currentInfo && currentInfo.alias) {
-              currentInfo.alias.forEach(a => {
-                if (!channel!.alias.includes(a)) {
-                  channel!.alias.push(a);
-                }
-              });
-            }
-            // Update logo if provided in the M3U and current logo is invalid or system-generated
-            if (currentInfo!.logo && (!channel!.logo || channel!.logo.includes("unsplash.com"))) {
-              channel!.logo = currentInfo!.logo;
-            }
-          }
-
-          if (config.aliasOnly) {
-            currentInfo = null;
-            continue;
-          }
-
-          // Add source if URL not already there
-          const existingSrc = channel.sources.find((s) => s.url === url);
-          if (!existingSrc) {
-            channel.sources.push({
-              id: "src_" + Math.random().toString(36).substring(2, 10),
-              url,
-              province,
-              isp,
-              status: "unknown",
-            });
-            importedSourcesCount++;
-          } else if (config.isp) {
-            existingSrc.isp = config.isp;
-          }
-
-          currentInfo = null; // reset
+          processM3uItem(currentInfo, line);
+          currentInfo = null;
         }
+      }
+      if (currentInfo) {
+        processM3uItem(currentInfo);
+        currentInfo = null;
       }
     } else {
       // Parse Custom TVBox TXT format
@@ -4459,19 +4481,18 @@ async function performSync(config: SyncConfig, force = false) {
 
       for (const rawLine of lines) {
         const line = rawLine.trim();
-        if (!line) continue;
+        if (!line || line.startsWith("#")) continue;
 
         if (line.includes(",#genre")) {
           currentCategory = toSimplifiedChinese(line.split(",")[0].trim());
-        } else if (line.includes(",")) {
+        } else if (line.includes(",") || line.length > 0) {
           const parts = line.split(",");
           const nameWithSpecs = parts[0].trim();
-          const urls = parts[1].split('#').map(u => {
+          const urls = parts[1] ? parts[1].split('#').map(u => {
             let u2 = u.trim();
             if (u2.includes('$')) u2 = u2.split('$')[0].trim();
             return u2;
-          }).filter(Boolean);
-          if (urls.length === 0) continue;
+          }).filter(Boolean) : [];
 
           const { province, isp: parsedIsp } = parseIspAndProvince(nameWithSpecs + " " + currentCategory);
           const isp = config.isp ? config.isp : parsedIsp;
@@ -4479,7 +4500,7 @@ async function performSync(config: SyncConfig, force = false) {
           let name = nameWithSpecs.split("#")[0].trim();
           name = stripBitrateAndResolution(name);
 
-          if (name.includes("线路")) {
+          if (name.includes("线路") || !name) {
             continue;
           }
 
@@ -4550,6 +4571,11 @@ async function performSync(config: SyncConfig, force = false) {
                 }
               });
             }
+            matchedGroupIds.forEach(gid => {
+              if (!channel!.groupIds.includes(gid)) {
+                channel!.groupIds.push(gid);
+              }
+            });
             // Add any aliases parsed from the current TXT metadata
             nameParts.forEach(a => {
               if (!channel!.alias.includes(a)) {
@@ -6581,9 +6607,136 @@ app.get("/api/channels", async (req, res) => {
         const lines = content.split(/\r?\n/);
         let currentInfo: any = null;
 
+        const processFileM3uItem = (info: any, rawUrl?: string) => {
+          if (!info || !info.name || info.name === "未知频道") return;
+
+          let url = rawUrl ? rawUrl.split("$")[0].trim() : "";
+          const { province, isp } = parseIspAndProvince(info.name + " " + info.category);
+          
+          let isCarouselM3u = false;
+          let carouselKeyM3u = null;
+          if (url) {
+            const parsedCarouselM3u = parseCarouselUrl(url);
+            if (parsedCarouselM3u.platform && parsedCarouselM3u.originalId) {
+              isCarouselM3u = true;
+              carouselKeyM3u = `@carousel:${parsedCarouselM3u.platform}_${parsedCarouselM3u.originalId}`;
+              const registry = db.prepare(`
+                SELECT c.channelId, COALESCE(NULLIF(ch.name, ''), NULLIF(c.name, ''), '未知频道') as name 
+                FROM carousel_channels c 
+                LEFT JOIN channels ch ON c.channelId = ch.id 
+                WHERE c.platform = ? AND c.originalId = ?
+              `).get(parsedCarouselM3u.platform, parsedCarouselM3u.originalId) as any;
+              if (registry) {
+                info.name = registry.name;
+              }
+              detectAndRegisterCarouselProxy(url);
+            }
+          }
+
+          const catNames = (isCarouselM3u ? ["轮播频道"] : info.category.split(/[,;，；]/)).map((s: string) => s.trim()).filter(Boolean);
+          if (catNames.length === 0) catNames.push("手动导入");
+
+          const matchedGroupIds: string[] = [];
+          for (const catName of catNames) {
+            let existingGroup = groups.find((g) => g.name.toLowerCase() === catName.toLowerCase());
+            if (!existingGroup) {
+              if (autoCreateChannel) {
+                existingGroup = {
+                  id: "g_" + Math.random().toString(36).substring(2, 10),
+                  name: catName,
+                };
+                groups.push(existingGroup);
+                matchedGroupIds.push(existingGroup.id);
+              }
+            } else {
+              matchedGroupIds.push(existingGroup.id);
+            }
+          }
+
+          const stdInfo = findAliasTemplate(info.name);
+          const lookupName = stdInfo ? stdInfo.templateName : info.name;
+
+          let channel = channels.find(
+            (c) => {
+              if (carouselKeyM3u) return c.alias.includes(carouselKeyM3u);
+              return normalizeChannelName(c.name) === normalizeChannelName(lookupName) ||
+              c.alias.some((a: string) => normalizeChannelName(a) === normalizeChannelName(lookupName)) ||
+              (stdInfo && stdInfo.aliases.some(a => normalizeChannelName(c.name) === normalizeChannelName(a) || c.alias.some(ca => normalizeChannelName(ca) === normalizeChannelName(a))));
+            }
+          );
+
+          if (!channel) {
+            if (!autoCreateChannel || aliasOnly) {
+              return;
+            }
+            const cleanName = stdInfo ? stdInfo.templateName : info.name;
+            let cleanAliases = stdInfo
+              ? Array.from(new Set([cleanName, info.name, ...stdInfo.aliases, ...(info.alias || [])]))
+              : (info.alias || []);
+            if (carouselKeyM3u) cleanAliases.push(carouselKeyM3u);
+
+            channel = {
+              id: "ch_" + Math.random().toString(36).substring(2, 10),
+              name: cleanName,
+              logo: info.logo || "https://images.unsplash.com/photo-1598257006458-087169a1f08d?auto=format&fit=crop&w=48&h=48&q=80",
+              groupIds: matchedGroupIds,
+              alias: cleanAliases,
+              epgId: info.epgId || generateDefaultEpgId(cleanName),
+              sources: [],
+            };
+            channels.push(channel);
+            importedChannelsCount++;
+          } else {
+            if (stdInfo) {
+              stdInfo.aliases.forEach(a => {
+                if (!channel!.alias.includes(a)) {
+                  channel!.alias.push(a);
+                }
+              });
+            }
+            if (info.alias) {
+              info.alias.forEach((a: string) => {
+                if (!channel!.alias.includes(a)) {
+                  channel!.alias.push(a);
+                }
+              });
+            }
+            matchedGroupIds.forEach(gid => {
+              if (!channel!.groupIds.includes(gid)) {
+                channel!.groupIds.push(gid);
+              }
+            });
+            if (info.logo && (!channel!.logo || channel!.logo.includes("unsplash.com"))) {
+              channel!.logo = info.logo;
+            }
+            if (info.epgId) {
+              channel!.epgId = info.epgId;
+            }
+          }
+
+          if (aliasOnly || !url) {
+            return;
+          }
+
+          if (!channel.sources.some((s) => s.url === url)) {
+            channel.sources.push({
+              id: "src_" + Math.random().toString(36).substring(2, 10),
+              url,
+              province,
+              isp,
+              status: "unknown",
+            });
+            importedSourcesCount++;
+          }
+        };
+
         for (let i = 0; i < lines.length; i++) {
           const line = lines[i].trim();
           if (line.startsWith("#EXTINF:")) {
+            if (currentInfo) {
+              processFileM3uItem(currentInfo);
+              currentInfo = null;
+            }
             const logoMatch = line.match(/tvg-logo="([^"]+)"/) || line.match(/logo="([^"]+)"/);
             const groupMatch = line.match(/group-title="([^"]+)"/);
             const epgMatch = line.match(/tvg-id="([^"]+)"/) || line.match(/epg-id="([^"]+)"/);
@@ -6616,124 +6769,16 @@ app.get("/api/channels", async (req, res) => {
               logo: logoMatch ? logoMatch[1] : "",
               category: toSimplifiedChinese(groupMatch ? groupMatch[1] : "手动导入"),
               alias: parsedAliases,
-              epgId: epgMatch ? epgMatch[1] : generateDefaultEpgId(name),
+              epgId: epgMatch ? epgMatch[1] : "",
             };
           } else if (line && !line.startsWith("#") && currentInfo) {
-            let url = line.split("$")[0].trim();
-            const { province, isp } = parseIspAndProvince(currentInfo.name + " " + currentInfo.category);
-            
-            let isCarouselM3u = false;
-            let carouselKeyM3u = null;
-            const parsedCarouselM3u = parseCarouselUrl(url);
-            if (parsedCarouselM3u.platform && parsedCarouselM3u.originalId) {
-               isCarouselM3u = true;
-               carouselKeyM3u = `@carousel:${parsedCarouselM3u.platform}_${parsedCarouselM3u.originalId}`;
-               const registry = db.prepare(`
-                SELECT c.channelId, COALESCE(NULLIF(ch.name, ''), NULLIF(c.name, ''), '未知频道') as name 
-                FROM carousel_channels c 
-                LEFT JOIN channels ch ON c.channelId = ch.id 
-                WHERE c.platform = ? AND c.originalId = ?
-              `).get(parsedCarouselM3u.platform, parsedCarouselM3u.originalId) as any;
-               if (registry) {
-                 currentInfo.name = registry.name;
-               }
-               detectAndRegisterCarouselProxy(url);
-            }
-
-            const catNames = (isCarouselM3u ? ["轮播频道"] : currentInfo.category.split(/[,;，；]/)).map((s: string) => s.trim()).filter(Boolean);
-
-            if (catNames.length === 0) catNames.push("手动导入");
-
-            const matchedGroupIds: string[] = [];
-            for (const catName of catNames) {
-              let existingGroup = groups.find((g) => g.name.toLowerCase() === catName.toLowerCase());
-              if (!existingGroup) {
-                if (autoCreateChannel) {
-                  existingGroup = {
-                    id: "g_" + Math.random().toString(36).substring(2, 10),
-                    name: catName,
-                  };
-                  groups.push(existingGroup);
-                  matchedGroupIds.push(existingGroup.id);
-                }
-              } else {
-                matchedGroupIds.push(existingGroup.id);
-              }
-            }
-
-            const stdInfo = findAliasTemplate(currentInfo.name);
-            const lookupName = stdInfo ? stdInfo.templateName : currentInfo.name;
-
-            let channel = channels.find(
-              (c) => {
-                 if (carouselKeyM3u) return c.alias.includes(carouselKeyM3u);
-                 return normalizeChannelName(c.name) === normalizeChannelName(lookupName) ||
-                 c.alias.some((a: string) => normalizeChannelName(a) === normalizeChannelName(lookupName)) ||
-                 (stdInfo && stdInfo.aliases.some(a => normalizeChannelName(c.name) === normalizeChannelName(a) || c.alias.some(ca => normalizeChannelName(ca) === normalizeChannelName(a))));
-              }
-            );
-
-            if (!channel) {
-              if (!autoCreateChannel || aliasOnly) {
-                currentInfo = null;
-                continue;
-              }
-              const cleanName = stdInfo ? stdInfo.templateName : currentInfo.name;
-              let cleanAliases = stdInfo
-                ? Array.from(new Set([cleanName, currentInfo.name, ...stdInfo.aliases]))
-                : currentInfo.alias;
-              if (carouselKeyM3u) cleanAliases.push(carouselKeyM3u);
-
-              channel = {
-                id: "ch_" + Math.random().toString(36).substring(2, 10),
-                name: cleanName,
-                logo: currentInfo.logo || "https://images.unsplash.com/photo-1598257006458-087169a1f08d?auto=format&fit=crop&w=48&h=48&q=80",
-                groupIds: matchedGroupIds,
-                alias: cleanAliases,
-                epgId: "",
-                sources: [],
-              };
-              channels.push(channel);
-              importedChannelsCount++;
-            } else {
-              if (stdInfo) {
-                stdInfo.aliases.forEach(a => {
-                  if (!channel!.alias.includes(a)) {
-                    channel!.alias.push(a);
-                  }
-                });
-              }
-              // Add any aliases parsed from the current m3u metadata
-              if (currentInfo && currentInfo.alias) {
-                currentInfo.alias.forEach((a: string) => {
-                  if (!channel!.alias.includes(a)) {
-                    channel!.alias.push(a);
-                  }
-                });
-              }
-              // Update logo if provided in the M3U and current logo is invalid or system-generated
-              if (currentInfo.logo && (!channel!.logo || channel!.logo.includes("unsplash.com"))) {
-                channel!.logo = currentInfo.logo;
-              }
-            }
-
-            if (aliasOnly) {
-              currentInfo = null;
-              continue;
-            }
-
-            if (!channel.sources.some((s) => s.url === url)) {
-              channel.sources.push({
-                id: "src_" + Math.random().toString(36).substring(2, 10),
-                url,
-                province,
-                isp,
-                status: "unknown",
-              });
-              importedSourcesCount++;
-            }
+            processFileM3uItem(currentInfo, line);
             currentInfo = null;
           }
+        }
+        if (currentInfo) {
+          processFileM3uItem(currentInfo);
+          currentInfo = null;
         }
       } else {
         // Parse TVBox TXT
@@ -6742,23 +6787,26 @@ app.get("/api/channels", async (req, res) => {
 
         for (const rawLine of lines) {
           const line = rawLine.trim();
-          if (!line) continue;
+          if (!line || line.startsWith("#")) continue;
 
           if (line.includes(",#genre")) {
             currentCategory = toSimplifiedChinese(line.split(",")[0].trim());
-          } else if (line.includes(",")) {
+          } else if (line.includes(",") || line.length > 0) {
             const parts = line.split(",");
             const nameWithSpecs = parts[0].trim();
-            const urls = parts[1].split('#').map(u => {
+            const urls = parts[1] ? parts[1].split('#').map(u => {
               let u2 = u.trim();
               if (u2.includes('$')) u2 = u2.split('$')[0].trim();
               return u2;
-            }).filter(Boolean);
-            if (urls.length === 0) continue;
+            }).filter(Boolean) : [];
 
             const { province, isp } = parseIspAndProvince(nameWithSpecs + " " + currentCategory);
             let name = nameWithSpecs.split("#")[0].trim();
             name = stripBitrateAndResolution(name);
+
+            if (name.includes("线路") || !name) {
+              continue;
+            }
 
             const nameParts = name.split(/[,;，；:]/).map(s => s.trim()).filter(Boolean);
             if (nameParts.length > 0) {
@@ -6842,6 +6890,11 @@ app.get("/api/channels", async (req, res) => {
                   }
                 });
               }
+              matchedGroupIds.forEach(gid => {
+                if (!channel!.groupIds.includes(gid)) {
+                  channel!.groupIds.push(gid);
+                }
+              });
               // Add any aliases parsed from the current TXT metadata
               nameParts.forEach(a => {
                 if (!channel!.alias.includes(a)) {
@@ -9340,11 +9393,46 @@ app.get("/api/channels", async (req, res) => {
     let currentLogo = "";
     let currentEpgId = "";
 
+    const commitChannel = (title: string, group: string, logo: string, epgId: string, url?: string) => {
+      if (!title || title === "未知频道") return;
+      const groupKey = group || "未分类";
+      if (!groupsMap.has(groupKey)) {
+        groupsMap.set(groupKey, { id: `g_m3u_${groupsMap.size + 1}`, name: groupKey, isolated: false });
+      }
+      const grp = groupsMap.get(groupKey)!;
+
+      if (!channelsMap.has(title)) {
+        channelsMap.set(title, {
+          id: `ch_m3u_${channelsMap.size + 1}_${Date.now()}`,
+          name: title,
+          logo: logo,
+          groupIds: [grp.id],
+          alias: [],
+          epgId: epgId,
+          isolated: false,
+          sources: []
+        });
+      }
+      const ch = channelsMap.get(title)!;
+      if (url) {
+        ch.sources.push({
+          id: `src_m3u_${ch.sources.length + 1}_${Date.now()}`,
+          url,
+          status: "active",
+          isolated: false
+        });
+      }
+    };
+
     lines.forEach((line) => {
       const trimmed = line.trim();
       if (!trimmed) return;
 
       if (trimmed.startsWith("#EXTINF:")) {
+        if (currentTitle) {
+          commitChannel(currentTitle, currentGroup, currentLogo, currentEpgId);
+          currentTitle = "";
+        }
         const groupMatch = trimmed.match(/group-title="([^"]+)"/i);
         const logoMatch = trimmed.match(/tvg-logo="([^"]+)"/i);
         const epgMatch = trimmed.match(/tvg-id="([^"]+)"/i);
@@ -9355,6 +9443,10 @@ app.get("/api/channels", async (req, res) => {
         currentEpgId = epgMatch ? epgMatch[1] : "";
         currentTitle = commaIdx !== -1 ? trimmed.substring(commaIdx + 1).trim() : "";
       } else if (trimmed.includes(",#genre")) {
+        if (currentTitle) {
+          commitChannel(currentTitle, currentGroup, currentLogo, currentEpgId);
+          currentTitle = "";
+        }
         const parts = trimmed.split(",");
         currentGroup = parts[0].trim() || "未分类";
       } else if (trimmed.includes("http://") || trimmed.includes("https://") || trimmed.includes("rtsp://") || trimmed.includes("rtmp://")) {
@@ -9367,35 +9459,15 @@ app.get("/api/channels", async (req, res) => {
         }
         if (!name) name = "未知频道";
 
-        const groupKey = currentGroup || "未分类";
-        if (!groupsMap.has(groupKey)) {
-          groupsMap.set(groupKey, { id: `g_m3u_${groupsMap.size + 1}`, name: groupKey, isolated: false });
-        }
-        const grp = groupsMap.get(groupKey)!;
-
-        if (!channelsMap.has(name)) {
-          channelsMap.set(name, {
-            id: `ch_m3u_${channelsMap.size + 1}_${Date.now()}`,
-            name,
-            logo: currentLogo,
-            groupIds: [grp.id],
-            alias: [],
-            epgId: currentEpgId,
-            isolated: false,
-            sources: []
-          });
-        }
-        const ch = channelsMap.get(name)!;
-        ch.sources.push({
-          id: `src_m3u_${ch.sources.length + 1}_${Date.now()}`,
-          url,
-          status: "active",
-          isolated: false
-        });
-
+        commitChannel(name, currentGroup, currentLogo, currentEpgId, url);
         currentTitle = "";
       }
     });
+
+    if (currentTitle) {
+      commitChannel(currentTitle, currentGroup, currentLogo, currentEpgId);
+      currentTitle = "";
+    }
 
     return {
       channels: Array.from(channelsMap.values()),
