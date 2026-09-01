@@ -2860,9 +2860,18 @@ function isResponseContentInvalid(text: string, contentType = ""): { invalid: bo
     lowerText.includes("token expired") ||
     lowerText.includes("access denied") ||
     lowerText.includes("sign error") ||
-    lowerText.includes("auth fail")
+    lowerText.includes("auth fail") ||
+    lowerText.includes("鉴权失败") ||
+    lowerText.includes("提取失败") ||
+    lowerText.includes("解析失败") ||
+    lowerText.includes("无法播放") ||
+    lowerText.includes("链接失效") ||
+    lowerText.includes("源失效") ||
+    lowerText.includes("参数错误") ||
+    lowerText.includes("校验失败") ||
+    lowerText.includes("链接已失效")
   ) {
-    return { invalid: true, reason: "版权限制/需要登录" };
+    return { invalid: true, reason: "版权限制/鉴权失败/提示登录" };
   }
 
   // 2. 频道不存在、播放失败、下线资源检测
@@ -2890,7 +2899,14 @@ function isResponseContentInvalid(text: string, contentType = ""): { invalid: bo
     }
   }
 
-  // 3. 非音视频流 HTML 网页错误页（排除合法的 M3U8 声明）
+  // 3. Content-Type 声明为 JSON 但返回内容非 JSON 结构且不是 M3U8
+  if (lowerCT.includes("json")) {
+    if (!trimmed.startsWith("{") && !trimmed.startsWith("[") && !lowerText.includes("#extm3u")) {
+      return { invalid: true, reason: "JSON 接口返回非媒体文本" };
+    }
+  }
+
+  // 4. 非音视频流 HTML 网页错误页（排除合法的 M3U8 声明）
   if (
     (lowerCT.includes("text/html") || trimmed.startsWith("<!doctype html") || trimmed.startsWith("<html")) &&
     !lowerText.includes("#extm3u") && !lowerText.includes("#extinf")
@@ -2898,14 +2914,14 @@ function isResponseContentInvalid(text: string, contentType = ""): { invalid: bo
     return { invalid: true, reason: "返回 HTML 错误页" };
   }
 
-  // 4. 空白 M3U8 列表检测
+  // 5. 空白 M3U8 列表检测
   if (lowerText.includes("#extm3u")) {
     if (!lowerText.includes("#extinf") && !lowerText.includes(".ts") && !lowerText.includes(".m3u8") && !lowerText.includes("http")) {
       return { invalid: true, reason: "空白 M3U8 列表" };
     }
   }
 
-  // 5. JSON 接口失败载荷检测
+  // 6. JSON 接口失败载荷检测
   if (lowerCT.includes("json") || (trimmed.startsWith("{") && trimmed.endsWith("}"))) {
     try {
       const obj = JSON.parse(trimmed);
@@ -2931,6 +2947,13 @@ function isResponseContentInvalid(text: string, contentType = ""): { invalid: bo
         }
       }
     } catch (e) {}
+  }
+
+  // 7. 纯文本响应且无 M3U8/音视频特征
+  if ((lowerCT.includes("text/plain") || lowerCT.includes("text/raw")) && !lowerText.includes("#extm3u") && !lowerText.includes("#extinf")) {
+    if (trimmed.length < 500 && (lowerText.includes("error") || lowerText.includes("fail") || /[\u4e00-\u9fa5]/.test(trimmed))) {
+      return { invalid: true, reason: "纯文本非媒体响应" };
+    }
   }
 
   return { invalid: false };
