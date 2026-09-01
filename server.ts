@@ -1267,6 +1267,7 @@ function syncCarouselSources(): { createdCount: number; updatedCount: number; re
   const deleteSourceStmt = db.prepare("DELETE FROM sources WHERE id = ?");
   const insertSourceStmt = db.prepare("INSERT INTO sources (id, channelId, url, province, isp, status, isolated) VALUES (?, ?, ?, ?, ?, ?, ?)");
 
+  const disabledOrFailedUrls = new Set<string>();
   const allSourcesInDb = db.prepare("SELECT id, channelId, url, status, isolated, latency FROM sources").all() as any[];
   for (const src of allSourcesInDb) {
     if (!src.url) {
@@ -1281,8 +1282,11 @@ function syncCarouselSources(): { createdCount: number; updatedCount: number; re
       const isIsolated = src.isolated === 1 || src.isolated === true || src.isolated === '1';
       const isInvalid = src.status === 'inactive' || src.status === 'disabled' || src.status === 'error' || src.status === 'failed' || src.latency === 9999 || src.latency === -1;
 
-      // Purge isolated or invalid carousel sources
+      // Track isolated or invalid carousel sources so they are not re-inserted by active proxy templates
       if (isIsolated || isInvalid) {
+        if (src.channelId && src.url) {
+          disabledOrFailedUrls.add(`${src.channelId}:${src.url}`);
+        }
         deleteSourceStmt.run(src.id);
         removedCount++;
       }
@@ -1333,9 +1337,10 @@ function syncCarouselSources(): { createdCount: number; updatedCount: number; re
       }
     }
 
-    // Insert any expected URLs that were not already present
+    // Insert any expected URLs that were not already present, skipping previously failed/isolated streams
     for (const expectedUrl of expectedCarouselUrls) {
-      if (!satisfiedUrls.has(expectedUrl)) {
+      const key = `${channelId}:${expectedUrl}`;
+      if (!satisfiedUrls.has(expectedUrl) && !disabledOrFailedUrls.has(key)) {
         insertSourceStmt.run(crypto.randomUUID(), channelId, expectedUrl, '', '', 'active', 0);
         satisfiedUrls.add(expectedUrl);
         createdCount++;
@@ -3104,9 +3109,28 @@ async function testSingleUrl(url: string, timeoutMs: number = 3000): Promise<{ s
       let resolution: string | undefined = parseResolution(url);
 
       try {
-        const contentType = response.headers.get("content-type") || "";
-        if (contentType.includes("mpegurl") || urlLower.endsWith(".m3u8") || contentType.includes("text")) {
+        const contentType = (response.headers.get("content-type") || "").toLowerCase();
+        if (contentType.includes("mpegurl") || contentType.includes("text") || contentType.includes("json") || contentType.includes("html") || urlLower.endsWith(".m3u8")) {
           const text = await response.text();
+          const lowerText = text.toLowerCase();
+          
+          // 检查 HTML 错误页或咪咕/轮播代理的失败特征（如 404, 500, ErrCode, 频道不存在, 播放失败, 空白 M3U8）
+          if (
+            text.trim().startsWith("<") ||
+            lowerText.includes("<!doctype") ||
+            lowerText.includes("<html") ||
+            lowerText.includes("404 not found") ||
+            lowerText.includes("500 internal") ||
+            lowerText.includes("errcode") ||
+            lowerText.includes("errorcode") ||
+            lowerText.includes("频道不存在") ||
+            lowerText.includes("播放失败") ||
+            lowerText.includes("无效资源") ||
+            (lowerText.includes("#extm3u") && !lowerText.includes("#extinf") && !lowerText.includes(".ts") && !lowerText.includes(".m3u8"))
+          ) {
+            return { status: "inactive", latency: Date.now() - startTime };
+          }
+
           const parsed = parseResolution(url, text);
           if (parsed) resolution = parsed;
         } else if (response.body) {
@@ -3193,6 +3217,12 @@ function updateSourceDbStatus(channelId: string, sourceId: string, status: "acti
         source.resolution = resolution;
       }
       source.lastChecked = new Date().toISOString();
+
+      // 当测速结果判定为不可用 (inactive) 时，若为咪咕代理或轮播源，自动将其隔离 (isolated = true)，实现测速排除
+      const isMiguOrCarousel = isCarouselSource(source, channel) || /[?&/](?:migu|mg|miguvideo)[_./?]/i.test(source.url) || /\/(?:migu|mg|migu_live)\//i.test(source.url);
+      if (status === "inactive" && isMiguOrCarousel) {
+        source.isolated = true;
+      }
     }
   }
 }
@@ -4522,8 +4552,10 @@ async function runCronJob(job: any) {
           if (!channel.sources) return;
           channel.sources.forEach((source) => {
             if (source.isolated) return;
+            const isCarousel = isCarouselSource(source, channel);
             const specificISPs = ["电信", "联通", "移动", "广电", "铁通"];
-            if (source.isp && specificISPs.includes(source.isp)) return;
+            // 服务端测速：保留测速轮播直播源与咪咕代理源；仅对普通单网源跳过特定ISP
+            if (!isCarousel && source.isp && specificISPs.includes(source.isp)) return;
             targetSources.push({
               id: source.id,
               channelId: channel.id,
@@ -6920,9 +6952,10 @@ app.get("/api/channels", async (req, res) => {
         if (province && province !== "all" && source.province !== province) return;
         if (status && status !== "all" && source.status !== status) return;
 
-        // 服务端全网异步多线程测速，只针对多线直播源，不对指定isp的线路测速
+        // 服务端全网异步多线程测速：保留测速轮播直播源与咪咕代理源，不对普通单网源测速
+        const isCarousel = isCarouselSource(source, channel);
         const specificISPs = ["电信", "联通", "移动", "广电", "铁通"];
-        if (source.isp && specificISPs.includes(source.isp)) {
+        if (!isCarousel && source.isp && specificISPs.includes(source.isp)) {
           return;
         }
 
