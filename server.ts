@@ -2841,11 +2841,15 @@ function isPrivateOrIntranetUrl(urlStr: string): boolean {
 }
 
 function isResponseContentInvalid(text: string, contentType = ""): { invalid: boolean; reason?: string } {
-  if (!text) return { invalid: false };
+  const lowerCT = (contentType || "").toLowerCase();
+
+  // 0. 空白/全零字节内容检测：任何返回为空或纯空格的文本响应均判定无效
+  if (!text || !text.trim()) {
+    return { invalid: true, reason: "响应内容为空(0字节)" };
+  }
 
   const trimmed = text.trim();
   const lowerText = text.toLowerCase();
-  const lowerCT = contentType.toLowerCase();
 
   // 1. 版权原因、登录提示、权限鉴权错误检测
   if (
