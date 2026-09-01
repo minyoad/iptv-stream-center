@@ -282,11 +282,28 @@ function initSqlite() {
       key TEXT PRIMARY KEY,
       value TEXT
     );
+    CREATE TABLE IF NOT EXISTS client_access_logs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      endpoint TEXT NOT NULL,
+      endpointPath TEXT NOT NULL,
+      clientIp TEXT NOT NULL,
+      province TEXT,
+      isp TEXT,
+      userAgent TEXT,
+      clientApp TEXT,
+      queryParams TEXT,
+      statusCode INTEGER DEFAULT 200,
+      responseBytes INTEGER DEFAULT 0,
+      accessTime DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
   `);
 
   
   // Ensure optimized indices for speedy lookups
   db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_client_access_logs_time ON client_access_logs(accessTime DESC);
+    CREATE INDEX IF NOT EXISTS idx_client_access_logs_endpoint ON client_access_logs(endpoint);
+    CREATE INDEX IF NOT EXISTS idx_client_access_logs_ip ON client_access_logs(clientIp);
     CREATE INDEX IF NOT EXISTS idx_sources_channelId ON sources(channelId);
     CREATE INDEX IF NOT EXISTS idx_sources_status ON sources(status);
     CREATE INDEX IF NOT EXISTS idx_test_reports_createdAt ON test_reports(createdAt DESC);
@@ -497,6 +514,105 @@ function invalidateIntegratedEpgCache() {
     if (fs.existsSync(EPG_EXPORT_XML_PATH)) fs.unlinkSync(EPG_EXPORT_XML_PATH);
     if (fs.existsSync(EPG_EXPORT_GZ_PATH)) fs.unlinkSync(EPG_EXPORT_GZ_PATH);
   } catch (_) {}
+}
+
+// Client access stats recording helper
+function parseClientApp(ua: string): string {
+  if (!ua) return "未知客户端 / Direct";
+  const lower = ua.toLowerCase();
+  
+  if (lower.includes("tivimate")) return "TiviMate";
+  if (lower.includes("tvbox") || lower.includes("fongmi") || lower.includes("catvod") || lower.includes("okplayer") || lower.includes("q21")) return "TVBox / 影视仓";
+  if (lower.includes("potplayer")) return "PotPlayer";
+  if (lower.includes("vlc")) return "VLC Media Player";
+  if (lower.includes("smarters") || lower.includes("iptv smarters")) return "IPTV Smarters";
+  if (lower.includes("perfectplayer") || lower.includes("perfect player")) return "Perfect Player";
+  if (lower.includes("ott navigator") || lower.includes("ottnav")) return "OTT Navigator";
+  if (lower.includes("kodi")) return "Kodi";
+  if (lower.includes("ffmpeg") || lower.includes("lavf") || lower.includes("mpv")) return "FFmpeg / MPV";
+  if (lower.includes("curl") || lower.includes("wget")) return "cURL / Wget";
+  if (lower.includes("python") || lower.includes("axios") || lower.includes("go-http-client") || lower.includes("postman")) return "API 脚本工具";
+  if (lower.includes("mozilla") || lower.includes("chrome") || lower.includes("safari") || lower.includes("edge") || lower.includes("firefox")) return "Web 浏览器";
+  
+  return "其它播放器";
+}
+
+function recordClientAccess(
+  req: express.Request,
+  endpoint: string,
+  endpointPath: string,
+  statusCode: number = 200,
+  extraInfo: { responseBytes?: number; province?: string; isp?: string; customQuery?: string } = {}
+) {
+  try {
+    let clientIp = "";
+    if (typeof req.query.ip === "string" && req.query.ip) {
+      clientIp = req.query.ip;
+    } else if (typeof req.query.clientIp === "string" && req.query.clientIp) {
+      clientIp = req.query.clientIp;
+    } else if (typeof req.headers["x-forwarded-for"] === "string") {
+      clientIp = req.headers["x-forwarded-for"].split(",")[0].trim();
+    } else if (Array.isArray(req.headers["x-forwarded-for"])) {
+      clientIp = req.headers["x-forwarded-for"][0].trim();
+    } else if (typeof req.headers["x-real-ip"] === "string") {
+      clientIp = req.headers["x-real-ip"].trim();
+    } else {
+      clientIp = req.socket?.remoteAddress || "127.0.0.1";
+    }
+
+    if (clientIp.startsWith("::ffff:")) {
+      clientIp = clientIp.substring(7);
+    }
+
+    const userAgent = (req.headers["user-agent"] || "").slice(0, 300);
+    const clientApp = parseClientApp(userAgent);
+
+    let province = extraInfo.province || (req.query.province ? String(req.query.province) : "");
+    let isp = extraInfo.isp || (req.query.isp ? String(req.query.isp) : "");
+
+    let queryParams = extraInfo.customQuery || "";
+    if (!queryParams && req.query) {
+      const qObj = { ...req.query };
+      delete qObj.ip;
+      delete qObj.clientIp;
+      if (Object.keys(qObj).length > 0) {
+        queryParams = JSON.stringify(qObj);
+      }
+    }
+
+    const responseBytes = extraInfo.responseBytes || 0;
+
+    const doInsert = (finalProv: string, finalIsp: string) => {
+      try {
+        db.prepare(`
+          INSERT INTO client_access_logs (endpoint, endpointPath, clientIp, province, isp, userAgent, clientApp, queryParams, statusCode, responseBytes, accessTime)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now', 'localtime'))
+        `).run(endpoint, endpointPath, clientIp, finalProv, finalIsp, userAgent, clientApp, queryParams, statusCode, responseBytes);
+
+        if (Math.random() < 0.05) {
+          const countRow = db.prepare(`SELECT COUNT(*) as cnt FROM client_access_logs`).get() as { cnt: number };
+          if (countRow && countRow.cnt > 50000) {
+            db.prepare(`DELETE FROM client_access_logs WHERE id IN (SELECT id FROM client_access_logs ORDER BY accessTime ASC LIMIT ?)`)
+              .run(countRow.cnt - 50000);
+          }
+        }
+      } catch (e) {
+        console.error("[RECORD CLIENT ACCESS DB ERROR]", e);
+      }
+    };
+
+    if (!province && !isp && clientIp && clientIp !== "127.0.0.1" && clientIp !== "localhost" && !clientIp.startsWith("192.168.") && !clientIp.startsWith("10.")) {
+      getClientIpGeo(clientIp).then((geo) => {
+        doInsert(geo.province || "", geo.isp || "");
+      }).catch(() => {
+        doInsert(province, isp);
+      });
+    } else {
+      doInsert(province, isp);
+    }
+  } catch (err) {
+    console.error("[RECORD CLIENT ACCESS ERROR]", err);
+  }
 }
 
 // Disk cache path & memory cache for exported Playlists (M3U / TXT) by ISP, Province, Category & Params
@@ -8028,6 +8144,110 @@ app.get("/api/channels", async (req, res) => {
     }
   });
 
+  // Client API Access Statistics Endpoints
+  app.get("/api/stats/client-access", (req, res) => {
+    try {
+      const endpointFilter = (req.query.endpoint as string || "").trim();
+      const searchFilter = (req.query.search as string || "").trim();
+      const limit = req.query.limit ? Math.min(parseInt(req.query.limit as string), 500) : 100;
+
+      let whereClause = "WHERE 1=1";
+      const params: any[] = [];
+
+      if (endpointFilter && endpointFilter !== "all") {
+        whereClause += " AND endpoint = ?";
+        params.push(endpointFilter);
+      }
+
+      if (searchFilter) {
+        whereClause += " AND (clientIp LIKE ? OR userAgent LIKE ? OR clientApp LIKE ? OR province LIKE ? OR isp LIKE ?)";
+        const term = `%${searchFilter}%`;
+        params.push(term, term, term, term, term);
+      }
+
+      // 1. Overview counts
+      const totalRow = db.prepare(`SELECT COUNT(*) as cnt FROM client_access_logs ${whereClause}`).get(...params) as { cnt: number };
+      const todayRow = db.prepare(`SELECT COUNT(*) as cnt FROM client_access_logs ${whereClause} AND accessTime >= date('now', 'localtime')`).get(...params) as { cnt: number };
+      const last24hRow = db.prepare(`SELECT COUNT(*) as cnt FROM client_access_logs ${whereClause} AND accessTime >= datetime('now', '-24 hours', 'localtime')`).get(...params) as { cnt: number };
+      const uniqueIpsTotalRow = db.prepare(`SELECT COUNT(DISTINCT clientIp) as cnt FROM client_access_logs ${whereClause}`).get(...params) as { cnt: number };
+      const uniqueIpsTodayRow = db.prepare(`SELECT COUNT(DISTINCT clientIp) as cnt FROM client_access_logs ${whereClause} AND accessTime >= date('now', 'localtime')`).get(...params) as { cnt: number };
+
+      // 2. Breakdown by Endpoint
+      const endpointRows = db.prepare(`
+        SELECT endpoint, COUNT(*) as total, 
+               SUM(CASE WHEN accessTime >= date('now', 'localtime') THEN 1 ELSE 0 END) as today
+        FROM client_access_logs
+        GROUP BY endpoint
+        ORDER BY total DESC
+      `).all() as any[];
+
+      // 3. Breakdown by Client App
+      const appRows = db.prepare(`
+        SELECT clientApp, COUNT(*) as total,
+               SUM(CASE WHEN accessTime >= date('now', 'localtime') THEN 1 ELSE 0 END) as today
+        FROM client_access_logs
+        GROUP BY clientApp
+        ORDER BY total DESC
+        LIMIT 12
+      `).all() as any[];
+
+      // 4. Breakdown by Location / ISP
+      const locationRows = db.prepare(`
+        SELECT province, isp, COUNT(*) as total
+        FROM client_access_logs
+        WHERE province != '' OR isp != ''
+        GROUP BY province, isp
+        ORDER BY total DESC
+        LIMIT 12
+      `).all() as any[];
+
+      // 5. Hourly Trend (Past 24 Hours)
+      const hourlyRows = db.prepare(`
+        SELECT strftime('%H:00', accessTime) as hourSlot, COUNT(*) as cnt
+        FROM client_access_logs
+        WHERE accessTime >= datetime('now', '-24 hours', 'localtime')
+        GROUP BY hourSlot
+        ORDER BY hourSlot ASC
+      `).all() as any[];
+
+      // 6. Recent Logs
+      const logs = db.prepare(`
+        SELECT id, endpoint, endpointPath, clientIp, province, isp, userAgent, clientApp, queryParams, statusCode, responseBytes, accessTime
+        FROM client_access_logs
+        ${whereClause}
+        ORDER BY accessTime DESC
+        LIMIT ?
+      `).all(...params, limit) as any[];
+
+      res.json({
+        overview: {
+          totalRequests: totalRow?.cnt || 0,
+          todayRequests: todayRow?.cnt || 0,
+          last24hRequests: last24hRow?.cnt || 0,
+          uniqueIpsTotal: uniqueIpsTotalRow?.cnt || 0,
+          uniqueIpsToday: uniqueIpsTodayRow?.cnt || 0
+        },
+        byEndpoint: endpointRows,
+        byClientApp: appRows,
+        byLocation: locationRows,
+        hourlyTrend: hourlyRows,
+        recentLogs: logs
+      });
+    } catch (err: any) {
+      console.error("[GET CLIENT ACCESS STATS ERROR]", err);
+      res.status(500).json({ error: "获取客户端访问统计失败: " + (err.message || err) });
+    }
+  });
+
+  app.post("/api/stats/client-access/clear", (req, res) => {
+    try {
+      db.prepare(`DELETE FROM client_access_logs`).run();
+      res.json({ success: true, message: "所有客户端访问日志已成功清空" });
+    } catch (err: any) {
+      res.status(500).json({ error: "清空访问日志失败: " + (err.message || err) });
+    }
+  });
+
   app.get("/api/sources/test-status", (req, res) => {
     res.json({ ...testStatus, lastDataUpdate: globalLastDataUpdate });
   });
@@ -8527,6 +8747,10 @@ app.get("/api/channels", async (req, res) => {
     });
 
     if (req.headers["if-none-match"] === etag) {
+      recordClientAccess(req, "m3u", "/api/export/m3u", 304, {
+        province: finalProvince,
+        isp: finalIsp
+      });
       return res.status(304).end();
     }
 
@@ -8540,6 +8764,13 @@ app.get("/api/channels", async (req, res) => {
     res.setHeader("X-Client-Province", encodeURIComponent(targetProvince || ""));
     const m3uDebugHeader = `\n# [Debug Info] Client IP: ${resolvedClientIp || "N/A"} | Detected ISP: ${targetIsp || "None"} | Detected Province: ${targetProvince || "None"}`;
     const firstLineEnd = content.indexOf("\n");
+
+    recordClientAccess(req, "m3u", "/api/export/m3u", 200, {
+      province: finalProvince,
+      isp: finalIsp,
+      responseBytes: Buffer.byteLength(content, "utf-8")
+    });
+
     if (firstLineEnd !== -1) {
       res.send(content.slice(0, firstLineEnd) + m3uDebugHeader + content.slice(firstLineEnd));
     } else {
@@ -8663,6 +8894,10 @@ app.get("/api/channels", async (req, res) => {
     });
 
     if (req.headers["if-none-match"] === etag) {
+      recordClientAccess(req, "txt", "/api/export/txt", 304, {
+        province: finalProvince,
+        isp: finalIsp
+      });
       return res.status(304).end();
     }
 
@@ -8674,6 +8909,13 @@ app.get("/api/channels", async (req, res) => {
     res.setHeader("X-Client-IP", resolvedClientIp || "");
     res.setHeader("X-Client-ISP", encodeURIComponent(targetIsp || ""));
     res.setHeader("X-Client-Province", encodeURIComponent(targetProvince || ""));
+
+    recordClientAccess(req, "txt", "/api/export/txt", 200, {
+      province: finalProvince,
+      isp: finalIsp,
+      responseBytes: Buffer.byteLength(content, "utf-8")
+    });
+
     res.send(content);
   });
 
@@ -8715,6 +8957,7 @@ app.get("/api/channels", async (req, res) => {
       );
 
       if (!channel || channel.isolated || !channel.sources || channel.sources.length === 0) {
+        recordClientAccess(req, "play", `/api/play/${channelName}`, 404, { province: targetProvince, isp: targetIsp });
         return res.status(404).send("Channel not found or isolated");
       }
       
@@ -8731,9 +8974,11 @@ app.get("/api/channels", async (req, res) => {
       }
       
       if (processedSources.length === 0) {
-         return res.status(404).send("No valid non-isolated sources available");
+        recordClientAccess(req, "play", `/api/play/${channelName}`, 404, { province: targetProvince, isp: targetIsp });
+        return res.status(404).send("No valid non-isolated sources available");
       }
       
+      recordClientAccess(req, "play", `/api/play/${channelName}`, 200, { province: targetProvince, isp: targetIsp });
       res.setHeader("Content-Type", "text/plain; charset=utf-8");
       res.send(processedSources[0].url);
       
@@ -8748,12 +8993,18 @@ app.get("/api/channels", async (req, res) => {
     try {
       const { xml, etag } = getOrGenerateIntegratedEpgXml();
       if (req.headers["if-none-match"] === etag) {
+        recordClientAccess(req, "epg_xml", "/api/export/epg.xml", 304);
         return res.status(304).end();
       }
       res.setHeader("Content-Type", "application/xml; charset=utf-8");
       res.setHeader("Cache-Control", "no-cache, must-revalidate");
       res.setHeader("Pragma", "no-cache");
       res.setHeader("ETag", etag);
+
+      recordClientAccess(req, "epg_xml", "/api/export/epg.xml", 200, {
+        responseBytes: Buffer.byteLength(xml, "utf-8")
+      });
+
       res.send(xml);
     } catch (err: any) {
       console.error("[EPG EXPORT ERROR]", err);
@@ -8766,6 +9017,7 @@ app.get("/api/channels", async (req, res) => {
     try {
       const { gz, etag } = getOrGenerateIntegratedEpgXml();
       if (req.headers["if-none-match"] === etag) {
+        recordClientAccess(req, "epg_gz", "/api/export/epg.xml.gz", 304);
         return res.status(304).end();
       }
       res.setHeader("Content-Type", "application/gzip");
@@ -8773,6 +9025,11 @@ app.get("/api/channels", async (req, res) => {
       res.setHeader("Cache-Control", "no-cache, must-revalidate");
       res.setHeader("Pragma", "no-cache");
       res.setHeader("ETag", etag);
+
+      recordClientAccess(req, "epg_gz", "/api/export/epg.xml.gz", 200, {
+        responseBytes: gz ? gz.length : 0
+      });
+
       res.end(gz);
     } catch (err: any) {
       console.error("[EPG GZIP EXPORT ERROR]", err);
