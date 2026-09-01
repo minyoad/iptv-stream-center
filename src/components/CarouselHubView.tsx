@@ -173,19 +173,21 @@ export const CarouselHubView: React.FC<CarouselHubViewProps> = ({
       </div>
 
       {/* Main Tab Navigation */}
-      <div className="flex items-center gap-2 border-b border-slate-200 pb-3 overflow-x-auto no-scrollbar" id="carousel_hub_tabs">
+      <div className="grid grid-cols-3 sm:flex sm:items-center gap-1.5 sm:gap-2 border-b border-slate-200 pb-3" id="carousel_hub_tabs">
         <button
           type="button"
           onClick={() => setActiveTab("channels")}
-          className={`px-4 py-2.5 rounded-2xl text-xs font-bold transition flex items-center gap-2 shrink-0 cursor-pointer touch-press ${
+          className={`px-1.5 sm:px-4 py-2 sm:py-2.5 rounded-xl sm:rounded-2xl text-[11px] sm:text-xs font-bold transition flex items-center justify-center sm:justify-start gap-1 sm:gap-2 cursor-pointer touch-press w-full sm:w-auto ${
             activeTab === "channels"
               ? "bg-slate-900 text-white shadow-md shadow-slate-900/20"
               : "bg-white text-slate-600 hover:bg-slate-50 hover:text-slate-900 border border-slate-200"
           }`}
         >
-          <Tv className="w-4 h-4" />
-          <span>轮播频道映射</span>
-          <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-mono font-bold ${
+          <Tv className="w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0" />
+          <span className="truncate">
+            <span className="hidden min-[380px]:inline sm:inline">轮播</span>频道映射
+          </span>
+          <span className={`text-[10px] px-1 py-0.5 rounded-full font-mono font-bold shrink-0 ${
             activeTab === "channels" ? "bg-white/20 text-white" : "bg-slate-100 text-slate-600"
           }`}>
             {stats.channelsCount}
@@ -195,15 +197,17 @@ export const CarouselHubView: React.FC<CarouselHubViewProps> = ({
         <button
           type="button"
           onClick={() => setActiveTab("proxies")}
-          className={`px-4 py-2.5 rounded-2xl text-xs font-bold transition flex items-center gap-2 shrink-0 cursor-pointer touch-press ${
+          className={`px-1.5 sm:px-4 py-2 sm:py-2.5 rounded-xl sm:rounded-2xl text-[11px] sm:text-xs font-bold transition flex items-center justify-center sm:justify-start gap-1 sm:gap-2 cursor-pointer touch-press w-full sm:w-auto ${
             activeTab === "proxies"
               ? "bg-slate-900 text-white shadow-md shadow-slate-900/20"
               : "bg-white text-slate-600 hover:bg-slate-50 hover:text-slate-900 border border-slate-200"
           }`}
         >
-          <Radio className="w-4 h-4" />
-          <span>轮播代理服务</span>
-          <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-mono font-bold ${
+          <Radio className="w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0" />
+          <span className="truncate">
+            <span className="hidden min-[380px]:inline sm:inline">轮播</span>代理服务
+          </span>
+          <span className={`text-[10px] px-1 py-0.5 rounded-full font-mono font-bold shrink-0 ${
             activeTab === "proxies" ? "bg-white/20 text-white" : "bg-slate-100 text-slate-600"
           }`}>
             {stats.activeProxiesCount}/{stats.proxiesCount}
@@ -213,14 +217,16 @@ export const CarouselHubView: React.FC<CarouselHubViewProps> = ({
         <button
           type="button"
           onClick={() => setActiveTab("export")}
-          className={`px-4 py-2.5 rounded-2xl text-xs font-bold transition flex items-center gap-2 shrink-0 cursor-pointer touch-press ${
+          className={`px-1.5 sm:px-4 py-2 sm:py-2.5 rounded-xl sm:rounded-2xl text-[11px] sm:text-xs font-bold transition flex items-center justify-center sm:justify-start gap-1 sm:gap-2 cursor-pointer touch-press w-full sm:w-auto ${
             activeTab === "export"
               ? "bg-slate-900 text-white shadow-md shadow-slate-900/20"
               : "bg-white text-slate-600 hover:bg-slate-50 hover:text-slate-900 border border-slate-200"
           }`}
         >
-          <Download className="w-4 h-4" />
-          <span>轮播专属导出与订阅</span>
+          <Download className="w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0 text-indigo-400" />
+          <span className="truncate">
+            <span className="hidden min-[380px]:inline sm:inline">轮播</span>导出<span className="hidden min-[380px]:inline sm:inline">订阅</span>
+          </span>
         </button>
       </div>
 

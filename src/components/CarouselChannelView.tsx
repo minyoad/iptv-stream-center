@@ -610,24 +610,6 @@ export const CarouselChannelView = ({ fetchData, channelsData = [] }: { fetchDat
             </h2>
             <p className="text-xs text-slate-500 mt-1">统一管理网络直播间与系统频道的映射，并根据自定义特征规则自动识别提取同类直播源</p>
           </div>
-          <div className="flex flex-wrap items-center gap-3">
-             <button
-               onClick={handleDownloadActiveM3u}
-               className="px-3.5 py-2 bg-white text-slate-700 border border-slate-200 rounded-lg text-sm font-bold hover:bg-slate-100 flex items-center shadow-sm transition"
-               title="将目前已配置且测活通过的轮播源一键导出为 M3U 文件"
-             >
-               <Download className="w-4 h-4 mr-1.5 text-indigo-600" />
-               导出可用 M3U
-             </button>
-             <button 
-               onClick={handleApply}
-               disabled={applying}
-               className="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-bold hover:bg-indigo-700 flex items-center shadow-sm disabled:opacity-50 transition"
-             >
-               {applying ? <RefreshCw className="w-4 h-4 mr-1.5 animate-spin" /> : <Save className="w-4 h-4 mr-1.5" />}
-               {applying ? "正在批量应用..." : "一键应用生成频道源"}
-             </button>
-          </div>
         </div>
 
         <div className="px-3 sm:px-5 pt-3 border-b border-slate-100 bg-slate-50/50">
