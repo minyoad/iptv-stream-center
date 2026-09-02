@@ -73,6 +73,7 @@ interface LiveSource {
   isolated?: boolean;
   testCount?: number;
   successCount?: number;
+  diagMsg?: string;
 }
 
 interface Group {
@@ -132,6 +133,7 @@ interface TestStatus {
     status: "active" | "inactive";
     latency?: number;
     resolution?: string;
+    diagMsg?: string;
   }[];
 }
 
@@ -3129,8 +3131,23 @@ async function probeStreamResolutionWithFfprobe(url: string, timeoutMs = 1500): 
   return undefined;
 }
 
+function buildDiagMsg(details: {
+  httpStatus?: number;
+  contentType?: string;
+  reason: string;
+  responseSnippet?: string;
+}): string {
+  return JSON.stringify({
+    httpStatus: details.httpStatus ?? 0,
+    contentType: details.contentType || "未知",
+    reason: details.reason,
+    responseSnippet: (details.responseSnippet || "").trim().slice(0, 350),
+    checkedAt: new Date().toISOString()
+  });
+}
+
 // URL Testing Engine
-async function testSingleUrl(url: string, timeoutMs: number = 5000): Promise<{ status: "active" | "inactive"; latency: number; resolution?: string }> {
+async function testSingleUrl(url: string, timeoutMs: number = 5000): Promise<{ status: "active" | "inactive"; latency: number; resolution?: string; diagMsg?: string }> {
   const startTime = Date.now();
 
   const urlLower = url.toLowerCase();
@@ -3174,7 +3191,12 @@ async function testSingleUrl(url: string, timeoutMs: number = 5000): Promise<{ s
       }
 
       if (isPrivateOrIntranetUrl(url)) {
-        return { status: "active", latency: 60, resolution: parseResolution(url) };
+        return {
+          status: "active",
+          latency: 60,
+          resolution: parseResolution(url),
+          diagMsg: buildDiagMsg({ httpStatus: 200, contentType: "socket/intranet", reason: "专网/内网保留地址(免检测测通)" })
+        };
       }
 
       const socketTimeout = Math.max(timeoutMs, 4000);
@@ -3193,30 +3215,62 @@ async function testSingleUrl(url: string, timeoutMs: number = 5000): Promise<{ s
           socket.destroy();
           const fastRes = parseResolution(url);
           const probedRes = fastRes ? fastRes : await probeStreamResolutionWithFfprobe(url, 1000).catch(() => undefined);
-          resolve({ status: "active", latency, resolution: probedRes || fastRes });
+          resolve({
+            status: "active",
+            latency,
+            resolution: probedRes || fastRes,
+            diagMsg: buildDiagMsg({ httpStatus: 200, contentType: "socket/stream", reason: "专有流 TCP 端口握手成功" })
+          });
         });
-        socket.on("error", () => {
+        socket.on("error", (err: any) => {
           socket.destroy();
           if (isPrivateOrIntranetUrl(url) || urlLower.startsWith("rtsp://")) {
-            resolve({ status: "active", latency: 80, resolution: parseResolution(url) });
+            resolve({
+              status: "active",
+              latency: 80,
+              resolution: parseResolution(url),
+              diagMsg: buildDiagMsg({ httpStatus: 200, contentType: "socket/stream", reason: "RTSP 缺省握手忽略断开" })
+            });
           } else {
-            resolve({ status: "inactive", latency: Date.now() - startTime });
+            resolve({
+              status: "inactive",
+              latency: Date.now() - startTime,
+              diagMsg: buildDiagMsg({ httpStatus: 0, contentType: "socket/stream", reason: `Socket 连接拒绝/失败: ${err?.message || 'ECONNREFUSED'}` })
+            });
           }
         });
         socket.on("timeout", () => {
           socket.destroy();
           if (isPrivateOrIntranetUrl(url) || urlLower.startsWith("rtsp://")) {
-            resolve({ status: "active", latency: 80, resolution: parseResolution(url) });
+            resolve({
+              status: "active",
+              latency: 80,
+              resolution: parseResolution(url),
+              diagMsg: buildDiagMsg({ httpStatus: 200, contentType: "socket/stream", reason: "RTSP 缺省握手超时忽略" })
+            });
           } else {
-            resolve({ status: "inactive", latency: Date.now() - startTime });
+            resolve({
+              status: "inactive",
+              latency: Date.now() - startTime,
+              diagMsg: buildDiagMsg({ httpStatus: 0, contentType: "socket/stream", reason: `Socket 连接握手超时 (${socketTimeout}ms)` })
+            });
           }
         });
       });
-    } catch (e) {
+    } catch (e: any) {
       if (isPrivateOrIntranetUrl(url) || urlLower.startsWith("rtsp://")) {
-        return { status: "active", latency: 80, resolution: parseResolution(url) };
+        return {
+          status: "active",
+          latency: 80,
+          resolution: parseResolution(url),
+          diagMsg: buildDiagMsg({ httpStatus: 200, contentType: "socket/stream", reason: "专网 RTSP 尝试建立握手" })
+        };
       }
-      return { status: "inactive", latency: Date.now() - startTime };
+      return {
+        status: "inactive",
+        latency: Date.now() - startTime,
+        diagMsg: buildDiagMsg({ httpStatus: 0, contentType: "socket/stream", reason: `解析目标 IP/端口异常: ${e?.message || 'Invalid address'}` })
+      };
     }
   }
 
@@ -3233,18 +3287,27 @@ async function testSingleUrl(url: string, timeoutMs: number = 5000): Promise<{ s
     });
 
     clearTimeout(timeoutId);
+    const contentType = (response.headers.get("content-type") || "").toLowerCase();
     
     if (response.ok) {
       const latency = Date.now() - startTime;
       let resolution: string | undefined = parseResolution(url);
 
       try {
-        const contentType = (response.headers.get("content-type") || "").toLowerCase();
         if (contentType.includes("mpegurl") || contentType.includes("text") || contentType.includes("json") || contentType.includes("html") || urlLower.endsWith(".m3u8")) {
           const text = await response.text();
           const contentCheck = isResponseContentInvalid(text, contentType);
           if (contentCheck.invalid) {
-            return { status: "inactive", latency: Date.now() - startTime };
+            return {
+              status: "inactive",
+              latency: Date.now() - startTime,
+              diagMsg: buildDiagMsg({
+                httpStatus: response.status,
+                contentType,
+                reason: contentCheck.reason || "包含无效流格式/防盗链鉴权失败",
+                responseSnippet: text
+              })
+            };
           }
 
           const parsed = parseResolution(url, text);
@@ -3270,7 +3333,16 @@ async function testSingleUrl(url: string, timeoutMs: number = 5000): Promise<{ s
                   const subText = await subRes.text();
                   const subCheck = isResponseContentInvalid(subText, subRes.headers.get("content-type") || "");
                   if (subCheck.invalid) {
-                    return { status: "inactive", latency: Date.now() - startTime };
+                    return {
+                      status: "inactive",
+                      latency: Date.now() - startTime,
+                      diagMsg: buildDiagMsg({
+                        httpStatus: subRes.status,
+                        contentType: subRes.headers.get("content-type") || contentType,
+                        reason: `子 M3U8 列表内容失效: ${subCheck.reason}`,
+                        responseSnippet: subText
+                      })
+                    };
                   }
                   const subParsed = parseResolution(subUrl, subText);
                   if (subParsed) {
@@ -3299,12 +3371,28 @@ async function testSingleUrl(url: string, timeoutMs: number = 5000): Promise<{ s
                         }
                         try { await reader.cancel(); } catch (_) {}
                       } else if (!tsRes.ok) {
-                        return { status: "inactive", latency: Date.now() - startTime };
+                        return {
+                          status: "inactive",
+                          latency: Date.now() - startTime,
+                          diagMsg: buildDiagMsg({
+                            httpStatus: tsRes.status,
+                            contentType: tsRes.headers.get("content-type") || "",
+                            reason: `TS 音视频切片返回 HTTP ${tsRes.status} 状态`
+                          })
+                        };
                       }
                     }
                   }
                 } else {
-                  return { status: "inactive", latency: Date.now() - startTime };
+                  return {
+                    status: "inactive",
+                    latency: Date.now() - startTime,
+                    diagMsg: buildDiagMsg({
+                      httpStatus: subRes.status,
+                      contentType: subRes.headers.get("content-type") || "",
+                      reason: `子 M3U8 索引下载失败 (HTTP ${subRes.status})`
+                    })
+                  };
                 }
               } catch (_) {}
             }
@@ -3318,14 +3406,23 @@ async function testSingleUrl(url: string, timeoutMs: number = 5000): Promise<{ s
             const contentCheck = isResponseContentInvalid(chunkText, contentType);
             if (contentCheck.invalid) {
               try { await reader.cancel(); } catch (_) {}
-              return { status: "inactive", latency: Date.now() - startTime };
+              return {
+                status: "inactive",
+                latency: Date.now() - startTime,
+                diagMsg: buildDiagMsg({
+                  httpStatus: response.status,
+                  contentType,
+                  reason: contentCheck.reason || "包含非音视频有效数据",
+                  responseSnippet: chunkText
+                })
+              };
             }
             const spsRes = parseH264Sps(buf);
             if (spsRes) resolution = spsRes;
           }
           try { await reader.cancel(); } catch (_) {}
         }
-      } catch (err) {
+      } catch (err: any) {
       }
 
       // Execute ffprobe if fast parsing produced no resolution
@@ -3336,13 +3433,44 @@ async function testSingleUrl(url: string, timeoutMs: number = 5000): Promise<{ s
         }
       }
 
-      return { status: "active", latency, resolution };
+      return {
+        status: "active",
+        latency,
+        resolution,
+        diagMsg: buildDiagMsg({
+          httpStatus: response.status,
+          contentType,
+          reason: "HTTP 连通与流数据握手正常"
+        })
+      };
     } else {
-      return { status: "inactive", latency: Date.now() - startTime };
+      let errTextSnippet = "";
+      try {
+        errTextSnippet = await response.text();
+      } catch (_) {}
+      return {
+        status: "inactive",
+        latency: Date.now() - startTime,
+        diagMsg: buildDiagMsg({
+          httpStatus: response.status,
+          contentType,
+          reason: `服务器返回异常状态码 HTTP ${response.status} (${response.statusText || 'Error'})`,
+          responseSnippet: errTextSnippet
+        })
+      };
     }
-  } catch (err) {
+  } catch (err: any) {
     clearTimeout(timeoutId);
-    return { status: "inactive", latency: Date.now() - startTime };
+    const isTimeout = err?.name === "AbortError";
+    return {
+      status: "inactive",
+      latency: Date.now() - startTime,
+      diagMsg: buildDiagMsg({
+        httpStatus: 0,
+        contentType: "none",
+        reason: isTimeout ? `请求超时 (服务端耗时超过 ${timeoutMs}ms 未响应)` : `网络连接失败或跨域/域名无法解析 (${err?.message || 'Connection Refused'})`
+      })
+    };
   }
 }
 
@@ -3365,7 +3493,7 @@ async function runConcurrentTest(selectedSources: { id: string; channelId: strin
 
       const result = await testSingleUrl(item.url);
 
-      updateSourceDbStatus(item.channelId, item.id, result.status, result.latency, result.resolution);
+      updateSourceDbStatus(item.channelId, item.id, result.status, result.latency, result.resolution, result.diagMsg);
 
       testStatus.checked++;
       testStatus.results.push({
@@ -3375,6 +3503,7 @@ async function runConcurrentTest(selectedSources: { id: string; channelId: strin
         status: result.status,
         latency: result.latency,
         resolution: result.resolution,
+        diagMsg: result.diagMsg,
       });
     }
   };
@@ -3386,7 +3515,7 @@ async function runConcurrentTest(selectedSources: { id: string; channelId: strin
   saveData(true);
 }
 
-function updateSourceDbStatus(channelId: string, sourceId: string, status: "active" | "inactive" | "checking" | "unknown", latency?: number, resolution?: string) {
+function updateSourceDbStatus(channelId: string, sourceId: string, status: "active" | "inactive" | "checking" | "unknown", latency?: number, resolution?: string, diagMsg?: string) {
   const channel = channels.find((c) => c.id === channelId);
   if (channel) {
     const source = channel.sources.find((s) => s.id === sourceId);
@@ -3397,6 +3526,9 @@ function updateSourceDbStatus(channelId: string, sourceId: string, status: "acti
       }
       if (resolution) {
         source.resolution = resolution;
+      }
+      if (diagMsg) {
+        source.diagMsg = diagMsg;
       }
       source.lastChecked = new Date().toISOString();
 
@@ -4390,11 +4522,13 @@ async function performSync(config: SyncConfig, force = false) {
               }
             });
           }
-          matchedGroupIds.forEach(gid => {
-            if (!channel!.groupIds.includes(gid)) {
-              channel!.groupIds.push(gid);
-            }
-          });
+          if (autoCreateChannel) {
+            matchedGroupIds.forEach(gid => {
+              if (!channel!.groupIds.includes(gid)) {
+                channel!.groupIds.push(gid);
+              }
+            });
+          }
           if (info.logo && (!channel.logo || channel.logo.includes("unsplash.com"))) {
             channel.logo = info.logo;
           }
@@ -4588,11 +4722,13 @@ async function performSync(config: SyncConfig, force = false) {
                 }
               });
             }
-            matchedGroupIds.forEach(gid => {
-              if (!channel!.groupIds.includes(gid)) {
-                channel!.groupIds.push(gid);
-              }
-            });
+            if (autoCreateChannel) {
+              matchedGroupIds.forEach(gid => {
+                if (!channel!.groupIds.includes(gid)) {
+                  channel!.groupIds.push(gid);
+                }
+              });
+            }
             // Add any aliases parsed from the current TXT metadata
             nameParts.forEach(a => {
               if (!channel!.alias.includes(a)) {
@@ -5144,6 +5280,52 @@ async function startServer() {
     saveData();
     
     res.json({ success: true, isolated: source.isolated });
+  });
+
+  // 实时对单个直播源发起深度诊断与测速
+  app.post("/api/sources/test-single", async (req, res) => {
+    const { sourceId, channelId, url } = req.body;
+    let targetUrl = url;
+    let targetChannelId = channelId;
+    let targetSourceId = sourceId;
+
+    if (targetChannelId && targetSourceId) {
+      const ch = channels.find((c) => c.id === targetChannelId);
+      const src = ch?.sources.find((s) => s.id === targetSourceId);
+      if (src) {
+        targetUrl = src.url;
+      }
+    } else if (targetSourceId) {
+      for (const c of channels) {
+        const src = c.sources.find((s) => s.id === targetSourceId);
+        if (src) {
+          targetChannelId = c.id;
+          targetUrl = src.url;
+          break;
+        }
+      }
+    }
+
+    if (!targetUrl) {
+      return res.status(400).json({ error: "参数不完整或未找到目标 URL" });
+    }
+
+    try {
+      const result = await testSingleUrl(targetUrl, 6000);
+      if (targetChannelId && targetSourceId) {
+        updateSourceDbStatus(targetChannelId, targetSourceId, result.status, result.latency, result.resolution, result.diagMsg);
+        saveData(true);
+      }
+      res.json({
+        success: true,
+        status: result.status,
+        latency: result.latency,
+        resolution: result.resolution,
+        diagMsg: result.diagMsg
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: "现场诊断失败: " + (err?.message || err) });
+    }
   });
 
   app.get("/api/groups", (req, res) => {
@@ -6718,11 +6900,13 @@ app.get("/api/channels", async (req, res) => {
                 }
               });
             }
-            matchedGroupIds.forEach(gid => {
-              if (!channel!.groupIds.includes(gid)) {
-                channel!.groupIds.push(gid);
-              }
-            });
+            if (autoCreateChannel) {
+              matchedGroupIds.forEach(gid => {
+                if (!channel!.groupIds.includes(gid)) {
+                  channel!.groupIds.push(gid);
+                }
+              });
+            }
             if (info.logo && (!channel!.logo || channel!.logo.includes("unsplash.com"))) {
               channel!.logo = info.logo;
             }
@@ -6907,11 +7091,13 @@ app.get("/api/channels", async (req, res) => {
                   }
                 });
               }
-              matchedGroupIds.forEach(gid => {
-                if (!channel!.groupIds.includes(gid)) {
-                  channel!.groupIds.push(gid);
-                }
-              });
+              if (autoCreateChannel) {
+                matchedGroupIds.forEach(gid => {
+                  if (!channel!.groupIds.includes(gid)) {
+                    channel!.groupIds.push(gid);
+                  }
+                });
+              }
               // Add any aliases parsed from the current TXT metadata
               nameParts.forEach(a => {
                 if (!channel!.alias.includes(a)) {

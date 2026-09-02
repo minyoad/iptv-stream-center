@@ -36,6 +36,7 @@ export interface LiveSource {
   isolated?: boolean;
   testCount?: number;
   successCount?: number;
+  diagMsg?: string;
 }
 
 export interface Group {

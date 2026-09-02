@@ -19,6 +19,7 @@ import {
   Clock,
   Settings, Settings2,
   AlertCircle,
+  AlertTriangle,
   UploadCloud,
   Upload,
   Check,
@@ -461,19 +462,25 @@ export default function App() {
   const [singleTestModalState, setSingleTestModalState] = useState<{
     isOpen: boolean;
     sourceId: string | null;
+    channelId?: string | null;
     sourceName: string;
     url: string;
-    status: "testing" | "active" | "inactive" | null;
+    status: "testing" | "active" | "inactive" | "checking" | "unknown" | null;
     latency: number | null;
     error: string | null;
+    diagMsg?: string | null;
+    isRetesting?: boolean;
   }>({
     isOpen: false,
     sourceId: null,
+    channelId: null,
     sourceName: "",
     url: "",
     status: null,
     latency: null,
-    error: null
+    error: null,
+    diagMsg: null,
+    isRetesting: false
   });
   const [passwordForm, setPasswordForm] = useState({
     oldPassword: "",
@@ -2047,16 +2054,61 @@ export default function App() {
   };
 
 
-  const handleOpenSingleTestModal = (sourceId: string, sourceName: string, sourceUrl: string, status: any, latency: any) => {
+  const handleOpenSingleTestModal = (
+    sourceId: string,
+    sourceName: string,
+    sourceUrl: string,
+    status: any,
+    latency: any,
+    diagMsg?: string,
+    channelId?: string
+  ) => {
     setSingleTestModalState({
       isOpen: true,
       sourceId,
+      channelId: channelId || null,
       sourceName,
       url: sourceUrl,
       status,
       latency: latency ?? null,
-      error: null
+      error: null,
+      diagMsg: diagMsg || null,
+      isRetesting: false
     });
+  };
+
+  const handleRetestSingleSource = async () => {
+    if (!singleTestModalState.url) return;
+    setSingleTestModalState(prev => ({ ...prev, isRetesting: true }));
+    try {
+      const res = await fetch("/api/sources/test-single", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          sourceId: singleTestModalState.sourceId,
+          channelId: singleTestModalState.channelId,
+          url: singleTestModalState.url
+        })
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setSingleTestModalState(prev => ({
+          ...prev,
+          status: data.status,
+          latency: data.latency,
+          diagMsg: data.diagMsg,
+          isRetesting: false
+        }));
+        showFeedback("success", "现场深度诊断完成！");
+        await fetchData();
+      } else {
+        showFeedback("error", data.error || "现场诊断失败");
+        setSingleTestModalState(prev => ({ ...prev, isRetesting: false }));
+      }
+    } catch (err) {
+      showFeedback("error", "连接通信超时");
+      setSingleTestModalState(prev => ({ ...prev, isRetesting: false }));
+    }
   };
   const handleGlobalBatchDelete = () => {
     if (selectedGlobalSourceIds.length === 0) {
@@ -4432,9 +4484,19 @@ export default function App() {
                                           </span>
                                         )}
                                         {src.status === "inactive" && (
-                                          <span className="text-rose-700 font-bold bg-rose-100/60 px-1.5 py-0.5 rounded text-[10px]">
-                                            失效/离线
-                                          </span>
+                                          <div className="inline-flex items-center gap-1.5">
+                                            <span className="text-rose-700 font-bold bg-rose-100/60 px-1.5 py-0.5 rounded text-[10px]">
+                                              失效/离线
+                                            </span>
+                                            <button
+                                              onClick={() => handleOpenSingleTestModal(src.id, (selectedChannel.name || "线路") + ` #${index + 1}`, src.url, src.status, src.latency, src.diagMsg, selectedChannel.id)}
+                                              className="bg-rose-600 hover:bg-rose-700 text-white font-black text-[10px] px-2 py-0.5 rounded-md flex items-center gap-1 shadow-xs cursor-pointer transition animate-pulse"
+                                              title="查看该故障线路的诊断详情与报错抓包"
+                                            >
+                                              <AlertTriangle className="w-3 h-3 text-amber-300" />
+                                              诊断详情
+                                            </button>
+                                          </div>
                                         )}
                                         {src.status === "checking" && (
                                           <span className="text-blue-700 font-bold bg-blue-100 animate-pulse px-1.5 py-0.5 rounded text-[10px]">
@@ -5335,11 +5397,19 @@ export default function App() {
                                     <button 
                                       onClick={(e) => {
                                         e.stopPropagation();
-                                        handleOpenSingleTestModal(item.id, item.name || "未命名线路", item.url, item.status, item.latency);
+                                        handleOpenSingleTestModal(item.id, (item.channelName || "线路") + " - " + (item.url.slice(-25)), item.url, item.status, item.latency, item.diagMsg, item.channelId);
                                       }}
-                                      className="text-[11px] font-bold text-indigo-600 hover:text-indigo-800 hover:underline cursor-pointer transition-all"
+                                      className={`text-[11px] font-black px-2.5 py-1 rounded-md transition-all cursor-pointer inline-flex items-center gap-1 ${
+                                        item.status === "inactive"
+                                          ? "bg-rose-600 hover:bg-rose-700 text-white shadow-xs animate-pulse"
+                                          : item.diagMsg
+                                          ? "bg-amber-100 hover:bg-amber-200 text-amber-900 border border-amber-300"
+                                          : "bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200"
+                                      }`}
+                                      title="查看详细数据流与报错诊断"
                                     >
-                                      详细
+                                      <AlertTriangle className={`w-3 h-3 ${item.status === "inactive" ? "text-amber-300" : "text-amber-600"}`} />
+                                      {item.status === "inactive" ? "诊断详情" : "详细诊断"}
                                     </button>
                                     <button 
                                       onClick={(e) => {
@@ -5547,12 +5617,19 @@ export default function App() {
 
                                   <button
                                     onClick={(e) => {
-                                        e.stopPropagation();
-                                        handleOpenSingleTestModal(item.id, item.name || "未命名线路", item.url, item.status, item.latency);
-                                      }}
-                                    className="px-2.5 py-1 rounded-lg text-[11px] font-bold bg-indigo-50 text-indigo-700 border border-indigo-200 cursor-pointer"
+                                      e.stopPropagation();
+                                      handleOpenSingleTestModal(item.id, (item.channelName || "线路") + " - " + (item.url.slice(-25)), item.url, item.status, item.latency, item.diagMsg, item.channelId);
+                                    }}
+                                    className={`px-2.5 py-1 rounded-lg text-[11px] font-black flex items-center gap-1 cursor-pointer transition ${
+                                      item.status === "inactive"
+                                        ? "bg-rose-600 hover:bg-rose-700 text-white animate-pulse shadow-xs"
+                                        : item.diagMsg
+                                        ? "bg-amber-100 text-amber-900 border border-amber-300"
+                                        : "bg-indigo-50 text-indigo-700 border border-indigo-200"
+                                    }`}
                                   >
-                                    详细
+                                    <AlertTriangle className={`w-3 h-3 ${item.status === "inactive" ? "text-amber-300" : "text-amber-600"}`} />
+                                    {item.status === "inactive" ? "诊断详情" : "详细诊断"}
                                   </button>
 
                                   <button
@@ -8690,84 +8767,197 @@ export default function App() {
       )}
 
 
-      {/* Single Test Result Modal */}
-      {singleTestModalState.isOpen && (
-        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl border border-slate-100 flex flex-col space-y-5 animate-fade-in">
-            <div className="flex justify-between items-center">
-              <div className="flex items-center gap-2">
-                <Activity className="w-5 h-5 text-indigo-600" />
-                <h2 className="text-lg font-black text-slate-800">单次测速详细报告</h2>
-              </div>
-              <button 
-                onClick={() => setSingleTestModalState(prev => ({ ...prev, isOpen: false }))}
-                className="text-slate-400 hover:text-slate-600 bg-slate-50 hover:bg-slate-100 p-1.5 rounded-full transition"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
+      {/* Single Test Result / Diagnostic Details Modal */}
+      {singleTestModalState.isOpen && (() => {
+        let parsedDiag: {
+          httpStatus?: number;
+          contentType?: string;
+          reason?: string;
+          responseSnippet?: string;
+          checkedAt?: string;
+        } | null = null;
 
-            <div className="space-y-4">
-              <div className="bg-slate-50 p-4 rounded-xl border border-slate-100 space-y-3">
-                <div className="text-sm font-bold text-slate-700">{singleTestModalState.sourceName}</div>
-                <div className="flex items-start justify-between gap-3 bg-white p-3 rounded-lg border border-slate-200">
-                  <div className="text-xs font-mono text-slate-600 break-all leading-relaxed flex-1">
-                    {singleTestModalState.url}
-                  </div>
+        if (singleTestModalState.diagMsg) {
+          try {
+            parsedDiag = JSON.parse(singleTestModalState.diagMsg);
+          } catch (_) {
+            parsedDiag = { reason: singleTestModalState.diagMsg };
+          }
+        }
+
+        const isFailed = singleTestModalState.status === "inactive";
+
+        return (
+          <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+            <div className="bg-white rounded-2xl max-w-xl w-full p-6 shadow-2xl border border-slate-100 flex flex-col space-y-4 animate-fade-in max-h-[90vh] overflow-y-auto">
+              <div className="flex justify-between items-center border-b border-slate-100 pb-3">
+                <div className="flex items-center gap-2">
+                  <AlertTriangle className={`w-5 h-5 ${isFailed ? "text-rose-600 animate-bounce" : "text-indigo-600"}`} />
+                  <h2 className="text-lg font-black text-slate-800">直播源网络与响应诊断报告</h2>
                 </div>
-                
-                <button
-                  onClick={() => {
-                    navigator.clipboard.writeText(singleTestModalState.url);
-                    showFeedback("success", "已成功复制实际 URL，请在第三方播放器中复测");
-                  }}
-                  className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl transition cursor-pointer flex items-center justify-center gap-2 shadow-md shadow-indigo-100"
+                <button 
+                  onClick={() => setSingleTestModalState(prev => ({ ...prev, isOpen: false }))}
+                  className="text-slate-400 hover:text-slate-600 bg-slate-50 hover:bg-slate-100 p-1.5 rounded-full transition cursor-pointer"
                 >
-                  <Copy className="w-4 h-4" />
-                  复制实际 URL 
+                  <X className="w-5 h-5" />
                 </button>
               </div>
 
-              <div className="flex items-center justify-between p-4 bg-slate-50 rounded-xl border border-slate-100">
-                <span className="text-sm font-semibold text-slate-600">最新测试结果</span>
-                {singleTestModalState.status === "testing" || singleTestModalState.status === "checking" ? (
-                  <div className="flex items-center gap-2 text-indigo-600 font-bold text-sm">
-                    <RefreshCw className="w-4 h-4 animate-spin" />
-                    测试中...
+              <div className="space-y-3.5 text-xs">
+                {/* Channel & Source URL Info */}
+                <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-200/80 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="font-bold text-slate-700 text-sm truncate">{singleTestModalState.sourceName}</span>
+                    <button
+                      onClick={() => {
+                        navigator.clipboard.writeText(singleTestModalState.url);
+                        showFeedback("success", "已成功复制实际 URL");
+                      }}
+                      className="text-[11px] font-bold text-indigo-600 hover:text-indigo-800 flex items-center gap-1 cursor-pointer shrink-0"
+                    >
+                      <Copy className="w-3.5 h-3.5" /> 复制 URL
+                    </button>
                   </div>
-                ) : singleTestModalState.status === "active" ? (
-                  <div className="flex items-center gap-3">
-                    <span className="px-2.5 py-1 bg-emerald-100 text-emerald-700 text-xs font-bold rounded-lg flex items-center gap-1">
-                      <CheckCircle className="w-3.5 h-3.5" /> 健康可用
-                    </span>
-                    {singleTestModalState.latency !== null && (
-                      <span className="text-emerald-700 font-black font-mono text-sm">{singleTestModalState.latency} ms</span>
-                    )}
+                  <div className="bg-white p-2.5 rounded-lg border border-slate-200/80 font-mono text-slate-600 text-[11px] break-all leading-relaxed">
+                    {singleTestModalState.url}
+                  </div>
+                </div>
+
+                {/* Core Diagnostic Callout Banner */}
+                {singleTestModalState.status === "testing" || singleTestModalState.status === "checking" || singleTestModalState.isRetesting ? (
+                  <div className="p-4 bg-indigo-50 border border-indigo-200 rounded-xl flex items-center justify-center gap-3 text-indigo-700 font-bold">
+                    <RefreshCw className="w-5 h-5 animate-spin text-indigo-600" />
+                    <span>正在抓取最新数据包并分析 HTTP 连通状态...</span>
+                  </div>
+                ) : isFailed ? (
+                  <div className="p-4 bg-rose-50 border border-rose-200 rounded-xl space-y-2">
+                    <div className="flex items-center justify-between text-rose-800 font-black text-sm">
+                      <span className="flex items-center gap-1.5">
+                        <XCircle className="w-4 h-4 text-rose-600 shrink-0" />
+                        检测结论: 直播源无法正常播放 / 数据异常
+                      </span>
+                      <span className="text-xs bg-rose-200/80 text-rose-900 px-2 py-0.5 rounded font-mono font-black">
+                        {parsedDiag?.httpStatus !== undefined ? `HTTP ${parsedDiag.httpStatus}` : "连接超时/拒绝"}
+                      </span>
+                    </div>
+                    <p className="text-xs text-rose-700 font-bold leading-relaxed bg-white/60 p-2.5 rounded-lg border border-rose-100">
+                      🚨 故障诊断原因: <span className="font-semibold text-rose-900">{parsedDiag?.reason || "网络连接超时、目标 IP 拒绝连接或返回非音视频流数据"}</span>
+                    </p>
                   </div>
                 ) : (
-                  <div className="flex items-center gap-3">
-                    <span className="px-2.5 py-1 bg-rose-100 text-rose-700 text-xs font-bold rounded-lg flex items-center gap-1">
-                      <XCircle className="w-3.5 h-3.5" /> 失效离线
-                    </span>
-                    {singleTestModalState.latency !== null && (
-                      <span className="text-rose-700 font-black font-mono text-sm">超时 / {singleTestModalState.latency} ms</span>
-                    )}
+                  <div className="p-4 bg-emerald-50 border border-emerald-200 rounded-xl space-y-2">
+                    <div className="flex items-center justify-between text-emerald-800 font-black text-sm">
+                      <span className="flex items-center gap-1.5">
+                        <CheckCircle className="w-4 h-4 text-emerald-600 shrink-0" />
+                        检测结论: 线路连通正常且音视频切片健康
+                      </span>
+                      {singleTestModalState.latency !== null && (
+                        <span className="text-xs bg-emerald-200/80 text-emerald-900 px-2 py-0.5 rounded font-mono font-black">
+                          {singleTestModalState.latency} ms
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-xs text-emerald-700 font-semibold leading-relaxed bg-white/60 p-2.5 rounded-lg border border-emerald-100">
+                      ✅ 诊断明细: {parsedDiag?.reason || "HTTP 握手正常，已识别有效的音视频流头信息"}
+                    </p>
                   </div>
                 )}
+
+                {/* Technical Quad-Grid */}
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                  <div className="bg-slate-50 p-2.5 rounded-xl border border-slate-200/70 text-center">
+                    <span className="text-[10px] text-slate-400 font-bold block mb-0.5">HTTP 状态码</span>
+                    <span className="font-mono font-black text-slate-700 text-xs">
+                      {parsedDiag?.httpStatus !== undefined ? (parsedDiag.httpStatus === 0 ? "0 (超时/拒绝)" : parsedDiag.httpStatus) : "未记录"}
+                    </span>
+                  </div>
+                  <div className="bg-slate-50 p-2.5 rounded-xl border border-slate-200/70 text-center">
+                    <span className="text-[10px] text-slate-400 font-bold block mb-0.5">Content-Type</span>
+                    <span className="font-mono font-bold text-slate-700 text-[11px] truncate block" title={parsedDiag?.contentType || "未知"}>
+                      {parsedDiag?.contentType || "未知"}
+                    </span>
+                  </div>
+                  <div className="bg-slate-50 p-2.5 rounded-xl border border-slate-200/70 text-center">
+                    <span className="text-[10px] text-slate-400 font-bold block mb-0.5">响应延迟</span>
+                    <span className="font-mono font-black text-slate-700 text-xs">
+                      {singleTestModalState.latency !== null ? `${singleTestModalState.latency} ms` : "未知"}
+                    </span>
+                  </div>
+                  <div className="bg-slate-50 p-2.5 rounded-xl border border-slate-200/70 text-center">
+                    <span className="text-[10px] text-slate-400 font-bold block mb-0.5">诊断时间</span>
+                    <span className="font-mono font-semibold text-slate-700 text-[10px]">
+                      {parsedDiag?.checkedAt ? new Date(parsedDiag.checkedAt).toLocaleTimeString() : "刚才"}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Response Snippet Preview */}
+                {parsedDiag?.responseSnippet && (
+                  <div className="space-y-1.5">
+                    <div className="flex justify-between items-center text-xs font-bold text-slate-700">
+                      <span className="flex items-center gap-1 text-slate-800 font-black">
+                        📋 服务器实际响应抓包预览 (前 350 字节)
+                      </span>
+                      <span className="text-[10px] text-slate-400 font-normal">方便排查 HTML 报错/鉴权失败</span>
+                    </div>
+                    <pre className="bg-slate-900 text-amber-300 p-3 rounded-xl text-[11px] font-mono whitespace-pre-wrap break-all max-h-36 overflow-y-auto border border-slate-800 shadow-inner leading-relaxed">
+                      {parsedDiag.responseSnippet}
+                    </pre>
+                  </div>
+                )}
+
+                {/* Troubleshooting Guide */}
+                <div className="bg-slate-50 p-3 rounded-xl border border-slate-200/80 space-y-1 text-[11px] text-slate-600">
+                  <div className="font-bold text-slate-800 text-xs flex items-center gap-1 mb-1">
+                    💡 常见异常原因排查指南:
+                  </div>
+                  <p className="leading-relaxed">
+                    • <b>0 字节/空数据</b>: 服务器虽然返回 HTTP 200，但无任何切片输出，可能由于目标频道关停或缺防盗链头信息。
+                  </p>
+                  <p className="leading-relaxed">
+                    • <b>HTTP 404/500</b>: 源站视频切片文件被卸载或频道推流端离线。
+                  </p>
+                  <p className="leading-relaxed">
+                    • <b>包含非音视频有效数据</b>: 目标 URL 返回的是 HTML 报错页面或 JSON 鉴权拦截信息（见上文抓包）。
+                  </p>
+                </div>
+              </div>
+
+              {/* Action Buttons */}
+              <div className="flex flex-col sm:flex-row items-center justify-between gap-2.5 pt-2 border-t border-slate-100">
+                <button
+                  onClick={handleRetestSingleSource}
+                  disabled={singleTestModalState.isRetesting}
+                  className="w-full sm:w-auto px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-bold rounded-xl transition cursor-pointer text-xs flex items-center justify-center gap-1.5 shadow-md shadow-indigo-100"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${singleTestModalState.isRetesting ? "animate-spin" : ""}`} />
+                  {singleTestModalState.isRetesting ? "正在现场诊断..." : "现场重新深度诊断"}
+                </button>
+                
+                <div className="flex items-center gap-2 w-full sm:w-auto">
+                  <button
+                    onClick={() => {
+                      const report = `【直播源诊断报告】\n源名称: ${singleTestModalState.sourceName}\nURL: ${singleTestModalState.url}\n状态: ${singleTestModalState.status}\n延迟: ${singleTestModalState.latency}ms\n诊断说明: ${parsedDiag?.reason || '无'}\nHTTP Status: ${parsedDiag?.httpStatus}\nContent-Type: ${parsedDiag?.contentType}`;
+                      navigator.clipboard.writeText(report);
+                      showFeedback("success", "诊断报告已复制到剪贴板");
+                    }}
+                    className="flex-1 sm:flex-none px-3 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl transition cursor-pointer text-xs flex items-center justify-center gap-1"
+                  >
+                    <Copy className="w-3.5 h-3.5" />
+                    复制诊断报告
+                  </button>
+                  <button
+                    onClick={() => setSingleTestModalState(prev => ({ ...prev, isOpen: false }))}
+                    className="flex-1 sm:flex-none px-5 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl transition cursor-pointer text-xs"
+                  >
+                    关闭
+                  </button>
+                </div>
               </div>
             </div>
-
-            <div className="flex justify-end pt-2">
-              <button
-                onClick={() => setSingleTestModalState(prev => ({ ...prev, isOpen: false }))}
-                className="px-6 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl transition cursor-pointer text-sm w-full"
-              >
-                关闭
-              </button>
-            </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
       {isSettingPasswordModalOpen && (
         <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4" id="security_password_modal">
           <div className="bg-white rounded-2xl max-w-sm w-full p-6 shadow-2xl border border-slate-100 flex flex-col space-y-5 animate-fade-in">
