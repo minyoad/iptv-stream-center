@@ -102,7 +102,7 @@ interface SyncConfig {
   autoSync?: boolean;
   syncInterval?: number; // working in hours (e.g. 1, 6, 12, 24)
   lastSynced?: string;
-  status: "success" | "failed" | "never";
+  status: "success" | "failed" | "never" | "syncing";
   message?: string;
   disabled?: boolean;
   consecutiveFailures?: number;
@@ -117,7 +117,7 @@ interface EpgSource {
   url: string;
   active: boolean;
   lastSynced?: string;
-  status: "success" | "failed" | "never";
+  status: "success" | "failed" | "never" | "syncing";
   message?: string;
 }
 
@@ -1516,6 +1516,26 @@ function isCarouselSource(s: any, channel?: any): boolean {
   return false;
 }
 
+// In-memory sets to eliminate disk I/O when processing large channel imports
+const knownCarouselProxies = new Set<string>();
+const knownDeletedCarouselProxies = new Set<string>();
+let carouselProxiesCached = false;
+
+function ensureCarouselProxiesCache() {
+  if (carouselProxiesCached) return;
+  try {
+    const proxies = db.prepare('SELECT urlTemplate FROM carousel_proxies').all() as any[];
+    for (const p of proxies) {
+      if (p.urlTemplate) knownCarouselProxies.add(p.urlTemplate);
+    }
+    const deleted = db.prepare('SELECT urlTemplate FROM deleted_carousel_proxies').all() as any[];
+    for (const d of deleted) {
+      if (d.urlTemplate) knownDeletedCarouselProxies.add(d.urlTemplate);
+    }
+    carouselProxiesCached = true;
+  } catch (e) {}
+}
+
 function detectAndRegisterCarouselProxy(url: string, ignoreDeletedCheck = false) {
   try {
     if (!url || typeof url !== 'string') return;
@@ -1523,27 +1543,30 @@ function detectAndRegisterCarouselProxy(url: string, ignoreDeletedCheck = false)
     const { platform, template } = extractCarouselPlatformAndId(url);
 
     if (platform && template && template.includes('{}') && !isUrlBlockedByDisabledRules(template, platform)) {
+      ensureCarouselProxiesCache();
       // Check if user has explicitly deleted this proxy template
       if (!ignoreDeletedCheck) {
-        try {
-          const isDeleted = db.prepare('SELECT 1 FROM deleted_carousel_proxies WHERE urlTemplate = ?').get(template);
-          if (isDeleted) return;
-        } catch (e) {}
+        if (knownDeletedCarouselProxies.has(template)) return;
       } else {
-        try {
-          db.prepare('DELETE FROM deleted_carousel_proxies WHERE urlTemplate = ?').run(template);
-        } catch (e) {}
+        if (knownDeletedCarouselProxies.has(template)) {
+          knownDeletedCarouselProxies.delete(template);
+          try {
+            db.prepare('DELETE FROM deleted_carousel_proxies WHERE urlTemplate = ?').run(template);
+          } catch (e) {}
+        }
       }
 
-      const exists = db.prepare('SELECT id FROM carousel_proxies WHERE urlTemplate = ?').get(template);
-      if (!exists) {
+      if (knownCarouselProxies.has(template)) return;
+
+      knownCarouselProxies.add(template);
+      try {
         db.prepare('INSERT INTO carousel_proxies (id, platform, urlTemplate, status) VALUES (?, ?, ?, ?)').run(
           crypto.randomUUID(),
           platform,
           template,
           'active'
         );
-      }
+      } catch (e) {}
     }
   } catch (e) {
     console.error('Error detecting carousel proxy:', e);
@@ -2735,13 +2758,14 @@ function saveDataSync() {
     invalidatePlaylistExportCache();
     shouldInvalidateCaches = false;
     
-    // Proactively generate caches to ensure they are available in /data
-    try {
-      getOrGenerateIntegratedEpgXml();
-      generateDefaultPlaylists();
-    } catch(e) {
-      console.error("[PROACTIVE CACHE GEN ERROR]", e);
-    }
+    // Asynchronously generate playlist caches in the background so the event loop is never blocked
+    setImmediate(() => {
+      try {
+        generateDefaultPlaylists();
+      } catch (e) {
+        console.error("[PROACTIVE CACHE GEN ERROR]", e);
+      }
+    });
   }
   try {
     const syncDb = db.transaction(() => {
@@ -4407,7 +4431,7 @@ async function fetchBufferWithFallback(urlStr: string, userAgent: string): Promi
 
         req.on("timeout", () => {
           req.destroy();
-          reject(new Error("EPG Sync request timeout (45s)"));
+          reject(new Error("Request timeout (20s)"));
         });
 
         req.end();
@@ -4418,9 +4442,13 @@ async function fetchBufferWithFallback(urlStr: string, userAgent: string): Promi
   };
 
   try {
+    const controller = new AbortController();
+    const timeoutTimer = setTimeout(() => controller.abort(), 20000);
     const res = await fetch(urlStr, {
       headers: { "User-Agent": userAgent },
+      signal: controller.signal,
     });
+    clearTimeout(timeoutTimer);
     if (!res.ok) {
       throw new Error(`HTTP Error ${res.status}`);
     }
@@ -4430,11 +4458,22 @@ async function fetchBufferWithFallback(urlStr: string, userAgent: string): Promi
     const isGzipped = (buffer.length >= 2 && buffer[0] === 0x1f && buffer[1] === 0x8b);
     return { buffer, isGzipped };
   } catch (fetchErr: any) {
-    console.log(`[EPG SYNC] Standard fetch failed for ${urlStr}: ${fetchErr.message || fetchErr}. Attempting recovery via bypass direct fetch...`);
+    console.log(`[SYNC FETCH] Standard fetch failed for ${urlStr}: ${fetchErr.message || fetchErr}. Attempting recovery via bypass direct fetch...`);
     try {
       return await downloadDirectly(urlStr);
     } catch (fallbackErr: any) {
-      console.error(`[EPG SYNC RECOVERY FAILED] ${urlStr}: ${fallbackErr.message || fallbackErr}`);
+      // If it's a GitHub URL and proxy isn't already used, try fast public mirrors
+      if ((urlStr.includes("raw.githubusercontent.com") || urlStr.includes("github.com")) && !urlStr.includes("ghproxy.net") && !urlStr.includes("ghfast.top")) {
+        const mirrors = ["https://ghproxy.net/", "https://ghfast.top/"];
+        for (const mirror of mirrors) {
+          try {
+            const mirrorUrl = `${mirror}${urlStr}`;
+            console.log(`[SYNC FETCH] Attempting GitHub mirror fallback via ${mirrorUrl}...`);
+            return await downloadDirectly(mirrorUrl);
+          } catch (mErr) {}
+        }
+      }
+      console.error(`[SYNC RECOVERY FAILED] ${urlStr}: ${fallbackErr.message || fallbackErr}`);
       throw new Error(fallbackErr.message || "Fetch failed");
     }
   }
@@ -5364,18 +5403,42 @@ async function startServer() {
     if (!source) {
       return res.status(404).json({ error: "未找到该 EPG 源" });
     }
-    const success = await performEpgSync(source);
-    res.json({ success, source });
+    source.status = "syncing";
+    source.message = "正在后台拉取 EPG XML 数据...";
+    saveData();
+    res.json({ success: true, message: "EPG 同步任务已在后台启动", source, isBackground: true });
+
+    setImmediate(async () => {
+      try {
+        await performEpgSync(source);
+      } catch (e: any) {
+        source.status = "failed";
+        source.message = e.message || "EPG 同步失败";
+        saveData();
+      }
+    });
   });
 
   app.post("/api/epg-sources/sync-all", async (req, res) => {
-    let successCount = 0;
     const activeSources = epgSources.filter((s) => s.active);
-    for (const source of activeSources) {
-      const success = await performEpgSync(source);
-      if (success) successCount++;
+    for (const s of activeSources) {
+      s.status = "syncing";
+      s.message = "正在后台排队同步 EPG...";
     }
-    res.json({ success: true, count: activeSources.length, successCount });
+    saveData();
+    res.json({ success: true, message: `已在后台启动 ${activeSources.length} 个 EPG 源的同步任务`, count: activeSources.length, isBackground: true });
+
+    setImmediate(async () => {
+      for (const source of activeSources) {
+        try {
+          await performEpgSync(source);
+        } catch (e: any) {
+          source.status = "failed";
+          source.message = e.message || "EPG 同步失败";
+          saveData();
+        }
+      }
+    });
   });
 
   // Group CRUD Endpoints
@@ -7388,29 +7451,40 @@ app.get("/api/channels", async (req, res) => {
       return res.json({ success: true, message: "没有发现任何未禁用的订阅源", syncConfigs });
     }
 
-    let successCount = 0;
-    let failCount = 0;
-
-    // Execute in parallel
-    const promises = activeConfigs.map(async (config) => {
-      config.status = "never";
-      config.message = "正在进行后台批量同步...";
+    for (const config of activeConfigs) {
+      config.status = "syncing";
+      config.message = "正在后台排队批量同步...";
       config.consecutiveFailures = 0;
-      const success = await performSync(config, true);
-      if (success) {
-        successCount++;
-      } else {
-        failCount++;
-      }
-    });
-
-    await Promise.all(promises);
+    }
     saveData();
 
+    // Respond immediately to prevent Reverse Proxy (Nginx/Cloudflare) 504 Gateway Timeout
     res.json({
       success: true,
-      message: `批量订阅同步完成：成功 ${successCount} 个，失败 ${failCount} 个`,
-      syncConfigs
+      message: `已在后台启动 ${activeConfigs.length} 个订阅源的批量同步任务`,
+      syncConfigs,
+      isBackground: true
+    });
+
+    // Execute in background
+    setImmediate(async () => {
+      let successCount = 0;
+      let failCount = 0;
+      for (const config of activeConfigs) {
+        try {
+          config.message = "正在拉取与同步解析中...";
+          const ok = await performSync(config, true);
+          if (ok) successCount++;
+          else failCount++;
+        } catch (err: any) {
+          console.error(`[BATCH SYNC ERROR] ${config.name}:`, err);
+          config.status = "failed";
+          config.message = `同步失败: ${err.message || err}`;
+          failCount++;
+          saveData();
+        }
+      }
+      console.log(`[BATCH SYNC COMPLETE] Success: ${successCount}, Failed: ${failCount}`);
     });
   });
 
@@ -7422,18 +7496,30 @@ app.get("/api/channels", async (req, res) => {
       return res.status(404).json({ error: "同步配置未找到" });
     }
 
-    config.status = "never";
-    config.message = "正在进行后台同步...";
+    if (config.status === "syncing") {
+      return res.json({ success: true, message: "该订阅源当前正在后台同步处理中...", config, isBackground: true });
+    }
+
+    config.status = "syncing";
+    config.message = "正在后台拉取并同步解析中...";
     config.disabled = false;
     config.consecutiveFailures = 0;
-    
-    // Run sync asynchronously forcing update on manual trigger
-    const success = await performSync(config, true);
-    if (success) {
-      res.json({ success: true, message: "同步完成", config });
-    } else {
-      res.status(500).json({ error: "同步失败", config });
-    }
+    saveData();
+
+    // Respond immediately to prevent Reverse Proxy (Nginx/Cloudflare) 504 Gateway Timeout
+    res.json({ success: true, message: "已在后台启动同步任务，请稍候...", config, isBackground: true });
+
+    // Asynchronously perform sync in background
+    setImmediate(async () => {
+      try {
+        await performSync(config, true);
+      } catch (err: any) {
+        console.error(`[BACKGROUND SYNC ERROR] ${config.name}:`, err);
+        config.status = "failed";
+        config.message = `同步失败: ${err.message || err}`;
+        saveData();
+      }
+    });
   });
 
   // Link validation & latency speed checking triggered by browser

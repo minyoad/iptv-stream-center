@@ -63,7 +63,7 @@ export interface SyncConfig {
   url: string;
   type: "m3u" | "txt";
   lastSynced?: string;
-  status: "success" | "failed" | "never";
+  status: "success" | "failed" | "never" | "syncing";
   message?: string;
   disabled?: boolean;
   consecutiveFailures?: number;
@@ -78,7 +78,7 @@ export interface EpgSource {
   url: string;
   active: boolean;
   lastSynced?: string;
-  status: "success" | "failed" | "never";
+  status: "success" | "failed" | "never" | "syncing";
   message?: string;
 }
 

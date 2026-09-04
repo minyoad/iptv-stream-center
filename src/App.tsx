@@ -2664,13 +2664,37 @@ export default function App() {
       const res = await fetch(`/api/sync-configs/${id}/run`, { method: "POST" });
       const data = await res.json();
       if (res.ok) {
-        showFeedback("success", data.message || "手动拉取并同步数据完成");
-        await fetchData();
+        showFeedback("info", data.message || "后台同步已启动，正在下载并解析...");
+        setSyncConfigs(prev => prev.map(c => c.id === id ? { ...c, status: "syncing" as const, message: "正在后台拉取与解析同步..." } : c));
+        
+        // Poll sync status until finished
+        const pollInterval = setInterval(async () => {
+          try {
+            const freshRes = await fetch("/api/sync-configs");
+            if (freshRes.ok) {
+              const freshConfigs: SyncConfig[] = await freshRes.json();
+              setSyncConfigs(freshConfigs);
+              const target = freshConfigs.find(c => c.id === id);
+              if (target && target.status !== "syncing") {
+                clearInterval(pollInterval);
+                if (target.status === "success") {
+                  showFeedback("success", target.message || "同步完成！");
+                } else {
+                  showFeedback("error", target.message || "同步失败");
+                }
+                await fetchData();
+              }
+            }
+          } catch (e) {
+            // Ignore polling errors
+          }
+        }, 2000);
+        setTimeout(() => clearInterval(pollInterval), 180000);
       } else {
         showFeedback("error", data.error || "拉取过程产生错误");
       }
     } catch (e) {
-      showFeedback("error", "请求异常，请检查 Github URL 是否通畅");
+      showFeedback("error", "请求异常，请检查网络或服务状态");
     }
   };
 
@@ -2682,14 +2706,35 @@ export default function App() {
       const res = await fetch("/api/sync-configs/run-all", { method: "POST" });
       const data = await res.json();
       if (res.ok) {
-        showFeedback("success", data.message || "批量订阅同步已顺利完成！");
-        await fetchData();
+        showFeedback("info", data.message || "批量订阅同步已在后台启动...");
+        setSyncConfigs(prev => prev.map(c => !c.disabled ? { ...c, status: "syncing" as const, message: "正在后台排队批量同步..." } : c));
+        
+        const pollInterval = setInterval(async () => {
+          try {
+            const freshRes = await fetch("/api/sync-configs");
+            if (freshRes.ok) {
+              const freshConfigs: SyncConfig[] = await freshRes.json();
+              setSyncConfigs(freshConfigs);
+              const anySyncing = freshConfigs.some(c => !c.disabled && c.status === "syncing");
+              if (!anySyncing) {
+                clearInterval(pollInterval);
+                setIsBatchSyncing(false);
+                showFeedback("success", "批量订阅同步完成！");
+                await fetchData();
+              }
+            }
+          } catch (e) {}
+        }, 2500);
+        setTimeout(() => {
+          clearInterval(pollInterval);
+          setIsBatchSyncing(false);
+        }, 300000);
       } else {
         showFeedback("error", data.error || "批量同步发生服务错误");
+        setIsBatchSyncing(false);
       }
     } catch (e) {
       showFeedback("error", "网络连接错误，无法完成批量同步");
-    } finally {
       setIsBatchSyncing(false);
     }
   };
@@ -6093,15 +6138,16 @@ export default function App() {
                               {cfg.disabled ? "已停止" : "统一自动同步"}
                             </span>
                             
-                            <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${
+                            <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded flex items-center gap-1 ${
                               cfg.disabled ? "bg-rose-100 text-rose-800 border border-rose-200" :
+                              cfg.status === "syncing" ? "bg-blue-50 text-blue-700 border border-blue-200 animate-pulse" :
                               cfg.status === "success" ? "bg-emerald-50 text-emerald-700 hover:bg-emerald-100" :
                               cfg.status === "failed" ? "bg-rose-50 text-rose-700" : "bg-slate-100 text-slate-500"
                             }`}>
                               {cfg.disabled ? "临时停用" :
-                               cfg.status === "success" && "同步顺畅"}
-                              {!cfg.disabled && cfg.status === "failed" && "同步断流"}
-                              {cfg.status === "never" && "从未触发"}
+                               cfg.status === "syncing" ? "正在同步中..." :
+                               cfg.status === "success" ? "同步顺畅" :
+                               cfg.status === "failed" ? "同步断流" : "从未触发"}
                             </span>
                           </div>
                         </div>
@@ -6127,10 +6173,16 @@ export default function App() {
                         {/* Quick action controls */}
                         <div className="flex justify-between pt-1">
                           <button 
+                            disabled={cfg.status === "syncing"}
                             onClick={() => triggerManualSyncRun(cfg.id)}
-                            className="text-indigo-600 hover:text-indigo-800 hover:underline text-[11px] font-bold flex items-center cursor-pointer"
+                            className={`text-[11px] font-bold flex items-center ${
+                              cfg.status === "syncing"
+                                ? "text-slate-400 cursor-not-allowed"
+                                : "text-indigo-600 hover:text-indigo-800 hover:underline cursor-pointer"
+                            }`}
                           >
-                            <RefreshCw className="w-3 h-3 mr-1" /> {cfg.disabled ? "重试并重新启用同步" : "立即手动拉取并覆盖同步"}
+                            <RefreshCw className={`w-3 h-3 mr-1 ${cfg.status === "syncing" ? "animate-spin text-blue-500" : ""}`} />
+                            {cfg.status === "syncing" ? "正在后台同步解析中..." : cfg.disabled ? "重试并重新启用同步" : "立即手动拉取并覆盖同步"}
                           </button>
                             
                             <div className="flex gap-2">
