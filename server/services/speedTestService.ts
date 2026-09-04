@@ -90,10 +90,35 @@ export function isResponseContentInvalid(text: string, contentType = ""): { inva
     return { invalid: true, reason: "返回 HTML 错误页" };
   }
 
-  // 5. Blank M3U8
+  // 5. Blank M3U8 or Invalid Playlist
   if (lowerText.includes("#extm3u")) {
-    if (!lowerText.includes("#extinf") && !lowerText.includes(".ts") && !lowerText.includes(".m3u8") && !lowerText.includes("http")) {
+    const isMasterPlaylist =
+      lowerText.includes("#ext-x-stream-inf") ||
+      lowerText.includes("#ext-x-media") ||
+      lowerText.includes("#ext-x-session-data") ||
+      lowerText.includes("#ext-x-session-key");
+
+    const isMediaPlaylist =
+      lowerText.includes("#extinf") ||
+      lowerText.includes("#ext-x-targetduration") ||
+      lowerText.includes("#ext-x-media-sequence") ||
+      lowerText.includes("#ext-x-map");
+
+    const uriLines = text
+      .split(/\r?\n/)
+      .map(l => l.trim())
+      .filter(l => l && !l.startsWith("#"));
+
+    if (!isMasterPlaylist && !isMediaPlaylist && uriLines.length === 0) {
       return { invalid: true, reason: "空白 M3U8 列表" };
+    }
+
+    if (isMasterPlaylist && uriLines.length === 0) {
+      return { invalid: true, reason: "空白 M3U8 列表(无有效子流地址)" };
+    }
+
+    if (isMediaPlaylist && !lowerText.includes("#extinf") && uriLines.length === 0) {
+      return { invalid: true, reason: "空白 M3U8 列表(无媒体切片)" };
     }
   }
 
@@ -482,14 +507,35 @@ export async function testSingleUrl(url: string, timeoutMs: number = 5000): Prom
           const parsed = parseResolution(url, text);
           if (parsed) resolution = parsed;
 
-          if (!resolution && text.includes("#EXTM3U")) {
-            const lines = text.split("\n").map(l => l.trim());
-            const subLine = lines.find(l => l && !l.startsWith("#") && (l.includes(".m3u8") || l.includes("http") || (!l.includes(".") && l.length > 2)));
+          if (text.includes("#EXTM3U")) {
+            const isMaster = text.includes("#EXT-X-STREAM-INF");
+            const lines = text.split(/\r?\n/).map(l => l.trim());
+            let subLine: string | undefined;
+
+            if (isMaster) {
+              for (let i = 0; i < lines.length; i++) {
+                if (lines[i].startsWith("#EXT-X-STREAM-INF")) {
+                  for (let j = i + 1; j < lines.length; j++) {
+                    if (lines[j] && !lines[j].startsWith("#")) {
+                      subLine = lines[j];
+                      break;
+                    }
+                  }
+                  if (subLine) break;
+                }
+              }
+              if (!subLine) {
+                subLine = lines.find(l => l && !l.startsWith("#"));
+              }
+            } else if (!resolution) {
+              subLine = lines.find(l => l && !l.startsWith("#") && (l.includes(".m3u8") || l.includes("http") || (!l.includes(".ts") && !l.includes(".mp4") && !l.includes(".m4s"))));
+            }
+
             if (subLine) {
               try {
                 const subUrl = new URL(subLine, response.url).href;
                 const subCtrl = new AbortController();
-                const subTimeout = setTimeout(() => subCtrl.abort(), 2500);
+                const subTimeout = setTimeout(() => subCtrl.abort(), 3500);
                 const subRes = await fetch(subUrl, {
                   signal: subCtrl.signal,
                   headers: {
@@ -515,13 +561,13 @@ export async function testSingleUrl(url: string, timeoutMs: number = 5000): Prom
                   const subParsed = parseResolution(subUrl, subText);
                   if (subParsed) {
                     resolution = subParsed;
-                  } else {
-                    const subLines = subText.split("\n").map(l => l.trim());
-                    const tsLine = subLines.find(l => l && !l.startsWith("#") && (l.includes(".ts") || l.includes("http") || (!l.includes(".") && l.length > 2)));
+                  } else if (!resolution) {
+                    const subLines = subText.split(/\r?\n/).map(l => l.trim());
+                    const tsLine = subLines.find(l => l && !l.startsWith("#"));
                     if (tsLine) {
                       const tsUrl = new URL(tsLine, subUrl).href;
                       const tsCtrl = new AbortController();
-                      const tsTimeout = setTimeout(() => tsCtrl.abort(), 2500);
+                      const tsTimeout = setTimeout(() => tsCtrl.abort(), 3000);
                       const tsRes = await fetch(tsUrl, {
                         signal: tsCtrl.signal,
                         headers: {
@@ -545,7 +591,7 @@ export async function testSingleUrl(url: string, timeoutMs: number = 5000): Prom
                           diagMsg: buildDiagMsg({
                             httpStatus: tsRes.status,
                             contentType: tsRes.headers.get("content-type") || "",
-                            reason: `TS 音视频切片返回 HTTP ${tsRes.status} 状态`
+                            reason: `音视频切片返回 HTTP ${tsRes.status} 状态`
                           })
                         };
                       }
