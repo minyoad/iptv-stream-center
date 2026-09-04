@@ -5942,8 +5942,8 @@ export default function App() {
                       rows={12}
                       placeholder={
                         pasteType === "m3u" 
-                        ? "#EXTM3U\n#EXTINF:-1 tvg-logo=\"https://img.png\" group-title=\"央视频道\",CCTV-1 综合\nhttp://ip:port/stream.m3u8"
-                        : "央视频道,#genre\nCCTV-1 综合#北京电信,http://39.134.115/stream.m3u8\n卫视频道,#genre\n湖南卫视#长沙移动,http://112.50.31/tv.m3u8"
+                        ? "可直接粘贴远程 M3U 订阅 URL (如 https://raw.githubusercontent.com/.../live.m3u)，或粘贴 M3U 文本内容：\n#EXTM3U\n#EXTINF:-1 tvg-logo=\"https://img.png\" group-title=\"央视频道\",CCTV-1 综合\nhttp://ip:port/stream.m3u8"
+                        : "可直接粘贴远程 TXT 订阅 URL (如 https://raw.githubusercontent.com/.../yiyifafa.txt)，或粘贴 TVBox TXT 文本内容：\n央视频道,#genre\nCCTV-1 综合#北京电信,http://39.134.115/stream.m3u8\n卫视频道,#genre\n湖南卫视#长沙移动,http://112.50.31/tv.m3u8"
                       }
                       className="w-full flex-1 p-4 border border-slate-200 rounded-xl font-mono text-xs bg-slate-50 focus:outline-none focus:border-indigo-500 text-slate-700 leading-normal"
                     />

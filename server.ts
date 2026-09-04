@@ -1609,13 +1609,19 @@ function stripBitrateAndResolution(name: string): string {
   return clean.trim();
 }
 
+const normChannelNameCache = new Map<string, string>();
+
 // Normalize channel names by making them lower-case and stripping all spaces/whitespace to support smart matching (e.g., "cctv-1 综合" matches "cctv-1综合")
 function normalizeChannelName(name: string): string {
   if (!name) return "";
+  const cached = normChannelNameCache.get(name);
+  if (cached !== undefined) return cached;
+
   const cleanStr = toSimplifiedChinese(name);
   const stripped = stripBitrateAndResolution(cleanStr);
   let clean = stripped.toLowerCase().replace(/\s+/g, "");
 
+  let res = "";
   if (clean.includes("4k") || clean.includes("8k")) {
     clean = clean.replace("超高清", "");
   }
@@ -1623,58 +1629,64 @@ function normalizeChannelName(name: string): string {
   // Special handling for CCTV 4K, 8K, and 超高清 to distinguish them from standard CCTV channels
   if (/^cctv/i.test(clean)) {
     if (clean.includes("4k")) {
-      return "cctv4k";
-    }
-    if (clean.includes("8k")) {
-      return "cctv8k";
-    }
-    if (clean.includes("超高清")) {
-      return "cctv超高清";
+      res = "cctv4k";
+    } else if (clean.includes("8k")) {
+      res = "cctv8k";
+    } else if (clean.includes("超高清")) {
+      res = "cctv超高清";
     }
   }
 
-  // Custom smart matching for CCTV channels (e.g., CCTV-1, CCTV1, CCTV1HD, CCTV-1综合, CCTV-1 综合HD, cctv 1, CCTV 5+)
-  const cctvMatch = clean.match(/^cctv[-_]?(\d+)(\+)?(.*)$/);
-  if (cctvMatch) {
-    const num = cctvMatch[1];
-    const plus = cctvMatch[2] || "";
-    let sub = cctvMatch[3] || "";
-    
-    sub = sub
+  if (!res) {
+    // Custom smart matching for CCTV channels (e.g., CCTV-1, CCTV1, CCTV1HD, CCTV-1综合, CCTV-1 综合HD, cctv 1, CCTV 5+)
+    const cctvMatch = clean.match(/^cctv[-_]?(\d+)(\+)?(.*)$/);
+    if (cctvMatch) {
+      const num = cctvMatch[1];
+      const plus = cctvMatch[2] || "";
+      let sub = cctvMatch[3] || "";
+      
+      sub = sub
+        .replace(/(hd|uhd|fhd|ud|(?<!超)高清|超清(?!高)|标清|sdi|channel|tv)/g, "")
+        .replace(/(频道|电视台|台|版)$/, "")
+        .trim();
+
+      // Preserve regional and continent variants for CCTV channels (e.g., CCTV-4美洲, CCTV-4欧洲, CCTV-4亚洲)
+      if (sub.includes("美洲") || sub.includes("america") || sub.includes("ame")) {
+        res = `cctv${num}${plus}美洲`;
+      } else if (sub.includes("欧洲") || sub.includes("europe") || sub.includes("euo") || sub.includes("eur")) {
+        res = `cctv${num}${plus}欧洲`;
+      } else if (sub.includes("亚洲") || sub.includes("asia")) {
+        res = `cctv${num}${plus}亚洲`;
+      } else {
+        // List of standard generic CCTV sub-category descriptors that map to the primary channel
+        const genericSubs = [
+          "综合", "财经", "综艺", "中文国际", "中文", "国际", "体育", "电影",
+          "国防军事", "军事", "电视剧", "纪录", "科教", "戏曲", "社会与法",
+          "新闻", "少儿", "音乐", "奥林匹克", "农业农村", "农业", "农村农业"
+        ];
+
+        if (sub && !genericSubs.includes(sub)) {
+          res = `cctv${num}${plus}${sub}`;
+        } else {
+          res = `cctv${num}${plus}`;
+        }
+      }
+    }
+  }
+
+  if (!res) {
+    // For other channels, remove hyphens, spaces, and common quality tags (preserving 4k, 8k, 超高清) to improve match rates
+    res = clean
+      .replace(/[-_.\s]+/g, "")
       .replace(/(hd|uhd|fhd|ud|(?<!超)高清|超清(?!高)|标清|sdi|channel|tv)/g, "")
-      .replace(/(频道|电视台|台|版)$/, "")
-      .trim();
-
-    // Preserve regional and continent variants for CCTV channels (e.g., CCTV-4美洲, CCTV-4欧洲, CCTV-4亚洲)
-    if (sub.includes("美洲") || sub.includes("america") || sub.includes("ame")) {
-      return `cctv${num}${plus}美洲`;
-    }
-    if (sub.includes("欧洲") || sub.includes("europe") || sub.includes("euo") || sub.includes("eur")) {
-      return `cctv${num}${plus}欧洲`;
-    }
-    if (sub.includes("亚洲") || sub.includes("asia")) {
-      return `cctv${num}${plus}亚洲`;
-    }
-
-    // List of standard generic CCTV sub-category descriptors that map to the primary channel
-    const genericSubs = [
-      "综合", "财经", "综艺", "中文国际", "中文", "国际", "体育", "电影",
-      "国防军事", "军事", "电视剧", "纪录", "科教", "戏曲", "社会与法",
-      "新闻", "少儿", "音乐", "奥林匹克", "农业农村", "农业", "农村农业"
-    ];
-
-    if (sub && !genericSubs.includes(sub)) {
-      return `cctv${num}${plus}${sub}`;
-    }
-
-    return `cctv${num}${plus}`;
+      .replace(/(频道|电视台|台)$/, "");
   }
-  
-  // For other channels, remove hyphens, spaces, and common quality tags (preserving 4k, 8k, 超高清) to improve match rates
-  return clean
-    .replace(/[-_.\s]+/g, "")
-    .replace(/(hd|uhd|fhd|ud|(?<!超)高清|超清(?!高)|标清|sdi|channel|tv)/g, "")
-    .replace(/(频道|电视台|台)$/, "");
+
+  if (normChannelNameCache.size > 30000) {
+    normChannelNameCache.clear();
+  }
+  normChannelNameCache.set(name, res);
+  return res;
 }
 
 // Generate default epgId from channel name. CCTV5 and CCTV5+ are distinguished by keeping '+'. If processed epgId is empty, fallback to channel name.
@@ -1739,6 +1751,7 @@ interface DefaultAliasGroup {
 }
 
 const loadedDefaultAliases: DefaultAliasGroup[] = [];
+const aliasTemplateLookupMap = new Map<string, { templateName: string; aliases: string[] }>();
 
 function loadDefaultAliases() {
   const filePath = path.join(DATA_DIR, "default_aliases.txt");
@@ -1747,6 +1760,7 @@ function loadDefaultAliases() {
       const content = fs.readFileSync(filePath, "utf-8");
       const lines = content.split(/\r?\n/);
       loadedDefaultAliases.length = 0; // reset
+      aliasTemplateLookupMap.clear();
       for (const rawLine of lines) {
         let line = rawLine.trim();
         if (!line || line.startsWith("#")) continue;
@@ -1758,7 +1772,16 @@ function loadDefaultAliases() {
         if (parts.length > 0) {
           const template = parts[0];
           const aliases = Array.from(new Set([template, ...parts]));
-          loadedDefaultAliases.push({ template, aliases });
+          const groupObj = { template, aliases };
+          loadedDefaultAliases.push(groupObj);
+          
+          const entry = { templateName: template, aliases };
+          for (const a of aliases) {
+            const normA = normalizeChannelName(a);
+            if (normA && !aliasTemplateLookupMap.has(normA)) {
+              aliasTemplateLookupMap.set(normA, entry);
+            }
+          }
         }
       }
       console.log(`[Aliases] Loaded ${loadedDefaultAliases.length} default channel alias templates.`);
@@ -1768,19 +1791,168 @@ function loadDefaultAliases() {
   }
 }
 
-// Helper to look up if rawName matches any known template/alias and return standard name + list of all known aliases
+// Helper to look up if rawName matches any known template/alias and return standard name + list of all known aliases in O(1)
 function findAliasTemplate(rawName: string): { templateName: string; aliases: string[] } | null {
   const normRaw = normalizeChannelName(rawName);
   if (!normRaw) return null;
+  const match = aliasTemplateLookupMap.get(normRaw);
+  if (match) return match;
+
+  // Fallback scan if not yet indexed
   for (const group of loadedDefaultAliases) {
     if (group.aliases.some(a => normalizeChannelName(a) === normRaw)) {
-      return {
-        templateName: group.template,
-        aliases: group.aliases,
-      };
+      const found = { templateName: group.template, aliases: group.aliases };
+      aliasTemplateLookupMap.set(normRaw, found);
+      return found;
     }
   }
   return null;
+}
+
+// High-speed O(1) index helper for importing large M3U/TXT files with thousands of channels
+class ChannelImportHelper {
+  private channels: Channel[];
+  private groups: Group[];
+  private channelByNorm = new Map<string, Channel>();
+  private channelByAliasNorm = new Map<string, Channel>();
+  private sourcesByChannelId = new Map<string, Set<string>>();
+  private groupByLower = new Map<string, Group>();
+
+  constructor(channels: Channel[], groups: Group[]) {
+    this.channels = channels;
+    this.groups = groups;
+
+    for (const g of groups) {
+      this.groupByLower.set(g.name.toLowerCase().trim(), g);
+    }
+    for (const c of channels) {
+      this.indexChannel(c);
+    }
+  }
+
+  public indexChannel(c: Channel) {
+    const norm = normalizeChannelName(c.name);
+    if (norm && !this.channelByNorm.has(norm)) {
+      this.channelByNorm.set(norm, c);
+    }
+    if (c.alias && Array.isArray(c.alias)) {
+      for (const a of c.alias) {
+        const aNorm = normalizeChannelName(a);
+        if (aNorm && !this.channelByAliasNorm.has(aNorm)) {
+          this.channelByAliasNorm.set(aNorm, c);
+        }
+      }
+    }
+    if (!this.sourcesByChannelId.has(c.id)) {
+      const set = new Set<string>();
+      if (c.sources && Array.isArray(c.sources)) {
+        for (const s of c.sources) {
+          if (s.url) set.add(s.url);
+        }
+      }
+      this.sourcesByChannelId.set(c.id, set);
+    }
+  }
+
+  public resolveGroup(catName: string, autoCreate: boolean): string | null {
+    const key = catName.toLowerCase().trim();
+    let g = this.groupByLower.get(key);
+    if (!g) {
+      // Linear scan fallback in case groups were modified externally
+      g = this.groups.find(gr => gr.name.toLowerCase().trim() === key);
+      if (g) {
+        this.groupByLower.set(key, g);
+      }
+    }
+    if (!g && autoCreate) {
+      g = {
+        id: "g_" + Math.random().toString(36).substring(2, 10),
+        name: catName,
+      };
+      this.groups.push(g);
+      this.groupByLower.set(key, g);
+    }
+    return g ? g.id : null;
+  }
+
+  public findChannel(lookupName: string, stdInfo: { templateName: string; aliases: string[] } | null, carouselKey?: string | null): Channel | null {
+    if (carouselKey) {
+      for (const c of this.channels) {
+        if (c.alias && c.alias.includes(carouselKey)) return c;
+      }
+    }
+
+    const normLookup = normalizeChannelName(lookupName);
+    if (normLookup) {
+      const match = this.channelByNorm.get(normLookup) || this.channelByAliasNorm.get(normLookup);
+      if (match) return match;
+    }
+
+    if (stdInfo && stdInfo.aliases) {
+      for (const a of stdInfo.aliases) {
+        const aNorm = normalizeChannelName(a);
+        if (aNorm) {
+          const match = this.channelByNorm.get(aNorm) || this.channelByAliasNorm.get(aNorm);
+          if (match) return match;
+        }
+      }
+    }
+
+    return null;
+  }
+
+  public addChannel(ch: Channel) {
+    this.channels.push(ch);
+    this.indexChannel(ch);
+  }
+
+  public registerChannelAliases(ch: Channel, newAliases: string[]) {
+    if (!ch.alias) ch.alias = [];
+    for (const a of newAliases) {
+      if (!ch.alias.includes(a)) {
+        ch.alias.push(a);
+      }
+      const aNorm = normalizeChannelName(a);
+      if (aNorm && !this.channelByAliasNorm.has(aNorm)) {
+        this.channelByAliasNorm.set(aNorm, ch);
+      }
+    }
+  }
+
+  public addSource(
+    ch: Channel,
+    url: string,
+    province: string,
+    isp: string,
+    resolution?: string
+  ): { added: boolean; source?: LiveSource } {
+    let set = this.sourcesByChannelId.get(ch.id);
+    if (!set) {
+      set = new Set<string>();
+      this.sourcesByChannelId.set(ch.id, set);
+    }
+
+    if (!set.has(url)) {
+      set.add(url);
+      const newSource: LiveSource = {
+        id: "src_" + Math.random().toString(36).substring(2, 10),
+        url,
+        province,
+        isp,
+        status: "unknown",
+        resolution: resolution || undefined
+      };
+      if (!ch.sources) ch.sources = [];
+      ch.sources.push(newSource);
+      return { added: true, source: newSource };
+    } else {
+      if (isp) {
+        const existing = ch.sources.find(s => s.url === url);
+        if (existing) existing.isp = isp;
+      }
+      return { added: false };
+    }
+  }
 }
 
 // Seed Data
@@ -4407,6 +4579,8 @@ async function performSync(config: SyncConfig, force = false) {
     let importedChannelsCount = 0;
     let importedSourcesCount = 0;
 
+    const helper = new ChannelImportHelper(channels, groups);
+
     if (config.type === "m3u" || content.includes("#EXTM3U")) {
       // Parse M3U
       const lines = content.split(/\r?\n/);
@@ -4459,32 +4633,14 @@ async function performSync(config: SyncConfig, force = false) {
 
         const matchedGroupIds: string[] = [];
         for (const catName of catNames) {
-          let existingGroup = groups.find(g => g.name.toLowerCase() === catName.toLowerCase());
-          if (!existingGroup) {
-            if (autoCreateChannel) {
-              existingGroup = {
-                id: "g_" + Math.random().toString(36).substring(2, 10),
-                name: catName,
-              };
-              groups.push(existingGroup);
-              matchedGroupIds.push(existingGroup.id);
-            }
-          } else {
-            matchedGroupIds.push(existingGroup.id);
-          }
+          const gid = helper.resolveGroup(catName, autoCreateChannel);
+          if (gid) matchedGroupIds.push(gid);
         }
 
         const stdInfo = findAliasTemplate(info.name);
         const lookupName = stdInfo ? stdInfo.templateName : info.name;
 
-        let channel = channels.find(
-          (c) => {
-            if (typeof carouselKeyM3u !== 'undefined' && carouselKeyM3u) return c.alias.includes(carouselKeyM3u);
-            return normalizeChannelName(c.name) === normalizeChannelName(lookupName) ||
-            c.alias.some((a) => normalizeChannelName(a) === normalizeChannelName(lookupName)) ||
-            (stdInfo && stdInfo.aliases.some(a => normalizeChannelName(c.name) === normalizeChannelName(a) || c.alias.some(ca => normalizeChannelName(ca) === normalizeChannelName(a))))
-          }
-        );
+        let channel = helper.findChannel(lookupName, stdInfo, carouselKeyM3u);
 
         if (!channel) {
           if (!autoCreateChannel || config.aliasOnly) {
@@ -4505,22 +4661,15 @@ async function performSync(config: SyncConfig, force = false) {
             epgId: info.epgId || generateDefaultEpgId(cleanName),
             sources: [],
           };
-          channels.push(channel);
+          helper.addChannel(channel);
           importedChannelsCount++;
         } else {
           if (stdInfo) {
-            stdInfo.aliases.forEach(a => {
-              if (!channel!.alias.includes(a)) {
-                channel!.alias.push(a);
-              }
-            });
+            channel.name = stdInfo.templateName;
+            helper.registerChannelAliases(channel, stdInfo.aliases);
           }
           if (info.alias) {
-            info.alias.forEach(a => {
-              if (!channel!.alias.includes(a)) {
-                channel!.alias.push(a);
-              }
-            });
+            helper.registerChannelAliases(channel, info.alias);
           }
           if (autoCreateChannel) {
             matchedGroupIds.forEach(gid => {
@@ -4541,18 +4690,9 @@ async function performSync(config: SyncConfig, force = false) {
           return;
         }
 
-        const existingSrc = channel.sources.find((s) => s.url === url);
-        if (!existingSrc) {
-          channel.sources.push({
-            id: "src_" + Math.random().toString(36).substring(2, 10),
-            url,
-            province,
-            isp,
-            status: "unknown",
-          });
+        const addRes = helper.addSource(channel, url, province, isp);
+        if (addRes.added) {
           importedSourcesCount++;
-        } else if (config.isp) {
-          existingSrc.isp = config.isp;
         }
       };
 
@@ -4587,7 +4727,7 @@ async function performSync(config: SyncConfig, force = false) {
           }
           name = stripBitrateAndResolution(name);
 
-          if (name.includes("线路")) {
+          if (name.includes("线路") || name.includes("盗源狗")) {
             currentInfo = null;
             continue;
           }
@@ -4634,16 +4774,24 @@ async function performSync(config: SyncConfig, force = false) {
         const line = rawLine.trim();
         if (!line || line.startsWith("#")) continue;
 
-        if (line.includes(",#genre")) {
-          currentCategory = toSimplifiedChinese(line.split(",")[0].trim());
+        if (line.includes(",#genre") || line.includes("#genre#")) {
+          const commaIdx = line.indexOf(",");
+          let cat = commaIdx !== -1 ? line.slice(0, commaIdx).trim() : line.replace(/#genre#?/gi, "").trim();
+          currentCategory = toSimplifiedChinese(cat) || "其它频道";
         } else if (line.includes(",") || line.length > 0) {
-          const parts = line.split(",");
-          const nameWithSpecs = parts[0].trim();
-          const urls = parts[1] ? parts[1].split('#').map(u => {
+          const firstComma = line.indexOf(",");
+          if (firstComma === -1) continue;
+
+          const nameWithSpecs = line.slice(0, firstComma).trim();
+          const rawUrlPart = line.slice(firstComma + 1).trim();
+
+          const urls = rawUrlPart.split('#').map(u => {
             let u2 = u.trim();
             if (u2.includes('$')) u2 = u2.split('$')[0].trim();
             return u2;
-          }).filter(Boolean) : [];
+          }).filter(Boolean);
+
+          if (urls.length === 0) continue;
 
           const { province, isp: parsedIsp } = parseIspAndProvince(nameWithSpecs + " " + currentCategory);
           const isp = config.isp ? config.isp : parsedIsp;
@@ -4651,7 +4799,7 @@ async function performSync(config: SyncConfig, force = false) {
           let name = nameWithSpecs.split("#")[0].trim();
           name = stripBitrateAndResolution(name);
 
-          if (name.includes("线路") || !name) {
+          if (name.includes("线路") || name.includes("盗源狗") || !name) {
             continue;
           }
 
@@ -4666,30 +4814,14 @@ async function performSync(config: SyncConfig, force = false) {
 
           const matchedGroupIds: string[] = [];
           for (const catName of catNames) {
-            let existingGroup = groups.find(g => g.name.toLowerCase() === catName.toLowerCase());
-            if (!existingGroup) {
-              if (autoCreateChannel) {
-                existingGroup = {
-                  id: "g_" + Math.random().toString(36).substring(2, 10),
-                  name: catName,
-                };
-                groups.push(existingGroup);
-                matchedGroupIds.push(existingGroup.id);
-              }
-            } else {
-              matchedGroupIds.push(existingGroup.id);
-            }
+            const gid = helper.resolveGroup(catName, autoCreateChannel);
+            if (gid) matchedGroupIds.push(gid);
           }
 
           const stdInfo = findAliasTemplate(name);
           const lookupName = stdInfo ? stdInfo.templateName : name;
 
-          let channel = channels.find(
-            (c) =>
-              normalizeChannelName(c.name) === normalizeChannelName(lookupName) ||
-              c.alias.some((a) => normalizeChannelName(a) === normalizeChannelName(lookupName)) ||
-              (stdInfo && stdInfo.aliases.some(a => normalizeChannelName(c.name) === normalizeChannelName(a) || c.alias.some(ca => normalizeChannelName(ca) === normalizeChannelName(a))))
-          );
+          let channel = helper.findChannel(lookupName, stdInfo);
 
           if (!channel) {
             if (!autoCreateChannel || config.aliasOnly) {
@@ -4710,17 +4842,13 @@ async function performSync(config: SyncConfig, force = false) {
               epgId: generateDefaultEpgId(cleanName),
               sources: [],
             };
-            channels.push(channel);
+            helper.addChannel(channel);
             importedChannelsCount++;
           } else {
             if (stdInfo) {
               // FORCE UPDATE channel name to the official alias template name
               channel.name = stdInfo.templateName;
-              stdInfo.aliases.forEach(a => {
-                if (!channel!.alias.includes(a)) {
-                  channel!.alias.push(a);
-                }
-              });
+              helper.registerChannelAliases(channel, stdInfo.aliases);
             }
             if (autoCreateChannel) {
               matchedGroupIds.forEach(gid => {
@@ -4730,12 +4858,7 @@ async function performSync(config: SyncConfig, force = false) {
               });
             }
             // Add any aliases parsed from the current TXT metadata
-            nameParts.forEach(a => {
-              if (!channel!.alias.includes(a)) {
-                channel!.alias.push(a);
-              }
-            });
-            channel!.alias = Array.from(new Set(channel!.alias));
+            helper.registerChannelAliases(channel, nameParts);
           }
 
           if (config.aliasOnly) {
@@ -4743,19 +4866,11 @@ async function performSync(config: SyncConfig, force = false) {
           }
 
           for (const url of urls) {
-            const existingSrc = channel.sources.find((s) => s.url === url);
-            if (!existingSrc) {
-              channel.sources.push({
-                id: "src_" + Math.random().toString(36).substring(2, 10),
-                url,
-                province,
-                isp,
-                status: "unknown",
-              });
+            const addRes = helper.addSource(channel, url, province, isp);
+            if (addRes.added) {
               importedSourcesCount++;
               detectAndRegisterCarouselProxy(url);
             } else if (config.isp) {
-              existingSrc.isp = config.isp;
               detectAndRegisterCarouselProxy(url);
             }
           }
@@ -6791,19 +6906,48 @@ app.get("/api/channels", async (req, res) => {
   });
 
   // Bulk Upload File Handler Endpoint
-  app.post("/api/import/file", (req, res) => {
+  app.post("/api/import/file", async (req, res) => {
     const { content, type, aliasOnly } = req.body;
     if (!content) {
       return res.status(400).json({ error: "文件内容不能为空" });
     }
 
     try {
-      const isM3u = type === "m3u" || content.includes("#EXTM3U");
+      let actualContent = String(content).trim();
+      let isRemoteFetched = false;
+
+      // Smart URL detection: if user pasted a single remote URL, automatically fetch it
+      if (/^https?:\/\/[^\s]+$/i.test(actualContent) || (actualContent.startsWith("http") && !actualContent.includes("\n"))) {
+        let targetUrl = actualContent;
+        if (targetUrl.includes("github.com") && !targetUrl.includes("raw.githubusercontent.com")) {
+          targetUrl = targetUrl.replace("github.com", "raw.githubusercontent.com").replace("/blob/", "/");
+        }
+        if (githubProxy && (targetUrl.includes("github.com") || targetUrl.includes("githubusercontent.com"))) {
+          const proxyPrefix = githubProxy.endsWith("/") ? githubProxy : `${githubProxy}/`;
+          targetUrl = `${proxyPrefix}${targetUrl}`;
+        }
+        console.log(`[/api/import/file] Automatically fetching remote playlist from: ${targetUrl}`);
+        const { buffer, isGzipped } = await fetchBufferWithFallback(targetUrl, "IPTV-Manager-Import-Service");
+        if (isGzipped) {
+          try {
+            actualContent = zlib.gunzipSync(buffer).toString("utf-8");
+          } catch (e) {
+            actualContent = buffer.toString("utf-8");
+          }
+        } else {
+          actualContent = buffer.toString("utf-8");
+        }
+        isRemoteFetched = true;
+      }
+
+      const isM3u = type === "m3u" || actualContent.includes("#EXTM3U");
       let importedChannelsCount = 0;
       let importedSourcesCount = 0;
 
+      const helper = new ChannelImportHelper(channels, groups);
+
       if (isM3u) {
-        const lines = content.split(/\r?\n/);
+        const lines = actualContent.split(/\r?\n/);
         let currentInfo: any = null;
 
         const processFileM3uItem = (info: any, rawUrl?: string) => {
@@ -6837,32 +6981,14 @@ app.get("/api/channels", async (req, res) => {
 
           const matchedGroupIds: string[] = [];
           for (const catName of catNames) {
-            let existingGroup = groups.find((g) => g.name.toLowerCase() === catName.toLowerCase());
-            if (!existingGroup) {
-              if (autoCreateChannel) {
-                existingGroup = {
-                  id: "g_" + Math.random().toString(36).substring(2, 10),
-                  name: catName,
-                };
-                groups.push(existingGroup);
-                matchedGroupIds.push(existingGroup.id);
-              }
-            } else {
-              matchedGroupIds.push(existingGroup.id);
-            }
+            const gid = helper.resolveGroup(catName, autoCreateChannel);
+            if (gid) matchedGroupIds.push(gid);
           }
 
           const stdInfo = findAliasTemplate(info.name);
           const lookupName = stdInfo ? stdInfo.templateName : info.name;
 
-          let channel = channels.find(
-            (c) => {
-              if (carouselKeyM3u) return c.alias.includes(carouselKeyM3u);
-              return normalizeChannelName(c.name) === normalizeChannelName(lookupName) ||
-              c.alias.some((a: string) => normalizeChannelName(a) === normalizeChannelName(lookupName)) ||
-              (stdInfo && stdInfo.aliases.some(a => normalizeChannelName(c.name) === normalizeChannelName(a) || c.alias.some(ca => normalizeChannelName(ca) === normalizeChannelName(a))));
-            }
-          );
+          let channel = helper.findChannel(lookupName, stdInfo, carouselKeyM3u);
 
           if (!channel) {
             if (!autoCreateChannel || aliasOnly) {
@@ -6883,22 +7009,15 @@ app.get("/api/channels", async (req, res) => {
               epgId: info.epgId || generateDefaultEpgId(cleanName),
               sources: [],
             };
-            channels.push(channel);
+            helper.addChannel(channel);
             importedChannelsCount++;
           } else {
             if (stdInfo) {
-              stdInfo.aliases.forEach(a => {
-                if (!channel!.alias.includes(a)) {
-                  channel!.alias.push(a);
-                }
-              });
+              channel.name = stdInfo.templateName;
+              helper.registerChannelAliases(channel, stdInfo.aliases);
             }
             if (info.alias) {
-              info.alias.forEach((a: string) => {
-                if (!channel!.alias.includes(a)) {
-                  channel!.alias.push(a);
-                }
-              });
+              helper.registerChannelAliases(channel, info.alias);
             }
             if (autoCreateChannel) {
               matchedGroupIds.forEach(gid => {
@@ -6919,14 +7038,8 @@ app.get("/api/channels", async (req, res) => {
             return;
           }
 
-          if (!channel.sources.some((s) => s.url === url)) {
-            channel.sources.push({
-              id: "src_" + Math.random().toString(36).substring(2, 10),
-              url,
-              province,
-              isp,
-              status: "unknown",
-            });
+          const addRes = helper.addSource(channel, url, province, isp);
+          if (addRes.added) {
             importedSourcesCount++;
           }
         };
@@ -6942,7 +7055,7 @@ app.get("/api/channels", async (req, res) => {
             const groupMatch = line.match(/group-title="([^"]+)"/);
             const epgMatch = line.match(/tvg-id="([^"]+)"/) || line.match(/epg-id="([^"]+)"/);
             const tvgNameMatch = line.match(/tvg-name="([^"]+)"/);
-            const aliasMatch = line.match(/tvg-alias="([^"]+)"/) || line.match(/alias="([^"]+)"/) || line.match(/alias-name="([^"]+)"/);
+            const aliasMatch = line.match(/tvg-alias="([^"]+)"/) || line.match(/alias="([^"]+)"/);
             
             const commaIndex = line.indexOf(",");
             let name = "未知频道";
@@ -6950,6 +7063,11 @@ app.get("/api/channels", async (req, res) => {
               name = line.substring(commaIndex + 1).trim();
             }
             name = stripBitrateAndResolution(name);
+
+            if (name.includes("线路") || name.includes("盗源狗")) {
+              currentInfo = null;
+              continue;
+            }
 
             const nameParts = name.split(/[,;，；:]/).map(s => toSimplifiedChinese(s.trim())).filter(Boolean);
             if (nameParts.length > 0) {
@@ -6983,33 +7101,41 @@ app.get("/api/channels", async (req, res) => {
         }
       } else {
         // Parse TVBox TXT
-        const lines = content.split(/\r?\n/);
+        const lines = actualContent.split(/\r?\n/);
         let currentCategory = "手动导入";
 
         for (const rawLine of lines) {
           const line = rawLine.trim();
           if (!line || line.startsWith("#")) continue;
 
-          if (line.includes(",#genre")) {
-            currentCategory = toSimplifiedChinese(line.split(",")[0].trim());
+          if (line.includes(",#genre") || line.includes("#genre#")) {
+            const commaIdx = line.indexOf(",");
+            let cat = commaIdx !== -1 ? line.slice(0, commaIdx).trim() : line.replace(/#genre#?/gi, "").trim();
+            currentCategory = toSimplifiedChinese(cat) || "其它频道";
           } else if (line.includes(",") || line.length > 0) {
-            const parts = line.split(",");
-            const nameWithSpecs = parts[0].trim();
-            const urls = parts[1] ? parts[1].split('#').map(u => {
+            const firstComma = line.indexOf(",");
+            if (firstComma === -1) continue;
+
+            const nameWithSpecs = line.slice(0, firstComma).trim();
+            const rawUrlPart = line.slice(firstComma + 1).trim();
+
+            const urls = rawUrlPart.split('#').map(u => {
               let u2 = u.trim();
               if (u2.includes('$')) u2 = u2.split('$')[0].trim();
               return u2;
-            }).filter(Boolean) : [];
+            }).filter(Boolean);
+
+            if (urls.length === 0) continue;
 
             const { province, isp } = parseIspAndProvince(nameWithSpecs + " " + currentCategory);
             let name = nameWithSpecs.split("#")[0].trim();
             name = stripBitrateAndResolution(name);
 
-            if (name.includes("线路") || !name) {
+            if (name.includes("线路") || name.includes("盗源狗") || !name) {
               continue;
             }
 
-            const nameParts = name.split(/[,;，；:]/).map(s => s.trim()).filter(Boolean);
+            const nameParts = name.split(/[,;，；:]/).map(s => toSimplifiedChinese(s.trim())).filter(Boolean);
             if (nameParts.length > 0) {
               name = nameParts[0];
             }
@@ -7036,30 +7162,14 @@ app.get("/api/channels", async (req, res) => {
 
             const matchedGroupIds: string[] = [];
             for (const catName of catNames) {
-              let existingGroup = groups.find((g) => g.name.toLowerCase() === catName.toLowerCase());
-              if (!existingGroup) {
-                if (autoCreateChannel) {
-                  existingGroup = {
-                    id: "g_" + Math.random().toString(36).substring(2, 10),
-                    name: catName,
-                  };
-                  groups.push(existingGroup);
-                  matchedGroupIds.push(existingGroup.id);
-                }
-              } else {
-                matchedGroupIds.push(existingGroup.id);
-              }
+              const gid = helper.resolveGroup(catName, autoCreateChannel);
+              if (gid) matchedGroupIds.push(gid);
             }
 
             const stdInfo = findAliasTemplate(name);
             const lookupName = stdInfo ? stdInfo.templateName : name;
 
-            let channel = channels.find(
-              (c) =>
-                normalizeChannelName(c.name) === normalizeChannelName(lookupName) ||
-                c.alias.some((a: string) => normalizeChannelName(a) === normalizeChannelName(lookupName)) ||
-                (stdInfo && stdInfo.aliases.some(a => normalizeChannelName(c.name) === normalizeChannelName(a) || c.alias.some(ca => normalizeChannelName(ca) === normalizeChannelName(a))))
-            );
+            let channel = helper.findChannel(lookupName, stdInfo);
 
             if (!channel) {
               if (!autoCreateChannel || aliasOnly) {
@@ -7079,17 +7189,13 @@ app.get("/api/channels", async (req, res) => {
                 epgId: generateDefaultEpgId(cleanName),
                 sources: [],
               };
-              channels.push(channel);
+              helper.addChannel(channel);
               importedChannelsCount++;
             } else {
               if (stdInfo) {
                 // FORCE UPDATE channel name to the official alias template name
                 channel.name = stdInfo.templateName;
-                stdInfo.aliases.forEach(a => {
-                  if (!channel!.alias.includes(a)) {
-                    channel!.alias.push(a);
-                  }
-                });
+                helper.registerChannelAliases(channel, stdInfo.aliases);
               }
               if (autoCreateChannel) {
                 matchedGroupIds.forEach(gid => {
@@ -7099,12 +7205,7 @@ app.get("/api/channels", async (req, res) => {
                 });
               }
               // Add any aliases parsed from the current TXT metadata
-              nameParts.forEach(a => {
-                if (!channel!.alias.includes(a)) {
-                  channel!.alias.push(a);
-                }
-              });
-              channel!.alias = Array.from(new Set(channel!.alias));
+              helper.registerChannelAliases(channel, nameParts);
             }
 
             if (aliasOnly) {
@@ -7112,15 +7213,10 @@ app.get("/api/channels", async (req, res) => {
             }
 
             for (const url of urls) {
-              if (!channel.sources.some((s) => s.url === url)) {
-                channel.sources.push({
-                  id: "src_" + Math.random().toString(36).substring(2, 10),
-                  url,
-                  province,
-                  isp,
-                  status: "unknown",
-                });
+              const addRes = helper.addSource(channel, url, province, isp);
+              if (addRes.added) {
                 importedSourcesCount++;
+                detectAndRegisterCarouselProxy(url);
               }
             }
           }
@@ -7128,9 +7224,10 @@ app.get("/api/channels", async (req, res) => {
       }
 
       saveData();
+      const prefix = isRemoteFetched ? "已自动拉取远程网络资源并" : "";
       res.json({
         success: true,
-        message: `成功导入 ${importedChannelsCount} 个频道，${importedSourcesCount} 个直播播放源`,
+        message: `${prefix}成功导入 ${importedChannelsCount} 个频道，${importedSourcesCount} 个直播播放源`,
       });
     } catch (err: any) {
       res.status(500).json({ error: `解析文件出错: ${err.message || err}` });
