@@ -119,6 +119,11 @@ export default function App() {
   const [channels, setChannels] = useState<Channel[]>([]);
   const [syncConfigs, setSyncConfigs] = useState<SyncConfig[]>([]);
   const [groups, setGroups] = useState<Group[]>([]);
+  const [carouselStats, setCarouselStats] = useState<{
+    channelsCount: number;
+    proxiesCount: number;
+    activeProxiesCount: number;
+  } | undefined>(undefined);
   const [githubProxy, setGithubProxy] = useState("");
   const [githubProxyInput, setGithubProxyInput] = useState("");
   const [ipGeoApis, setIpGeoApis] = useState<IpGeoApi[]>([]);
@@ -826,6 +831,9 @@ export default function App() {
         setSyncConfigs(data.syncConfigs || []);
         setGroups(data.groups || []);
         setEpgSources(data.epgSources || []);
+        if (data.carouselStats) {
+          setCarouselStats(data.carouselStats);
+        }
         if (data.settings) {
           setGithubProxy(data.settings.githubProxy || "");
           setGithubProxyInput(data.settings.githubProxy || "");
@@ -3382,10 +3390,10 @@ export default function App() {
           </button>
 
           <button 
-            onClick={async () => {
+            onClick={() => {
               setActiveTab("carousel");
               setIsMobileMenuOpen(false);
-              await fetchData();
+              fetchData();
             }}
             className={`w-full flex items-center gap-3.5 px-4 py-3 rounded-xl transition text-xs font-semibold ${
               activeTab === "carousel" 
@@ -5751,13 +5759,14 @@ export default function App() {
           )}
 
           {/* VIEW: CAROUSEL PROXY & CHANNEL MAPPING HUB */}
-          {activeTab === "carousel" && (
+          <div className={activeTab === "carousel" ? "block" : "hidden"}>
             <CarouselHubView 
               fetchData={fetchData} 
               channelsData={channels} 
               onFeedback={showFeedback} 
+              initialStats={carouselStats}
             />
-          )}
+          </div>
 
           {/* VIEW: SUBSCRIPTIONS & MANUAL BULK IMPORT */}
           {activeTab === "sync" && (

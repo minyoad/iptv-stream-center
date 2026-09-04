@@ -607,11 +607,19 @@ async function startServer() {
 
     app.get("/api/all-data", (req, res) => {
     res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+    let carouselStats = { channelsCount: 0, proxiesCount: 0, activeProxiesCount: 0 };
+    try {
+      const chCount = (db.prepare('SELECT COUNT(*) as count FROM carousel_channels').get() as any)?.count || 0;
+      const prCount = (db.prepare('SELECT COUNT(*) as count FROM carousel_proxies').get() as any)?.count || 0;
+      const activePrCount = (db.prepare("SELECT COUNT(*) as count FROM carousel_proxies WHERE status = 'active'").get() as any)?.count || 0;
+      carouselStats = { channelsCount: chCount, proxiesCount: prCount, activeProxiesCount: activePrCount };
+    } catch {}
     res.json({
       channels,
       syncConfigs,
       groups,
       epgSources,
+      carouselStats,
       settings: { githubProxy, autoCreateChannel, ipGeoApis, autoSwitchGeoApi, m3uLogoVersion, carouselProxyPresets }
     });
   });
@@ -3282,7 +3290,6 @@ app.get("/api/channels", async (req, res) => {
   
   app.get("/api/carousel-proxies", (req, res) => {
     try {
-      cleanupBlockedCarouselProxies();
       const proxies = db.prepare('SELECT * FROM carousel_proxies').all() as any[];
       const enabledRules = getDiscoveryRules(false);
       const enabledPlatforms = new Set(enabledRules.map((r: any) => (r.platform || '').toLowerCase()));

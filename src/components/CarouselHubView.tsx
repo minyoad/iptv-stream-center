@@ -22,12 +22,45 @@ interface CarouselHubViewProps {
   fetchData: () => void;
   channelsData?: any[];
   onFeedback?: (type: "success" | "error" | "info", message: string) => void;
+  initialStats?: {
+    channelsCount?: number;
+    proxiesCount?: number;
+    activeProxiesCount?: number;
+  };
 }
+
+const STATS_STORAGE_KEY = "carousel_hub_stats_cache";
+
+function getInitialCachedStats(): {
+  channelsCount: number;
+  proxiesCount: number;
+  activeProxiesCount: number;
+  sourcesCount: number;
+} {
+  try {
+    const raw = localStorage.getItem(STATS_STORAGE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (typeof parsed.proxiesCount === "number") {
+        return parsed;
+      }
+    }
+  } catch {}
+  return {
+    channelsCount: 0,
+    proxiesCount: 0,
+    activeProxiesCount: 0,
+    sourcesCount: 0
+  };
+}
+
+let memoryCachedStats = getInitialCachedStats();
 
 export const CarouselHubView: React.FC<CarouselHubViewProps> = ({
   fetchData,
   channelsData = [],
-  onFeedback
+  onFeedback,
+  initialStats
 }) => {
   const [activeTab, setActiveTab] = useState<"channels" | "proxies" | "export">("channels");
   const [stats, setStats] = useState<{
@@ -35,12 +68,40 @@ export const CarouselHubView: React.FC<CarouselHubViewProps> = ({
     proxiesCount: number;
     activeProxiesCount: number;
     sourcesCount: number;
-  }>({
-    channelsCount: 0,
-    proxiesCount: 0,
-    activeProxiesCount: 0,
-    sourcesCount: 0
+  }>(() => {
+    let base = { ...memoryCachedStats };
+    if (initialStats) {
+      if (typeof initialStats.channelsCount === "number") base.channelsCount = initialStats.channelsCount;
+      if (typeof initialStats.proxiesCount === "number") base.proxiesCount = initialStats.proxiesCount;
+      if (typeof initialStats.activeProxiesCount === "number") base.activeProxiesCount = initialStats.activeProxiesCount;
+    }
+    let totalCarouselSources = 0;
+    if (Array.isArray(channelsData)) {
+      channelsData.forEach((ch: any) => {
+        if (ch.groupIds && (ch.groupIds.includes("g_carousel") || ch.groupIds.includes("轮播频道"))) {
+          totalCarouselSources += (ch.sources ? ch.sources.length : 0);
+        }
+      });
+      base.sourcesCount = totalCarouselSources;
+    }
+    return base;
   });
+
+  useEffect(() => {
+    if (initialStats && (typeof initialStats.proxiesCount === "number" || typeof initialStats.channelsCount === "number")) {
+      setStats(prev => {
+        const next = {
+          ...prev,
+          channelsCount: initialStats.channelsCount ?? prev.channelsCount,
+          proxiesCount: initialStats.proxiesCount ?? prev.proxiesCount,
+          activeProxiesCount: initialStats.activeProxiesCount ?? prev.activeProxiesCount,
+        };
+        memoryCachedStats = next;
+        try { localStorage.setItem(STATS_STORAGE_KEY, JSON.stringify(next)); } catch {}
+        return next;
+      });
+    }
+  }, [initialStats]);
 
   // Export settings
   const [exportFormat, setExportFormat] = useState<"m3u" | "txt">("m3u");
@@ -71,12 +132,15 @@ export const CarouselHubView: React.FC<CarouselHubViewProps> = ({
         }
       });
 
-      setStats({
+      const newStats = {
         channelsCount,
         proxiesCount,
         activeProxiesCount,
         sourcesCount: totalCarouselSources
-      });
+      };
+      memoryCachedStats = newStats;
+      try { localStorage.setItem(STATS_STORAGE_KEY, JSON.stringify(newStats)); } catch {}
+      setStats(newStats);
     } catch (err) {
       console.warn("Failed to load carousel stats:", err);
     }
@@ -230,29 +294,25 @@ export const CarouselHubView: React.FC<CarouselHubViewProps> = ({
         </button>
       </div>
 
-      {/* Tab Panels */}
-      {activeTab === "channels" && (
-        <div className="animate-fade-in">
-          <CarouselChannelView 
-            fetchData={async () => {
-              await fetchData();
-              await loadStats();
-            }} 
-            channelsData={channelsData} 
-          />
-        </div>
-      )}
+      {/* Tab Panels with Instant Switch */}
+      <div className={activeTab === "channels" ? "animate-fade-in" : "hidden"}>
+        <CarouselChannelView 
+          fetchData={async () => {
+            await fetchData();
+            await loadStats();
+          }} 
+          channelsData={channelsData} 
+        />
+      </div>
 
-      {activeTab === "proxies" && (
-        <div className="animate-fade-in">
-          <CarouselProxyView 
-            fetchData={async () => {
-              await fetchData();
-              await loadStats();
-            }} 
-          />
-        </div>
-      )}
+      <div className={activeTab === "proxies" ? "animate-fade-in" : "hidden"}>
+        <CarouselProxyView 
+          fetchData={async () => {
+            await fetchData();
+            await loadStats();
+          }} 
+        />
+      </div>
 
       {activeTab === "export" && (
         <div className="bg-white rounded-3xl border border-slate-200 p-6 sm:p-8 space-y-7 shadow-xs animate-fade-in" id="carousel_export_panel">

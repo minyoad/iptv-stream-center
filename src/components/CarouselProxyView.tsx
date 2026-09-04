@@ -88,13 +88,30 @@ export const DEFAULT_CAROUSEL_PRESETS: Record<string, { name: string; id: string
   ]
 };
 
+// Module-level and localStorage caches for instantaneous rendering without blank waiting
+const PROXIES_CACHE_KEY = "carousel_proxies_cache";
+const DISABLED_RULES_CACHE_KEY = "carousel_disabled_rules_cache";
+
+function getCachedItem<T>(key: string): T | null {
+  try {
+    const raw = localStorage.getItem(key);
+    if (raw) return JSON.parse(raw);
+  } catch {}
+  return null;
+}
+
+let cachedProxies: any[] | null = getCachedItem<any[]>(PROXIES_CACHE_KEY);
+let cachedDisabledRules: CarouselDisabledRule[] | null = getCachedItem<CarouselDisabledRule[]>(DISABLED_RULES_CACHE_KEY);
+let cachedDiscoveryRules: any[] | null = null;
+let cachedPresets: any | null = null;
+
 export const CarouselProxyView = ({ fetchData }: { fetchData: () => void }) => {
   const [activeTab, setActiveTab] = useState<"proxies" | "disabledRules" | "test">("proxies");
-  const [proxies, setProxies] = useState<any[]>([]);
-  const [disabledRules, setDisabledRules] = useState<CarouselDisabledRule[]>([]);
-  const [discoveryRules, setDiscoveryRules] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [rulesLoading, setRulesLoading] = useState(false);
+  const [proxies, setProxies] = useState<any[]>(() => cachedProxies || []);
+  const [disabledRules, setDisabledRules] = useState<CarouselDisabledRule[]>(() => cachedDisabledRules || []);
+  const [discoveryRules, setDiscoveryRules] = useState<any[]>(() => cachedDiscoveryRules || []);
+  const [loading, setLoading] = useState(() => !cachedProxies);
+  const [rulesLoading, setRulesLoading] = useState(() => !cachedDisabledRules);
   const [hideBlocked, setHideBlocked] = useState(true);
   
   // Toast notification state
@@ -206,35 +223,41 @@ export const CarouselProxyView = ({ fetchData }: { fetchData: () => void }) => {
   const [presetForm, setPresetForm] = useState("");
 
   useEffect(() => {
-    loadData();
-    loadDisabledRules();
+    loadData(Boolean(cachedProxies));
+    loadDisabledRules(Boolean(cachedDisabledRules));
     loadDiscoveryRules();
     fetchSettings();
   }, []);
 
-  const loadData = async () => {
+  const loadData = async (silent = false) => {
     try {
-      setLoading(true);
+      if (!silent && !cachedProxies) setLoading(true);
       const res = await fetch("/api/carousel-proxies");
       const data = await safeJson(res, []);
-      setProxies(Array.isArray(data) ? data : []);
+      const list = Array.isArray(data) ? data : [];
+      cachedProxies = list;
+      try { localStorage.setItem(PROXIES_CACHE_KEY, JSON.stringify(list)); } catch {}
+      setProxies(list);
     } catch (e) {
       console.error(e);
-      setProxies([]);
+      if (!cachedProxies) setProxies([]);
     } finally {
       setLoading(false);
     }
   };
 
-  const loadDisabledRules = async () => {
+  const loadDisabledRules = async (silent = false) => {
     try {
-      setRulesLoading(true);
+      if (!silent && !cachedDisabledRules) setRulesLoading(true);
       const res = await fetch("/api/carousel-disabled-rules");
       const data = await safeJson(res, []);
-      setDisabledRules(Array.isArray(data) ? data : []);
+      const list = Array.isArray(data) ? data : [];
+      cachedDisabledRules = list;
+      try { localStorage.setItem(DISABLED_RULES_CACHE_KEY, JSON.stringify(list)); } catch {}
+      setDisabledRules(list);
     } catch (e) {
       console.error(e);
-      setDisabledRules([]);
+      if (!cachedDisabledRules) setDisabledRules([]);
     } finally {
       setRulesLoading(false);
     }
@@ -244,25 +267,32 @@ export const CarouselProxyView = ({ fetchData }: { fetchData: () => void }) => {
     try {
       const res = await fetch("/api/carousel-discovery-rules");
       const data = await safeJson(res, []);
-      setDiscoveryRules(Array.isArray(data) ? data : []);
+      const list = Array.isArray(data) ? data : [];
+      cachedDiscoveryRules = list;
+      setDiscoveryRules(list);
     } catch (e) {
       console.error(e);
-      setDiscoveryRules([]);
+      if (!cachedDiscoveryRules) setDiscoveryRules([]);
     }
   };
 
   const fetchSettings = async () => {
     try {
+      if (cachedPresets) {
+        setPresets(cachedPresets);
+      }
       const res = await fetch("/api/settings");
       const data = await safeJson(res, {});
       if (data && data.carouselProxyPresets && Object.keys(data.carouselProxyPresets).length > 0) {
+        cachedPresets = data.carouselProxyPresets;
         setPresets(data.carouselProxyPresets);
       } else {
+        cachedPresets = DEFAULT_CAROUSEL_PRESETS;
         setPresets(DEFAULT_CAROUSEL_PRESETS);
       }
     } catch (e) {
       console.error(e);
-      setPresets(DEFAULT_CAROUSEL_PRESETS);
+      if (!cachedPresets) setPresets(DEFAULT_CAROUSEL_PRESETS);
     }
   };
 
@@ -1555,6 +1585,15 @@ export const CarouselProxyView = ({ fetchData }: { fetchData: () => void }) => {
                 );
               })}
 
+              {loading && proxies.length === 0 && (
+                <div className="text-center py-12 text-slate-400 bg-white rounded-xl border border-slate-200 p-6 shadow-xs">
+                  <div className="flex flex-col items-center justify-center gap-3">
+                    <Loader2 className="w-6 h-6 animate-spin text-indigo-600" />
+                    <span className="text-xs font-semibold text-slate-600">正在快速载入轮播代理服务列表...</span>
+                  </div>
+                </div>
+              )}
+
               {filteredVisibleProxies.length === 0 && !loading && (
                 <div className="text-center py-10 text-slate-400 bg-white rounded-xl border border-slate-200 p-4">
                   {proxies.length > 0 && blockedProxiesCount > 0 && hideBlocked ? (
@@ -1728,6 +1767,16 @@ export const CarouselProxyView = ({ fetchData }: { fetchData: () => void }) => {
                       </tr>
                     );
                   })}
+                  {loading && proxies.length === 0 && (
+                    <tr>
+                      <td colSpan={5} className="text-center py-12 text-slate-400">
+                        <div className="flex flex-col items-center justify-center gap-3">
+                          <Loader2 className="w-6 h-6 animate-spin text-indigo-600" />
+                          <span className="text-xs font-semibold text-slate-600">正在快速载入轮播代理服务列表...</span>
+                        </div>
+                      </td>
+                    </tr>
+                  )}
                   {filteredVisibleProxies.length === 0 && !loading && (
                     <tr>
                       <td colSpan={5} className="text-center py-8 text-slate-400">
