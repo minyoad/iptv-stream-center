@@ -862,3 +862,6 @@ export function loadData() {
     groups = DEFAULT_GROUPS;
   }
 }
+
+// Initial data load from SQLite on startup
+loadData();
