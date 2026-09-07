@@ -3798,6 +3798,38 @@ app.get("/api/channels", async (req, res) => {
       const searchFilter = (req.query.search as string || "").trim();
       const limit = req.query.limit ? Math.min(parseInt(req.query.limit as string), 500) : 100;
 
+      const serverTimeZone = process.env.SERVER_TIMEZONE || process.env.TZ || "Asia/Shanghai";
+      const now = new Date();
+      const serverTimeStr = new Intl.DateTimeFormat("zh-CN", {
+        timeZone: serverTimeZone,
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+        hour12: false
+      }).format(now).replace(/\//g, "-");
+
+      const todayMidnightStr = new Intl.DateTimeFormat("zh-CN", {
+        timeZone: serverTimeZone,
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit"
+      }).format(now).replace(/\//g, "-") + " 00:00:00";
+
+      const past24hDate = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+      const past24hStr = new Intl.DateTimeFormat("zh-CN", {
+        timeZone: serverTimeZone,
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+        hour12: false
+      }).format(past24hDate).replace(/\//g, "-");
+
       let whereClause = "WHERE 1=1";
       const params: any[] = [];
 
@@ -3812,31 +3844,31 @@ app.get("/api/channels", async (req, res) => {
         params.push(term, term, term, term, term);
       }
 
-      // 1. Overview counts
+      // 1. Overview counts using server timezone boundary
       const totalRow = db.prepare(`SELECT COUNT(*) as cnt FROM client_access_logs ${whereClause}`).get(...params) as { cnt: number };
-      const todayRow = db.prepare(`SELECT COUNT(*) as cnt FROM client_access_logs ${whereClause} AND accessTime >= date('now', 'localtime')`).get(...params) as { cnt: number };
-      const last24hRow = db.prepare(`SELECT COUNT(*) as cnt FROM client_access_logs ${whereClause} AND accessTime >= datetime('now', '-24 hours', 'localtime')`).get(...params) as { cnt: number };
+      const todayRow = db.prepare(`SELECT COUNT(*) as cnt FROM client_access_logs ${whereClause} AND accessTime >= ?`).get(...params, todayMidnightStr) as { cnt: number };
+      const last24hRow = db.prepare(`SELECT COUNT(*) as cnt FROM client_access_logs ${whereClause} AND accessTime >= ?`).get(...params, past24hStr) as { cnt: number };
       const uniqueIpsTotalRow = db.prepare(`SELECT COUNT(DISTINCT clientIp) as cnt FROM client_access_logs ${whereClause}`).get(...params) as { cnt: number };
-      const uniqueIpsTodayRow = db.prepare(`SELECT COUNT(DISTINCT clientIp) as cnt FROM client_access_logs ${whereClause} AND accessTime >= date('now', 'localtime')`).get(...params) as { cnt: number };
+      const uniqueIpsTodayRow = db.prepare(`SELECT COUNT(DISTINCT clientIp) as cnt FROM client_access_logs ${whereClause} AND accessTime >= ?`).get(...params, todayMidnightStr) as { cnt: number };
 
       // 2. Breakdown by Endpoint
       const endpointRows = db.prepare(`
         SELECT endpoint, COUNT(*) as total, 
-               SUM(CASE WHEN accessTime >= date('now', 'localtime') THEN 1 ELSE 0 END) as today
+               SUM(CASE WHEN accessTime >= ? THEN 1 ELSE 0 END) as today
         FROM client_access_logs
         GROUP BY endpoint
         ORDER BY total DESC
-      `).all() as any[];
+      `).all(todayMidnightStr) as any[];
 
       // 3. Breakdown by Client App
       const appRows = db.prepare(`
         SELECT clientApp, COUNT(*) as total,
-               SUM(CASE WHEN accessTime >= date('now', 'localtime') THEN 1 ELSE 0 END) as today
+               SUM(CASE WHEN accessTime >= ? THEN 1 ELSE 0 END) as today
         FROM client_access_logs
         GROUP BY clientApp
         ORDER BY total DESC
         LIMIT 12
-      `).all() as any[];
+      `).all(todayMidnightStr) as any[];
 
       // 4. Breakdown by Location / ISP
       const locationRows = db.prepare(`
@@ -3852,10 +3884,10 @@ app.get("/api/channels", async (req, res) => {
       const hourlyRows = db.prepare(`
         SELECT strftime('%H:00', accessTime) as hourSlot, COUNT(*) as cnt
         FROM client_access_logs
-        WHERE accessTime >= datetime('now', '-24 hours', 'localtime')
+        WHERE accessTime >= ?
         GROUP BY hourSlot
         ORDER BY hourSlot ASC
-      `).all() as any[];
+      `).all(past24hStr) as any[];
 
       // 6. Recent Logs
       const logs = db.prepare(`
@@ -3866,7 +3898,39 @@ app.get("/api/channels", async (req, res) => {
         LIMIT ?
       `).all(...params, limit) as any[];
 
+      const formatToServerTime = (timeInput: any, tz: string): string => {
+        if (!timeInput) return "-";
+        try {
+          const trimmed = String(timeInput).trim();
+          if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(trimmed)) {
+            return trimmed;
+          }
+          const d = new Date(trimmed);
+          if (isNaN(d.getTime())) return trimmed;
+          return new Intl.DateTimeFormat("zh-CN", {
+            timeZone: tz || "Asia/Shanghai",
+            year: "numeric",
+            month: "2-digit",
+            day: "2-digit",
+            hour: "2-digit",
+            minute: "2-digit",
+            second: "2-digit",
+            hour12: false
+          }).format(d).replace(/\//g, "-");
+        } catch {
+          return String(timeInput);
+        }
+      };
+
+      const formattedLogs = logs.map((log) => ({
+        ...log,
+        accessTime: formatToServerTime(log.accessTime, serverTimeZone),
+        rawAccessTime: log.accessTime
+      }));
+
       res.json({
+        serverTimeZone,
+        serverTime: serverTimeStr,
         overview: {
           totalRequests: totalRow?.cnt || 0,
           todayRequests: todayRow?.cnt || 0,
@@ -3878,7 +3942,7 @@ app.get("/api/channels", async (req, res) => {
         byClientApp: appRows,
         byLocation: locationRows,
         hourlyTrend: hourlyRows,
-        recentLogs: logs
+        recentLogs: formattedLogs
       });
     } catch (err: any) {
       console.error("[GET CLIENT ACCESS STATS ERROR]", err);

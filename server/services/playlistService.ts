@@ -453,10 +453,22 @@ export function recordClientAccess(
 
     const doInsert = (finalProv: string, finalIsp: string) => {
       try {
+        const serverTimeZone = process.env.SERVER_TIMEZONE || process.env.TZ || "Asia/Shanghai";
+        const serverTimeStr = new Intl.DateTimeFormat("zh-CN", {
+          timeZone: serverTimeZone,
+          year: "numeric",
+          month: "2-digit",
+          day: "2-digit",
+          hour: "2-digit",
+          minute: "2-digit",
+          second: "2-digit",
+          hour12: false
+        }).format(new Date()).replace(/\//g, "-");
+
         db.prepare(`
           INSERT INTO client_access_logs (endpoint, endpointPath, clientIp, province, isp, userAgent, clientApp, queryParams, statusCode, responseBytes, accessTime)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now', 'localtime'))
-        `).run(endpoint, endpointPath, clientIp, finalProv, finalIsp, userAgent, clientApp, queryParams, statusCode, responseBytes);
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(endpoint, endpointPath, clientIp, finalProv, finalIsp, userAgent, clientApp, queryParams, statusCode, responseBytes, serverTimeStr);
 
         if (Math.random() < 0.05) {
           const countRow = db.prepare(`SELECT COUNT(*) as cnt FROM client_access_logs`).get() as { cnt: number };

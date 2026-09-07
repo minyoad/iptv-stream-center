@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { History, Trash2, MapPin, Globe, Zap, Users, RefreshCw, BarChart2, Filter, Search, Terminal, Laptop, HardDrive } from 'lucide-react';
+import { History, Trash2, MapPin, Globe, Zap, Users, RefreshCw, BarChart2, Filter, Search, Terminal, Laptop, HardDrive, Clock } from 'lucide-react';
 import { Channel } from '../types';
 import { Activity, Copy, AlertCircle, CheckCircle, XCircle } from 'lucide-react';
 import { authFetch as fetch } from "../utils/api";
@@ -21,6 +21,31 @@ export default function StatsView({ channels, initialSubTab = "client_access" }:
   const [clientStatsLoading, setClientStatsLoading] = useState(false);
   const [clientEndpointFilter, setClientEndpointFilter] = useState("all");
   const [clientSearchFilter, setClientSearchFilter] = useState("");
+
+  const formatServerTime = (timeStr: any, targetTz?: string): string => {
+    if (!timeStr) return "-";
+    const tz = targetTz || clientStats?.serverTimeZone || "Asia/Shanghai";
+    try {
+      const trimmed = String(timeStr).trim();
+      if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(trimmed)) {
+        return trimmed;
+      }
+      const d = new Date(trimmed);
+      if (isNaN(d.getTime())) return trimmed;
+      return new Intl.DateTimeFormat("zh-CN", {
+        timeZone: tz,
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+        hour12: false
+      }).format(d).replace(/\//g, "-");
+    } catch {
+      return String(timeStr);
+    }
+  };
 
   useEffect(() => {
     if (initialSubTab) {
@@ -445,11 +470,25 @@ export default function StatsView({ channels, initialSubTab = "client_access" }:
 
           {/* Recent Access Logs Table */}
           <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden flex flex-col">
-            <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
-              <h3 className="text-xs font-bold text-slate-800 flex items-center gap-2">
-                <Terminal className="w-4 h-4 text-slate-500" />
-                实时客户端 API 访问明细
-              </h3>
+            <div className="p-4 border-b border-slate-100 flex flex-wrap gap-2 justify-between items-center bg-slate-50/50">
+              <div className="flex items-center gap-2.5">
+                <h3 className="text-xs font-bold text-slate-800 flex items-center gap-2">
+                  <Terminal className="w-4 h-4 text-slate-500" />
+                  实时客户端 API 访问明细
+                </h3>
+                <span 
+                  className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200/80 shadow-2xs"
+                  title={`服务器当前时间: ${clientStats?.serverTime || '-'}`}
+                >
+                  <Clock className="w-3 h-3 text-emerald-600" />
+                  服务器时区: {clientStats?.serverTimeZone || "Asia/Shanghai"}
+                  {clientStats?.serverTime && (
+                    <span className="hidden sm:inline font-mono text-emerald-800/80 font-normal">
+                      ({clientStats.serverTime.split(' ')[1] || clientStats.serverTime})
+                    </span>
+                  )}
+                </span>
+              </div>
               <span className="text-[11px] text-slate-400 font-mono">
                 最近 {clientStats?.recentLogs?.length || 0} 条记录
               </span>
@@ -459,7 +498,14 @@ export default function StatsView({ channels, initialSubTab = "client_access" }:
               <table className="w-full text-left border-collapse min-w-[900px]">
                 <thead className="bg-slate-50 sticky top-0 z-10 border-b border-slate-200 shadow-xs">
                   <tr className="text-[11px] uppercase tracking-wider text-slate-500 font-bold">
-                    <th className="py-3 px-4 font-bold">访问时间</th>
+                    <th className="py-3 px-4 font-bold">
+                      <div className="flex items-center gap-1">
+                        <span>访问时间</span>
+                        <span className="text-[10px] font-normal text-slate-400 font-mono">
+                          ({clientStats?.serverTimeZone ? clientStats.serverTimeZone : '服务器时区'})
+                        </span>
+                      </div>
+                    </th>
                     <th className="py-3 px-4">访问接口</th>
                     <th className="py-3 px-4">客户端 IP & 地区</th>
                     <th className="py-3 px-4">播放设备 / UA</th>
@@ -471,8 +517,11 @@ export default function StatsView({ channels, initialSubTab = "client_access" }:
                 <tbody className="divide-y divide-slate-100 text-xs text-slate-650">
                   {clientStats?.recentLogs?.map((log: any) => (
                     <tr key={log.id} className="hover:bg-slate-50/80 transition-colors">
-                      <td className="py-3 px-4 font-mono text-slate-600 whitespace-nowrap">
-                        {log.accessTime}
+                      <td 
+                        className="py-3 px-4 font-mono text-slate-600 whitespace-nowrap cursor-help"
+                        title={`服务器时区: ${clientStats?.serverTimeZone || 'Asia/Shanghai'}${log.rawAccessTime ? ` (原始记录: ${log.rawAccessTime})` : ''}`}
+                      >
+                        {formatServerTime(log.accessTime, clientStats?.serverTimeZone)}
                       </td>
                       <td className="py-3 px-4 whitespace-nowrap">
                         {getEndpointBadge(log.endpoint)}

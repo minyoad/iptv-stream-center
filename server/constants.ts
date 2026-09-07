@@ -2,6 +2,11 @@ import path from "path";
 import fs from "fs";
 import { Group, Channel, SyncConfig, IpGeoApi } from "./types";
 
+export const SERVER_TIMEZONE = process.env.SERVER_TIMEZONE || process.env.TZ || "Asia/Shanghai";
+if (!process.env.TZ) {
+  process.env.TZ = SERVER_TIMEZONE;
+}
+
 export const DATA_DIR = process.env.DATA_DIR || (fs.existsSync("/data") ? "/data" : path.join(process.cwd(), "data"));
 export const DATA_FILE = path.join(DATA_DIR, "iptv_data.json");
 export const SQLITE_DB_PATH = path.join(DATA_DIR, "iptv_sqlite.db");
