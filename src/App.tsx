@@ -899,10 +899,19 @@ export default function App() {
     let isMounted = true;
     let prevDataUpdate: number | null = null;
     let prevTestStatus: string | null = null;
+    let lastChannelsFetchTime = 0;
 
     const poll = async () => {
       try {
-        const res = await fetch("/api/sources/test-status");
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 6000);
+        let res: Response;
+        try {
+          res = await fetch("/api/sources/test-status", { signal: controller.signal });
+        } finally {
+          clearTimeout(timeoutId);
+        }
+
         if (!isMounted) return;
         
         if (res.ok) {
@@ -910,32 +919,47 @@ export default function App() {
           setTestingStatus(statusData);
           
           let shouldRefetch = false;
+          const now = Date.now();
 
-          if (statusData.lastDataUpdate) {
-            if (prevDataUpdate !== null && prevDataUpdate !== statusData.lastDataUpdate) {
+          if (prevTestStatus === "running" && statusData.status === "idle") {
+            // Testing finished: trigger a full refresh to display all new latencies and active states
+            shouldRefetch = true;
+          } else if (statusData.status === "running") {
+            // While running, do NOT hammer the server with full channel list every 2s.
+            // Throttle to at most once every 15s to keep UI responsive without saturating connections
+            if (now - lastChannelsFetchTime > 15000) {
               shouldRefetch = true;
             }
-            prevDataUpdate = statusData.lastDataUpdate;
+          } else if (statusData.lastDataUpdate && prevDataUpdate !== null && prevDataUpdate !== statusData.lastDataUpdate) {
+            shouldRefetch = true;
           }
 
-          if (statusData.status === "running") {
-            shouldRefetch = true;
-          } else if (prevTestStatus === "running" && statusData.status === "idle") {
-            shouldRefetch = true;
+          if (statusData.lastDataUpdate) {
+            prevDataUpdate = statusData.lastDataUpdate;
           }
-          
           prevTestStatus = statusData.status;
 
           if (shouldRefetch) {
-            // Refresh channel data live to show checked progress or external data updates
-            const resChannels = await fetch("/api/channels?full=true");
-            if (resChannels.ok && isMounted) {
-              const freshChannels = await resChannels.json();
-              setChannels(freshChannels);
-              setSelectedChannel(prev => {
-                if (!prev) return (freshChannels && freshChannels.length > 0) ? freshChannels[0] : null;
-                return freshChannels.find((c: Channel) => c.id === prev.id) || null;
-              });
+            lastChannelsFetchTime = now;
+            try {
+              const chCtrl = new AbortController();
+              const chTimeout = setTimeout(() => chCtrl.abort(), 8000);
+              let resChannels: Response;
+              try {
+                resChannels = await fetch("/api/channels?full=true", { signal: chCtrl.signal });
+              } finally {
+                clearTimeout(chTimeout);
+              }
+              if (resChannels.ok && isMounted) {
+                const freshChannels = await resChannels.json();
+                setChannels(freshChannels);
+                setSelectedChannel(prev => {
+                  if (!prev) return (freshChannels && freshChannels.length > 0) ? freshChannels[0] : null;
+                  return freshChannels.find((c: Channel) => c.id === prev.id) || null;
+                });
+              }
+            } catch (_) {
+              // Ignore background refetch transient errors
             }
           }
           // Poll every 2s when running, else every 10s when idle
@@ -944,10 +968,8 @@ export default function App() {
         } else {
           timerId = setTimeout(poll, 10000);
         }
-      } catch (err) {
+      } catch (_) {
         if (isMounted) {
-          // Log as a warning instead of a noisy console error to avoid triggering test failures during server restarts
-          console.warn("Could not retrieve speed test status (offline or server restarting). Retrying in 10s...");
           timerId = setTimeout(poll, 10000);
         }
       }

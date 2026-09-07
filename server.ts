@@ -11,6 +11,8 @@ const execFileAsync = promisify(execFile);
 
 // Ensure local time is interpreted as CST (UTC+8) by default if not specified
 process.env.TZ = process.env.TZ || "Asia/Shanghai";
+// Increase libuv threadpool size for concurrent DNS lookups and file I/O during speed tests
+process.env.UV_THREADPOOL_SIZE = process.env.UV_THREADPOOL_SIZE || "64";
 
 // Shared types
 import {
@@ -3960,7 +3962,13 @@ app.get("/api/channels", async (req, res) => {
   });
 
   app.get("/api/sources/test-status", (req, res) => {
-    res.json({ ...testStatus, lastDataUpdate: globalLastDataUpdate });
+    res.json({
+      status: testStatus.status,
+      total: testStatus.total,
+      checked: testStatus.checked,
+      results: (testStatus.results || []).slice(-20),
+      lastDataUpdate: globalLastDataUpdate
+    });
   });
 
   // Detect client IP information (ISP and Province) with robust multi-source fallbacks

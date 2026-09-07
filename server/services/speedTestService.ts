@@ -281,15 +281,22 @@ export function parseResolution(url: string, textOrHeader?: string): string | un
   return undefined;
 }
 
-export async function probeStreamResolutionWithFfprobe(url: string, timeoutMs = 1500): Promise<string | undefined> {
+let activeFfprobeCount = 0;
+const MAX_CONCURRENT_FFPROBE = 2;
+
+export async function probeStreamResolutionWithFfprobe(url: string, timeoutMs = 1200): Promise<string | undefined> {
   if (isPrivateOrIntranetUrl(url)) return undefined;
+  if (activeFfprobeCount >= MAX_CONCURRENT_FFPROBE) {
+    return undefined;
+  }
+  activeFfprobeCount++;
 
   try {
     const isRtmp = url.toLowerCase().startsWith("rtmp://");
     const args = [
       "-v", "error",
-      "-probesize", "500000",
-      "-analyzeduration", "500000",
+      "-probesize", "300000",
+      "-analyzeduration", "300000",
     ];
 
     if (isRtmp) {
@@ -307,7 +314,7 @@ export async function probeStreamResolutionWithFfprobe(url: string, timeoutMs = 
       url
     );
 
-    const { stdout } = await execFileAsync("ffprobe", args, { timeout: timeoutMs + 1000 });
+    const { stdout } = await execFileAsync("ffprobe", args, { timeout: timeoutMs + 500, killSignal: "SIGKILL" });
 
     const data = JSON.parse(stdout);
     if (data && data.streams && data.streams.length > 0) {
@@ -323,8 +330,48 @@ export async function probeStreamResolutionWithFfprobe(url: string, timeoutMs = 
         return `${w}x${h}`;
       }
     }
-  } catch (_) {}
+  } catch (_) {
+  } finally {
+    activeFfprobeCount--;
+  }
   return undefined;
+}
+
+export async function readTextLimited(res: Response, maxBytes = 64 * 1024): Promise<string> {
+  if (!res.body) return "";
+  const reader = res.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let totalBytes = 0;
+  try {
+    while (totalBytes < maxBytes) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (value) {
+        chunks.push(value);
+        totalBytes += value.byteLength;
+      }
+    }
+  } catch (_) {
+  } finally {
+    try { await reader.cancel(); } catch (_) {}
+  }
+  return Buffer.concat(chunks).toString("utf-8");
+}
+
+export async function readChunkLimited(res: Response, maxBytes = 32 * 1024): Promise<Buffer> {
+  if (!res.body) return Buffer.alloc(0);
+  const reader = res.body.getReader();
+  try {
+    const { value } = await reader.read();
+    if (value && value.length > 0) {
+      return Buffer.from(value.slice(0, maxBytes));
+    }
+    return Buffer.alloc(0);
+  } catch (_) {
+    return Buffer.alloc(0);
+  } finally {
+    try { await reader.cancel(); } catch (_) {}
+  }
 }
 
 export function buildDiagMsg(details: {
@@ -480,7 +527,6 @@ export async function testSingleUrl(url: string, timeoutMs: number = 5000): Prom
       },
     });
 
-    clearTimeout(timeoutId);
     const contentType = (response.headers.get("content-type") || "").toLowerCase();
     
     if (response.ok) {
@@ -489,7 +535,7 @@ export async function testSingleUrl(url: string, timeoutMs: number = 5000): Prom
 
       try {
         if (contentType.includes("mpegurl") || contentType.includes("text") || contentType.includes("json") || contentType.includes("html") || urlLower.endsWith(".m3u8")) {
-          const text = await response.text();
+          const text = await readTextLimited(response, 64 * 1024);
           const contentCheck = isResponseContentInvalid(text, contentType);
           if (contentCheck.invalid) {
             return {
@@ -535,91 +581,72 @@ export async function testSingleUrl(url: string, timeoutMs: number = 5000): Prom
               try {
                 const subUrl = new URL(subLine, response.url).href;
                 const subCtrl = new AbortController();
-                const subTimeout = setTimeout(() => subCtrl.abort(), 3500);
-                const subRes = await fetch(subUrl, {
-                  signal: subCtrl.signal,
-                  headers: {
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                  },
-                });
-                clearTimeout(subTimeout);
-                if (subRes.ok) {
-                  const subText = await subRes.text();
-                  const subCheck = isResponseContentInvalid(subText, subRes.headers.get("content-type") || "");
-                  if (subCheck.invalid) {
-                    return {
-                      status: "inactive",
-                      latency: Date.now() - startTime,
-                      diagMsg: buildDiagMsg({
-                        httpStatus: subRes.status,
-                        contentType: subRes.headers.get("content-type") || contentType,
-                        reason: `子 M3U8 列表内容失效: ${subCheck.reason}`,
-                        responseSnippet: subText
-                      })
-                    };
-                  }
-                  const subParsed = parseResolution(subUrl, subText);
-                  if (subParsed) {
-                    resolution = subParsed;
-                  } else if (!resolution) {
-                    const subLines = subText.split(/\r?\n/).map(l => l.trim());
-                    const tsLine = subLines.find(l => l && !l.startsWith("#"));
-                    if (tsLine) {
-                      const tsUrl = new URL(tsLine, subUrl).href;
-                      const tsCtrl = new AbortController();
-                      const tsTimeout = setTimeout(() => tsCtrl.abort(), 3000);
-                      const tsRes = await fetch(tsUrl, {
-                        signal: tsCtrl.signal,
-                        headers: {
-                          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                        },
-                      });
-                      clearTimeout(tsTimeout);
-                      if (tsRes.ok && tsRes.body) {
-                        const reader = tsRes.body.getReader();
-                        const { value } = await reader.read();
-                        if (value && value.length > 0) {
-                          const buf = Buffer.from(value);
-                          const spsRes = parseH264Sps(buf);
-                          if (spsRes) resolution = spsRes;
+                const subTimeout = setTimeout(() => subCtrl.abort(), 2500);
+                try {
+                  const subRes = await fetch(subUrl, {
+                    signal: subCtrl.signal,
+                    headers: {
+                      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                    },
+                  });
+                  if (subRes.ok) {
+                    const subText = await readTextLimited(subRes, 64 * 1024);
+                    const subCheck = isResponseContentInvalid(subText, subRes.headers.get("content-type") || "");
+                    if (subCheck.invalid) {
+                      return {
+                        status: "inactive",
+                        latency: Date.now() - startTime,
+                        diagMsg: buildDiagMsg({
+                          httpStatus: subRes.status,
+                          contentType: subRes.headers.get("content-type") || contentType,
+                          reason: `子 M3U8 列表内容失效: ${subCheck.reason}`,
+                          responseSnippet: subText
+                        })
+                      };
+                    }
+                    const subParsed = parseResolution(subUrl, subText);
+                    if (subParsed) {
+                      resolution = subParsed;
+                    } else if (!resolution) {
+                      const subLines = subText.split(/\r?\n/).map(l => l.trim());
+                      const tsLine = subLines.find(l => l && !l.startsWith("#"));
+                      if (tsLine) {
+                        const tsUrl = new URL(tsLine, subUrl).href;
+                        const tsCtrl = new AbortController();
+                        const tsTimeout = setTimeout(() => tsCtrl.abort(), 2000);
+                        try {
+                          const tsRes = await fetch(tsUrl, {
+                            signal: tsCtrl.signal,
+                            headers: {
+                              "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                            },
+                          });
+                          if (tsRes.ok) {
+                            const buf = await readChunkLimited(tsRes, 32 * 1024);
+                            if (buf.length > 0) {
+                              const spsRes = parseH264Sps(buf);
+                              if (spsRes) resolution = spsRes;
+                            }
+                          }
+                        } finally {
+                          clearTimeout(tsTimeout);
                         }
-                        try { await reader.cancel(); } catch (_) {}
-                      } else if (!tsRes.ok) {
-                        return {
-                          status: "inactive",
-                          latency: Date.now() - startTime,
-                          diagMsg: buildDiagMsg({
-                            httpStatus: tsRes.status,
-                            contentType: tsRes.headers.get("content-type") || "",
-                            reason: `音视频切片返回 HTTP ${tsRes.status} 状态`
-                          })
-                        };
                       }
                     }
                   }
-                } else {
-                  return {
-                    status: "inactive",
-                    latency: Date.now() - startTime,
-                    diagMsg: buildDiagMsg({
-                      httpStatus: subRes.status,
-                      contentType: subRes.headers.get("content-type") || "",
-                      reason: `子 M3U8 索引下载失败 (HTTP ${subRes.status})`
-                    })
-                  };
+                } finally {
+                  clearTimeout(subTimeout);
                 }
               } catch (_) {}
             }
           }
-        } else if (response.body) {
-          const reader = response.body.getReader();
-          const { value } = await reader.read();
-          if (value && value.length > 0) {
-            const buf = Buffer.from(value);
+        } else {
+          // Direct video stream / octet-stream
+          const buf = await readChunkLimited(response, 32 * 1024);
+          if (buf.length > 0) {
             const chunkText = buf.toString("utf-8");
             const contentCheck = isResponseContentInvalid(chunkText, contentType);
             if (contentCheck.invalid) {
-              try { await reader.cancel(); } catch (_) {}
               return {
                 status: "inactive",
                 latency: Date.now() - startTime,
@@ -634,7 +661,6 @@ export async function testSingleUrl(url: string, timeoutMs: number = 5000): Prom
             const spsRes = parseH264Sps(buf);
             if (spsRes) resolution = spsRes;
           }
-          try { await reader.cancel(); } catch (_) {}
         }
       } catch (err: any) {}
 
@@ -658,7 +684,7 @@ export async function testSingleUrl(url: string, timeoutMs: number = 5000): Prom
     } else {
       let errTextSnippet = "";
       try {
-        errTextSnippet = await response.text();
+        errTextSnippet = await readTextLimited(response, 2048);
       } catch (_) {}
       return {
         status: "inactive",
@@ -672,7 +698,6 @@ export async function testSingleUrl(url: string, timeoutMs: number = 5000): Prom
       };
     }
   } catch (err: any) {
-    clearTimeout(timeoutId);
     const isTimeout = err?.name === "AbortError";
     return {
       status: "inactive",
@@ -683,6 +708,8 @@ export async function testSingleUrl(url: string, timeoutMs: number = 5000): Prom
         reason: isTimeout ? `请求超时 (服务端耗时超过 ${timeoutMs}ms 未响应)` : `网络连接失败或跨域/域名无法解析 (${err?.message || 'Connection Refused'})`
       })
     };
+  } finally {
+    clearTimeout(timeoutId);
   }
 }
 
@@ -773,6 +800,24 @@ export function updateSourceDbStatus(
       if (status === "inactive" && isMiguOrCarousel) {
         source.isolated = true;
       }
+
+      if (status === "active" || status === "inactive") {
+        try {
+          const db = getDb();
+          db.prepare(`
+            UPDATE sources 
+            SET status = ?, latency = ?, resolution = ?, lastChecked = ?, isolated = ?
+            WHERE id = ?
+          `).run(
+            source.status,
+            source.latency !== undefined ? source.latency : null,
+            source.resolution || "",
+            source.lastChecked,
+            source.isolated ? 1 : 0,
+            source.id
+          );
+        } catch (_) {}
+      }
     }
   }
 }
@@ -803,7 +848,7 @@ export function stopConcurrentTest() {
 
 export async function runConcurrentTest(
   selectedSources: { id: string; channelId: string; url: string }[],
-  concurrency = 8
+  concurrency = 6
 ) {
   testStatus.status = "running";
   testStatus.total = selectedSources.length;
@@ -811,6 +856,7 @@ export async function runConcurrentTest(
   testStatus.results = [];
 
   const queue = [...selectedSources];
+  const actualConcurrency = Math.min(Math.max(1, concurrency || 4), 6);
 
   const runWorker = async () => {
     while (queue.length > 0) {
@@ -835,21 +881,21 @@ export async function runConcurrentTest(
         diagMsg: result.diagMsg
       });
 
-      // Periodic checkpoint save
-      if (testStatus.checked % 20 === 0) {
-        saveData();
+      // Keep recent results bounded to prevent memory leaks and bloated JSON payloads
+      if (testStatus.results.length > 30) {
+        testStatus.results.shift();
       }
     }
   };
 
   const workers = [];
-  for (let i = 0; i < concurrency; i++) {
+  for (let i = 0; i < actualConcurrency; i++) {
     workers.push(runWorker());
   }
 
   await Promise.all(workers);
   testStatus.status = "idle";
-  saveData();
+  saveData(true);
 }
 
 export async function getClientIpGeo(ipString: string): Promise<{ province: string; isp: string }> {
