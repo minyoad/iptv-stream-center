@@ -43,6 +43,9 @@ import {
   Film,
   Globe,
   Folder,
+  Loader2,
+  Save,
+  RotateCcw,
   Image as ImageIcon } from "lucide-react";
 import { Channel, LiveSource, SyncConfig, TestStatus, EpgGuide, Group, EpgSource } from "./types";
 import { arrayMove } from "@dnd-kit/sortable";
@@ -149,13 +152,22 @@ export default function App() {
   const [cronJobs, setCronJobs] = useState<any[]>([]);
   const [cronLogs, setCronLogs] = useState<any[]>([]);
   const [selectedCronJob, setSelectedCronJob] = useState<any>(null);
+  const [cronRunningId, setCronRunningId] = useState<string | null>(null);
 
   const fetchCronJobs = async () => {
     try {
       const res = await fetch("/api/cron-jobs");
       const data = await safeJson(res);
       if (data.success) {
-        setCronJobs(data.jobs || []);
+        const jobs = data.jobs || [];
+        setCronJobs(jobs);
+        if (jobs.length > 0) {
+          setSelectedCronJob((prev: any) => {
+            if (!prev) return jobs[0];
+            const match = jobs.find((j: any) => j.id === prev.id);
+            return match || jobs[0];
+          });
+        }
       }
     } catch (e) {
       console.error(e);
@@ -174,7 +186,7 @@ export default function App() {
     }
   };
 
-  const updateCronJob = async (job: any) => {
+  const updateCronJob = async (job: any, showToast = true) => {
     try {
       const res = await fetch(`/api/cron-jobs/${job.id}`, {
         method: "PUT",
@@ -182,27 +194,38 @@ export default function App() {
         body: JSON.stringify(job),
       });
       if (res.ok) {
-        alert("定时任务更新成功");
+        if (showToast) showFeedback("success", `定时任务【${job.name || job.id}】配置已更新`);
         fetchCronJobs();
+        if (selectedCronJob?.id === job.id) {
+          setSelectedCronJob({ ...selectedCronJob, ...job });
+        }
+      } else {
+        if (showToast) showFeedback("error", "更新定时任务失败");
       }
     } catch (e) {
       console.error(e);
-      alert("更新失败");
+      if (showToast) showFeedback("error", "网络连接异常，更新失败");
     }
   };
 
   const runCronJobManual = async (jobId: string) => {
     try {
-      alert("已触发执行...");
+      setCronRunningId(jobId);
+      showFeedback("info", "已触发任务执行，正在后台处理中...");
       const res = await fetch(`/api/cron-jobs/${jobId}/run`, { method: "POST" });
-      if (res.ok) {
-        alert("手动执行完成");
+      const data = await safeJson(res);
+      if (res.ok && data.success) {
+        showFeedback("success", "手动执行完成！");
         fetchCronJobs();
-        if (selectedCronJob?.id === jobId) fetchCronLogs(jobId);
+        fetchCronLogs(jobId);
+      } else {
+        showFeedback("error", data.error || "任务执行失败");
       }
     } catch (e) {
       console.error(e);
-      alert("执行出错");
+      showFeedback("error", "执行发生异常");
+    } finally {
+      setCronRunningId(null);
     }
   };
 
@@ -6951,43 +6974,75 @@ export default function App() {
                   </div>
 
                   <div className="flex-1 overflow-y-auto space-y-3">
-                    {cronJobs.map((job) => (
-                      <div 
-                        key={job.id} 
-                        onClick={() => setSelectedCronJob(job)}
-                        className={`p-4 rounded-xl border transition-colors cursor-pointer flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 ${selectedCronJob?.id === job.id ? 'border-indigo-400 bg-indigo-50/20' : 'border-slate-100 hover:border-slate-300'}`}
-                      >
-                        <div className="flex items-start gap-4">
-                          <div className={`p-2.5 rounded-lg ${job.active ? 'bg-emerald-100 text-emerald-600' : 'bg-slate-100 text-slate-500'}`}>
-                            <Clock className="w-5 h-5" />
-                          </div>
-                          <div>
-                            <h3 className="font-bold text-slate-800 flex items-center gap-2">
-                              {job.name}
-                              {job.active === 1 ? (
-                                <span className="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700 text-[10px] font-black uppercase">激活</span>
-                              ) : (
-                                <span className="px-2 py-0.5 rounded-full bg-slate-100 text-slate-500 text-[10px] font-black uppercase">未激活</span>
+                    {cronJobs.map((job) => {
+                      const isRunning = cronRunningId === job.id;
+                      return (
+                        <div 
+                          key={job.id} 
+                          onClick={() => setSelectedCronJob(job)}
+                          className={`p-4 rounded-xl border transition-all cursor-pointer flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 ${selectedCronJob?.id === job.id ? 'border-indigo-500 bg-indigo-50/30 shadow-sm' : 'border-slate-100 hover:border-slate-300 bg-white'}`}
+                        >
+                          <div className="flex items-start gap-4">
+                            <div className={`p-2.5 rounded-lg ${job.active ? 'bg-emerald-100 text-emerald-600' : 'bg-slate-100 text-slate-400'}`}>
+                              <Clock className="w-5 h-5" />
+                            </div>
+                            <div>
+                              <div className="flex items-center gap-2">
+                                <h3 className="font-bold text-slate-800">{job.name}</h3>
+                                {job.active === 1 ? (
+                                  <span className="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700 text-[10px] font-black uppercase">已启用</span>
+                                ) : (
+                                  <span className="px-2 py-0.5 rounded-full bg-slate-100 text-slate-500 text-[10px] font-black uppercase">未启用</span>
+                                )}
+                              </div>
+                              <p className="text-xs font-medium text-slate-500 mt-1">
+                                启动时间: <span className="text-slate-700 font-semibold">{job.startTime || "未设置"}</span> | 间隔: <span className="text-slate-700 font-semibold">{job.intervalMinutes || 0}</span> 分钟
+                              </p>
+                              <p className="text-[11px] text-slate-400 mt-0.5">
+                                下次执行: {job.nextRun ? new Date(job.nextRun).toLocaleString() : "等待排期"}
+                              </p>
+                              {job.lastRun && (
+                                <p className="text-[10px] text-slate-400 mt-0.5">
+                                  上次执行: {new Date(job.lastRun).toLocaleString()}
+                                </p>
                               )}
-                            </h3>
-                            <p className="text-xs font-medium text-slate-500 mt-1">
-                              开始时间: {job.startTime || "未设置"} | 间隔: {job.intervalMinutes || 0} 分钟
-                            </p>
-                            <p className="text-[11px] text-slate-400 mt-0.5">
-                              下次执行: {job.nextRun ? new Date(job.nextRun).toLocaleString() : "未知"}
-                            </p>
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-2 self-end sm:self-center">
+                            <button 
+                              onClick={(e) => { 
+                                e.stopPropagation(); 
+                                const newActive = job.active === 1 ? 0 : 1;
+                                const updated = { ...job, active: newActive };
+                                updateCronJob(updated);
+                              }}
+                              title={job.active === 1 ? "点击禁用" : "点击启用"}
+                              className={`px-2.5 py-1.5 rounded-lg text-xs font-semibold border transition cursor-pointer ${
+                                job.active === 1
+                                  ? "bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100"
+                                  : "bg-slate-50 text-slate-500 border-slate-200 hover:bg-slate-100"
+                              }`}
+                            >
+                              {job.active === 1 ? "启用中" : "已停用"}
+                            </button>
+                            <button 
+                              disabled={isRunning}
+                              onClick={(e) => { e.stopPropagation(); runCronJobManual(job.id); }}
+                              className="px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-600 disabled:opacity-50 font-semibold text-xs rounded-lg transition-colors cursor-pointer flex items-center gap-1.5"
+                            >
+                              {isRunning ? (
+                                <>
+                                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                  <span>执行中</span>
+                                </>
+                              ) : (
+                                <span>立即执行</span>
+                              )}
+                            </button>
                           </div>
                         </div>
-                        <div className="flex gap-2">
-                          <button 
-                            onClick={(e) => { e.stopPropagation(); runCronJobManual(job.id); }}
-                            className="px-3 py-1.5 bg-blue-50 text-blue-600 hover:bg-blue-100 font-semibold text-xs rounded-lg transition-colors"
-                          >
-                            立即执行
-                          </button>
-                        </div>
-                      </div>
-                    ))}
+                      );
+                    })}
                     
                     {cronJobs.length === 0 && (
                       <div className="text-center py-12 text-slate-400 text-sm">暂无定时任务数据</div>
@@ -6998,28 +7053,37 @@ export default function App() {
                 <div className="bg-white rounded-3xl p-6 shadow-sm border border-slate-100 flex flex-col h-full">
                   {selectedCronJob ? (
                     <>
-                      <div className="mb-6">
+                      <div className="mb-6 flex items-center justify-between">
                         <h2 className="text-xl font-bold text-slate-800 tracking-tight flex items-center">
                           <Settings2 className="w-5 h-5 mr-2 text-indigo-500" />
                           配置任务: {selectedCronJob.name}
                         </h2>
                       </div>
                       
-                      <div className="space-y-4 mb-8 bg-slate-50 p-5 rounded-2xl border border-slate-100">
+                      <div className="space-y-4 mb-6 bg-slate-50 p-5 rounded-2xl border border-slate-100">
                         <div>
                           <label className="block text-xs font-bold text-slate-500 mb-1.5 uppercase tracking-wide">是否启用定时执行</label>
                           <label className="flex items-center cursor-pointer relative">
-                            <input type="checkbox" className="sr-only peer" checked={selectedCronJob.active === 1} onChange={(e) => updateCronJob({...selectedCronJob, active: e.target.checked ? 1 : 0})} />
+                            <input 
+                              type="checkbox" 
+                              className="sr-only peer" 
+                              checked={selectedCronJob.active === 1} 
+                              onChange={(e) => {
+                                const updated = { ...selectedCronJob, active: e.target.checked ? 1 : 0 };
+                                setSelectedCronJob(updated);
+                                updateCronJob(updated);
+                              }} 
+                            />
                             <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-500"></div>
-                            <span className="ml-3 text-sm font-semibold text-slate-700">{selectedCronJob.active === 1 ? "已启用" : "已禁用"}</span>
+                            <span className="ml-3 text-sm font-semibold text-slate-700">{selectedCronJob.active === 1 ? "已启用 (将在后台按时执行)" : "已禁用 (不自动执行)"}</span>
                           </label>
                         </div>
                         <div>
-                          <label className="block text-xs font-bold text-slate-500 mb-1.5 uppercase tracking-wide">初始每天开始时间 (HH:MM)</label>
+                          <label className="block text-xs font-bold text-slate-500 mb-1.5 uppercase tracking-wide">每天开始时间 (HH:MM)</label>
                           <input 
                             type="time" 
                             value={selectedCronJob.startTime || ""}
-                            onChange={(e) => updateCronJob({...selectedCronJob, startTime: e.target.value})}
+                            onChange={(e) => setSelectedCronJob({ ...selectedCronJob, startTime: e.target.value })}
                             className="w-full bg-white border border-slate-200 text-slate-900 text-sm rounded-xl focus:ring-indigo-500 focus:border-indigo-500 block p-2.5 font-medium shadow-sm transition-all"
                           />
                         </div>
@@ -7029,15 +7093,33 @@ export default function App() {
                             type="number" 
                             min="0"
                             value={selectedCronJob.intervalMinutes || 0}
-                            onChange={(e) => updateCronJob({...selectedCronJob, intervalMinutes: parseInt(e.target.value) || 0})}
+                            onChange={(e) => setSelectedCronJob({ ...selectedCronJob, intervalMinutes: parseInt(e.target.value, 10) || 0 })}
                             className="w-full bg-white border border-slate-200 text-slate-900 text-sm rounded-xl focus:ring-indigo-500 focus:border-indigo-500 block p-2.5 font-medium shadow-sm transition-all"
                           />
-                          <p className="text-[10px] text-slate-400 mt-1">例如: 1440 为每天一次，720 为每天两次。</p>
+                          <p className="text-[10px] text-slate-400 mt-1">例如: 1440 为每天一次，720 为每12小时一次，60 为每小时一次。</p>
+                        </div>
+                        <div className="pt-2 flex justify-end">
+                          <button
+                            type="button"
+                            onClick={() => updateCronJob(selectedCronJob)}
+                            className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs rounded-xl shadow-sm transition-colors cursor-pointer flex items-center gap-1.5"
+                          >
+                            <Save className="w-3.5 h-3.5" />
+                            <span>保存配置</span>
+                          </button>
                         </div>
                       </div>
 
-                      <div className="mb-4">
+                      <div className="mb-4 flex items-center justify-between">
                         <h3 className="text-sm font-bold text-slate-800">执行历史记录 (最近 20 条)</h3>
+                        <button
+                          type="button"
+                          onClick={() => fetchCronLogs(selectedCronJob.id)}
+                          className="text-xs text-indigo-600 hover:text-indigo-800 font-medium flex items-center gap-1 cursor-pointer"
+                        >
+                          <RotateCcw className="w-3 h-3" />
+                          <span>刷新日志</span>
+                        </button>
                       </div>
                       
                       <div className="flex-1 overflow-y-auto space-y-2 max-h-60">

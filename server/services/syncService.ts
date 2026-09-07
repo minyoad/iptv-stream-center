@@ -535,26 +535,35 @@ export async function performSync(config: SyncConfig, force = false): Promise<bo
 export function calculateNextRun(startTime: string, intervalMinutes: number, lastRunStr: string | null): string {
   const now = new Date();
   let nextRunTime = new Date();
+  const interval = Number(intervalMinutes) || 0;
   
-  if (startTime) {
-    const [hours, minutes] = startTime.split(':').map(Number);
-    nextRunTime.setHours(hours, minutes, 0, 0);
+  if (startTime && typeof startTime === "string" && startTime.includes(":")) {
+    const parts = startTime.trim().split(":");
+    const hours = parseInt(parts[0], 10);
+    const minutes = parseInt(parts[1], 10);
     
-    while (nextRunTime <= now) {
-      if (intervalMinutes && intervalMinutes > 0) {
-        nextRunTime.setTime(nextRunTime.getTime() + intervalMinutes * 60 * 1000);
-      } else {
-        nextRunTime.setDate(nextRunTime.getDate() + 1);
+    if (!isNaN(hours) && !isNaN(minutes)) {
+      nextRunTime.setHours(hours, minutes, 0, 0);
+      
+      while (nextRunTime <= now) {
+        if (interval > 0) {
+          nextRunTime.setTime(nextRunTime.getTime() + interval * 60 * 1000);
+        } else {
+          nextRunTime.setDate(nextRunTime.getDate() + 1);
+        }
       }
+      return nextRunTime.toISOString();
     }
-  } else if (intervalMinutes && intervalMinutes > 0) {
+  }
+  
+  if (interval > 0) {
     if (lastRunStr) {
-      nextRunTime = new Date(new Date(lastRunStr).getTime() + intervalMinutes * 60 * 1000);
+      nextRunTime = new Date(new Date(lastRunStr).getTime() + interval * 60 * 1000);
       if (nextRunTime <= now) {
-        nextRunTime = new Date(now.getTime() + intervalMinutes * 60 * 1000);
+        nextRunTime = new Date(now.getTime() + interval * 60 * 1000);
       }
     } else {
-      nextRunTime = new Date(now.getTime() + intervalMinutes * 60 * 1000);
+      nextRunTime = new Date(now.getTime() + interval * 60 * 1000);
     }
   } else {
     nextRunTime.setDate(nextRunTime.getDate() + 1);
@@ -563,7 +572,16 @@ export function calculateNextRun(startTime: string, intervalMinutes: number, las
   return nextRunTime.toISOString();
 }
 
+const runningJobIds = new Set<string>();
+
 export async function runCronJob(job: any) {
+  if (!job || !job.id) return;
+  if (runningJobIds.has(job.id)) {
+    console.log(`[CronScheduler] 任务 ${job.name || job.id} 正在执行中，跳过本次触发`);
+    return;
+  }
+  runningJobIds.add(job.id);
+
   const db = getDb();
   const nowStr = new Date().toISOString();
   const nextRun = calculateNextRun(job.startTime, job.intervalMinutes, nowStr);
@@ -573,6 +591,7 @@ export async function runCronJob(job: any) {
   const logId = Math.random().toString(36).substring(2, 10);
   
   try {
+    console.log(`[CronScheduler] 开始执行任务: ${job.name} (id: ${job.id})`);
     if (job.id === "job_epg_sync") {
       let successCount = 0;
       const activeSources = epgSources.filter((s) => s.active);
@@ -581,6 +600,7 @@ export async function runCronJob(job: any) {
         if (success) successCount++;
       }
       insertLog.run(logId, job.id, nowStr, "success", `成功同步 ${successCount}/${activeSources.length} 个 EPG 源`);
+      console.log(`[CronScheduler] 任务 ${job.name} 完成: 同步 ${successCount}/${activeSources.length} 个 EPG 源`);
     } else if (job.id === "job_github_import") {
       let successCount = 0;
       const activeConfigs = syncConfigs.filter((c) => !c.disabled);
@@ -589,31 +609,40 @@ export async function runCronJob(job: any) {
         if (success) successCount++;
       }
       insertLog.run(logId, job.id, nowStr, "success", `成功同步 ${successCount}/${activeConfigs.length} 个 GitHub 订阅源`);
+      console.log(`[CronScheduler] 任务 ${job.name} 完成: 同步 ${successCount}/${activeConfigs.length} 个 GitHub 订阅源`);
     } else if (job.id === "job_carousel_test") {
       let testedCount = 0;
       let activeCount = 0;
       const proxies = db.prepare('SELECT * FROM carousel_proxies').all() as any[];
       if (proxies.length > 0) {
-        for (const proxy of proxies) {
-          const plat = (proxy.platform || '').toLowerCase();
-          if (isUrlBlockedByDisabledRules(proxy.urlTemplate, plat)) {
-            db.prepare('UPDATE carousel_proxies SET status = ? WHERE id = ?').run('inactive', proxy.id);
-            continue;
-          }
+        const chunkSize = 4;
+        for (let i = 0; i < proxies.length; i += chunkSize) {
+          const chunk = proxies.slice(i, i + chunkSize);
+          await Promise.all(
+            chunk.map(async (proxy) => {
+              const plat = (proxy.platform || '').toLowerCase();
+              if (isUrlBlockedByDisabledRules(proxy.urlTemplate, plat)) {
+                db.prepare('UPDATE carousel_proxies SET status = ? WHERE id = ?').run('inactive', proxy.id);
+                return;
+              }
 
-          const testRes = await testCarouselProxyAvailability(proxy);
-          const isOk = testRes.available;
-          
-          db.prepare('UPDATE carousel_proxies SET status = ? WHERE id = ?').run(isOk ? 'active' : 'inactive', proxy.id);
-          if (isOk) activeCount++;
-          testedCount++;
+              const testRes = await testCarouselProxyAvailability(proxy, 3500);
+              const isOk = testRes.available;
+              
+              db.prepare('UPDATE carousel_proxies SET status = ? WHERE id = ?').run(isOk ? 'active' : 'inactive', proxy.id);
+              if (isOk) activeCount++;
+              testedCount++;
+            })
+          );
         }
       }
       const syncStats = syncCarouselSources();
       insertLog.run(logId, job.id, nowStr, "success", `成功检测了 ${testedCount} 个轮播代理（有效: ${activeCount}），并同步生成 ${syncStats.createdCount} 个新源，覆盖 ${syncStats.channelsCount} 个频道`);
+      console.log(`[CronScheduler] 任务 ${job.name} 完成: 检测 ${testedCount} 个代理 (有效: ${activeCount})`);
     } else if (job.id === "job_server_test") {
       if (testStatus.status === "running") {
         insertLog.run(logId, job.id, nowStr, "failed", "当前已有测速任务在运行，跳过定时测速");
+        console.log(`[CronScheduler] 任务 ${job.name} 跳过: 当前已有测速任务在运行`);
       } else {
         let targetSources: { id: string; channelId: string; url: string }[] = [];
         channels.forEach((channel) => {
@@ -634,23 +663,27 @@ export async function runCronJob(job: any) {
         if (targetSources.length > 0) {
           await runConcurrentTest(targetSources, 8);
           insertLog.run(logId, job.id, nowStr, "success", `成功对 ${targetSources.length} 个直播源进行了测速`);
+          console.log(`[CronScheduler] 任务 ${job.name} 完成: 测速 ${targetSources.length} 个直播源`);
         } else {
           insertLog.run(logId, job.id, nowStr, "success", "没有符合测速条件的直播源");
+          console.log(`[CronScheduler] 任务 ${job.name} 完成: 没有符合条件的直播源`);
         }
       }
     } else {
       insertLog.run(logId, job.id, nowStr, "failed", "未知的定时任务 ID");
     }
   } catch (err: any) {
+    console.error(`[CronScheduler] 任务 ${job.name || job.id} 执行异常:`, err);
     insertLog.run(logId, job.id, nowStr, "failed", err.message || "执行失败");
+  } finally {
+    runningJobIds.delete(job.id);
   }
 }
 
 let schedulerTimer: NodeJS.Timeout | null = null;
 
-export function startCronScheduler() {
-  if (schedulerTimer) return;
-  schedulerTimer = setInterval(async () => {
+async function checkAndExecuteDueJobs() {
+  try {
     const now = new Date();
     checkAndPerformDailyBackup();
 
@@ -658,9 +691,25 @@ export function startCronScheduler() {
     const jobs = db.prepare("SELECT * FROM cron_jobs WHERE active = 1").all() as any[];
     for (const job of jobs) {
       if (!job.nextRun || new Date(job.nextRun) <= now) {
-        console.log(`Starting scheduled cron job: ${job.name}`);
+        console.log(`[CronScheduler] 检测到任务到期，准备执行: ${job.name} (id: ${job.id}, 下次时间: ${job.nextRun || '未设定'})`);
         await runCronJob(job);
       }
     }
+  } catch (err) {
+    console.error("[CronScheduler] 调度器轮询异常:", err);
+  }
+}
+
+export function startCronScheduler() {
+  if (schedulerTimer) return;
+  console.log("[CronScheduler] 定时任务后台调度器已启动 (60秒轮询待执行任务)");
+  
+  // Initial check after 5 seconds to run any overdue jobs without waiting a full minute
+  setTimeout(() => {
+    checkAndExecuteDueJobs().catch((e) => console.error("[CronScheduler] 初始检查执行异常:", e));
+  }, 5000);
+
+  schedulerTimer = setInterval(async () => {
+    await checkAndExecuteDueJobs();
   }, 60 * 1000);
 }

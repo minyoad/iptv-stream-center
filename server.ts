@@ -208,12 +208,14 @@ async function startServer() {
     try {
       const { id } = req.params;
       const { startTime, intervalMinutes, active } = req.body;
-      const nextRun = calculateNextRun(startTime, intervalMinutes, null);
+      const parsedInterval = parseInt(intervalMinutes, 10) || 0;
+      const isActive = active === 1 || active === true;
+      const nextRun = calculateNextRun(startTime, parsedInterval, null);
       
       db.prepare("UPDATE cron_jobs SET startTime = ?, intervalMinutes = ?, active = ?, nextRun = ? WHERE id = ?")
-        .run(startTime, intervalMinutes, active ? 1 : 0, nextRun, id);
+        .run(startTime || "", parsedInterval, isActive ? 1 : 0, nextRun, id);
         
-      res.json({ success: true, message: "定时任务已更新" });
+      res.json({ success: true, message: "定时任务已更新", nextRun });
     } catch (err: any) {
       res.status(500).json({ error: err.message || err });
     }
@@ -235,9 +237,10 @@ async function startServer() {
       const job = db.prepare("SELECT * FROM cron_jobs WHERE id = ?").get(id) as any;
       if (!job) return res.status(404).json({ error: "Job not found" });
       
-      // Run async, don't wait for completion to send response if it takes too long, but we can wait for simple
-      await runCronJob(job);
-      res.json({ success: true, message: "手动触发执行成功" });
+      // Execute asynchronously in background so response returns promptly
+      runCronJob(job).catch((e) => console.error(`[ManualRun] ${id} execution error:`, e));
+      const updatedJob = db.prepare("SELECT * FROM cron_jobs WHERE id = ?").get(id) as any;
+      res.json({ success: true, message: "已触发任务在后台执行", job: updatedJob });
     } catch (err: any) {
       res.status(500).json({ error: err.message || err });
     }
@@ -5208,6 +5211,7 @@ app.get("/api/channels", async (req, res) => {
   // Bind to PORT 3000 and 0.0.0.0
   app.listen(PORT, "0.0.0.0", () => {
     preGenerateIspPlaylists();
+    startCronScheduler();
     console.log(`Server loaded with ${channels.length} channels, running on http://localhost:${PORT}`);
   });
 }
