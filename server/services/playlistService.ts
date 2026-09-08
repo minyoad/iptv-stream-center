@@ -3,47 +3,19 @@ import path from "path";
 import crypto from "crypto";
 import type { Request } from "express";
 import { LiveSource, Channel, Group } from "../types";
-import { channels, groups } from "../store";
+import {
+  channels,
+  groups,
+  exportPlaylistMemoryCache,
+  invalidatePlaylistExportCache,
+  PLAYLIST_CACHE_DIR,
+  READABLE_PLAYLIST_DIR as READABLE_DIR
+} from "../store";
 import { resolveChannelLogo, getBuildVersionInfo } from "../utils/text";
 import { getDb } from "../db/sqlite";
 import { getClientIpGeo } from "./speedTestService";
 
-const DATA_DIR = path.join(process.cwd(), "data");
-const PLAYLIST_CACHE_DIR = path.join(DATA_DIR, "playlist_cache");
-const READABLE_DIR = path.join(DATA_DIR, "playlists_export");
-
-if (!fs.existsSync(PLAYLIST_CACHE_DIR)) {
-  fs.mkdirSync(PLAYLIST_CACHE_DIR, { recursive: true });
-}
-if (!fs.existsSync(READABLE_DIR)) {
-  fs.mkdirSync(READABLE_DIR, { recursive: true });
-}
-
-interface ExportPlaylistCacheItem {
-  content: string;
-  etag: string;
-  mtimeMs: number;
-}
-
-const exportPlaylistMemoryCache = new Map<string, ExportPlaylistCacheItem>();
-
-export function invalidatePlaylistExportCache() {
-  exportPlaylistMemoryCache.clear();
-  try {
-    if (fs.existsSync(PLAYLIST_CACHE_DIR)) {
-      const files = fs.readdirSync(PLAYLIST_CACHE_DIR);
-      for (const file of files) {
-        fs.unlinkSync(path.join(PLAYLIST_CACHE_DIR, file));
-      }
-    }
-    if (fs.existsSync(READABLE_DIR)) {
-      const files = fs.readdirSync(READABLE_DIR);
-      for (const file of files) {
-        fs.unlinkSync(path.join(READABLE_DIR, file));
-      }
-    }
-  } catch (_) {}
-}
+export { exportPlaylistMemoryCache, invalidatePlaylistExportCache };
 
 export function getPlaylistCacheKey(params: {
   format: string;

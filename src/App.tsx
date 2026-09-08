@@ -525,6 +525,8 @@ export default function App() {
     maxPerChannel: "",
     v: "",
   });
+  const [isRefreshingCache, setIsRefreshingCache] = useState(false);
+  const [lastCacheRefreshTime, setLastCacheRefreshTime] = useState<string | null>(null);
 
   // Unique lists computed from all active live sources
   const allUniqueIspOptions = useMemo(() => {
@@ -1203,6 +1205,26 @@ export default function App() {
       }
     } catch (e) {
       showFeedback("error", "网络连接异常，更新设置失败");
+    }
+  };
+
+  const handleRefreshExportCache = async () => {
+    setIsRefreshingCache(true);
+    try {
+      const res = await fetch("/api/export/refresh-cache", { method: "POST" });
+      if (res.ok) {
+        const data = await res.json();
+        setLastCacheRefreshTime(data.formattedTime || new Date().toLocaleTimeString());
+        showFeedback("success", `播放列表导出缓存已立即全部重建！有效频道 ${data.stats?.channels || 0} 个，可用线路 ${data.stats?.activeSources || 0} 条。`);
+        fetchData();
+      } else {
+        const err = await res.json().catch(() => ({}));
+        showFeedback("error", err.error || "重建播放列表缓存失败");
+      }
+    } catch (e) {
+      showFeedback("error", "网络连接异常，无法刷新导出缓存");
+    } finally {
+      setIsRefreshingCache(false);
     }
   };
 
@@ -3114,11 +3136,16 @@ export default function App() {
     try {
       showFeedback("info", `准备下载 ${filename}...`);
       const password = localStorage.getItem("iptv_admin_password") || "";
-      const headers: Record<string, string> = {};
+      const headers: Record<string, string> = {
+        "Cache-Control": "no-cache, no-store",
+        "Pragma": "no-cache"
+      };
       if (password) {
         headers["x-admin-password"] = password;
       }
-      const res = await fetch(endpoint, { headers });
+      const sep = endpoint.includes("?") ? "&" : "?";
+      const freshEndpoint = `${endpoint}${sep}_t=${Date.now()}`;
+      const res = await fetch(freshEndpoint, { headers, cache: "no-store" });
       if (!res.ok) {
         throw new Error(`连接失败 (HTTP ${res.status})`);
       }
@@ -6279,6 +6306,66 @@ export default function App() {
           {activeTab === "export" && (
             <div className="space-y-8 animate-fade-in" id="tab_export_view">
               
+              {/* Cache & Sync Status Banner */}
+              <div className="bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 text-white p-5 rounded-2xl border border-indigo-500/20 shadow-lg flex flex-col md:flex-row items-start md:items-center justify-between gap-4" id="export_cache_sync_bar">
+                <div className="space-y-1">
+                  <div className="flex items-center gap-2">
+                    <span className="inline-block w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse" />
+                    <h3 className="font-bold text-sm text-slate-100 flex items-center gap-1.5">
+                      播放列表导出缓存与即时同步控制
+                    </h3>
+                    <span className="text-[11px] px-2 py-0.5 rounded-full bg-indigo-500/30 text-indigo-200 border border-indigo-400/30">
+                      改动自动清除 + 支持随时手动秒级重建
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-300 leading-relaxed max-w-2xl">
+                    后台在新增、编辑、删除直播源或批量测速时，系统均会自动清除服务端缓存并在请求时以最新数据生成。
+                    {lastCacheRefreshTime && (
+                      <span className="ml-1 text-emerald-400 font-medium">
+                        (最近手动刷新时间: {lastCacheRefreshTime})
+                      </span>
+                    )}
+                  </p>
+                </div>
+                <button
+                  onClick={handleRefreshExportCache}
+                  disabled={isRefreshingCache}
+                  className="flex items-center gap-2 px-4 py-2.5 bg-indigo-600 hover:bg-indigo-500 active:bg-indigo-700 disabled:opacity-50 text-white text-xs font-bold rounded-xl shadow-md transition whitespace-nowrap"
+                  id="btn_refresh_export_cache"
+                >
+                  <RefreshCw className={`w-4 h-4 ${isRefreshingCache ? "animate-spin" : ""}`} />
+                  {isRefreshingCache ? "正在重建缓存..." : "立即强制重建导出缓存"}
+                </button>
+              </div>
+
+              {/* Strategy & FAQ explanation box */}
+              <div className="bg-amber-50/60 border border-amber-200/80 p-5 rounded-2xl text-xs text-amber-900 space-y-3" id="export_update_strategy_guide">
+                <div className="font-bold flex items-center text-amber-800 text-sm">
+                  <AlertCircle className="w-4 h-4 mr-2 text-amber-600" />
+                  关于播放列表何时更新与更新策略说明
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs leading-relaxed">
+                  <div className="bg-white/90 p-3.5 rounded-xl border border-amber-200/60 space-y-1">
+                    <span className="font-semibold text-amber-950 block">⚡ 1. 服务端何时更新？</span>
+                    <p className="text-slate-600">
+                      只要在后台对频道、直播源进行任何<b>增删改操作</b>、执行<b>批量测速</b>或导入 M3U，系统均会<b>自动清空内存和磁盘缓存</b>。下一次客户端请求该链接时，系统即刻读取数据库最新数据动态输出。
+                    </p>
+                  </div>
+                  <div className="bg-white/90 p-3.5 rounded-xl border border-amber-200/60 space-y-1">
+                    <span className="font-semibold text-amber-950 block">🔍 2. 为什么刚改的源没在列表里？</span>
+                    <p className="text-slate-600">
+                      默认导出策略为<b>仅输出状态为「可用 (active)」的绿色在线线路</b>。新添加或修改后的直播源初始状态为“待检测 (unknown)”，因此会被默认过滤。只需对该线路点击<b>「测速」</b>使其在线，或在下方状态过滤器切换为<b>「全部输出 (all)」</b>即可！
+                    </p>
+                  </div>
+                  <div className="bg-white/90 p-3.5 rounded-xl border border-amber-200/60 space-y-1">
+                    <span className="font-semibold text-amber-950 block">📺 3. 客户端/播放器缓存机制</span>
+                    <p className="text-slate-600">
+                      TVBox、Kodi、TiviMate、PotPlayer 等播放器通常会在本地存储订阅配置数小时。若后台已更新但播放器未同步，可在播放器内点击<b>「刷新/重新加载配置」</b>，或点击上方<b>「立即强制重建导出缓存」</b>按钮。
+                    </p>
+                  </div>
+                </div>
+              </div>
+
               {/* Header metadata intro */}
               <div className="bg-emerald-50/40 border border-emerald-100 p-6 rounded-2xl space-y-2 text-xs text-emerald-900" id="export_header_info">
                 <h4 className="font-bold flex items-center">
@@ -6315,14 +6402,20 @@ export default function App() {
                     </div>
 
                     <div className="space-y-1.5">
-                      <label>检测线路可用状态 (Status Filter)</label>
+                      <label className="flex items-center justify-between">
+                        <span>检测线路可用状态 (Status Filter)</span>
+                        <span className="text-[10px] text-indigo-600 font-normal">默认仅出 active 可用源</span>
+                      </label>
                       <select 
                         value={exportParams.status}
                         onChange={(e) => setExportParams({...exportParams, status: e.target.value})}
                         className="w-full text-xs p-2.5 border border-slate-200 rounded-xl bg-slate-50 focus:outline-none"
                       >
-                        <option value="">全部输出 (包含未测试或异常的线路)</option>
-                        <option value="active">严格筛选 (只输出高并发测速在线 active 的绿色线路)</option>
+                        <option value="">默认推荐 ━ 仅输出在线可用线路 (active，避免死链)</option>
+                        <option value="all">全部输出 ━ 包含未测速、待检测或异常的所有线路 (all)</option>
+                        <option value="active">严格筛选 ━ 仅在线可用 (active)</option>
+                        <option value="unknown">未测速线路 ━ 包含待测速线路 (unknown)</option>
+                        <option value="inactive">失效线路 ━ 仅导出超时或离线线路 (inactive)</option>
                       </select>
                     </div>
 

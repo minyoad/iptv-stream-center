@@ -62,7 +62,9 @@ import {
   setM3uLogoVersion,
   setCarouselProxyPresets,
   setIpGeoApis,
-  setAutoSwitchGeoApi
+  setAutoSwitchGeoApi,
+  setGlobalLastDataUpdate,
+  getGlobalLastDataUpdate
 } from "./server/store";
 
 // Utilities
@@ -4433,11 +4435,13 @@ app.get("/api/channels", async (req, res) => {
             processedSources = processedSources.filter(source => source.province === String(province));
           }
 
-          // Default: exclude inactive and unknown/checking sources if status is not explicitly asked for
-          if (!status) {
-            processedSources = processedSources.filter(source => source.status === "active");
+          // Status filtering: if status is "all", output all sources; if specific status, match it; default to "active"
+          if (status === "all") {
+            // Keep all sources (active, unknown, inactive)
           } else if (status) {
             processedSources = processedSources.filter(source => source.status === String(status));
+          } else {
+            processedSources = processedSources.filter(source => source.status === "active");
           }
 
           // Prioritize active, RTSP protocol, and lowest latency
@@ -4475,8 +4479,9 @@ app.get("/api/channels", async (req, res) => {
 
     res.setHeader("Content-Type", "application/x-mpegurl; charset=utf-8");
     res.setHeader("Content-Disposition", 'attachment; filename="iptv_custom.m3u"');
-    res.setHeader("Cache-Control", "no-cache, must-revalidate");
+    res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
     res.setHeader("Pragma", "no-cache");
+    res.setHeader("Expires", "0");
     res.setHeader("ETag", etag);
     res.setHeader("X-Client-IP", resolvedClientIp || "");
     res.setHeader("X-Client-ISP", encodeURIComponent(targetIsp || ""));
@@ -4571,11 +4576,13 @@ app.get("/api/channels", async (req, res) => {
             processedSources = processedSources.filter(source => source.province === String(province));
           }
 
-          // Default: exclude inactive and unknown/checking sources if status is not explicitly asked for
-          if (!status) {
-            processedSources = processedSources.filter(source => source.status === "active");
+          // Status filtering: if status is "all", output all sources; if specific status, match it; default to "active"
+          if (status === "all") {
+            // Keep all sources (active, unknown, inactive)
           } else if (status) {
             processedSources = processedSources.filter(source => source.status === String(status));
+          } else {
+            processedSources = processedSources.filter(source => source.status === "active");
           }
 
           // Prioritize active, RTSP protocol, and lowest latency
@@ -4622,8 +4629,9 @@ app.get("/api/channels", async (req, res) => {
 
     res.setHeader("Content-Type", "text/plain; charset=utf-8");
     res.setHeader("Content-Disposition", 'attachment; filename="iptv_custom.txt"');
-    res.setHeader("Cache-Control", "no-cache, must-revalidate");
+    res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
     res.setHeader("Pragma", "no-cache");
+    res.setHeader("Expires", "0");
     res.setHeader("ETag", etag);
     res.setHeader("X-Client-IP", resolvedClientIp || "");
     res.setHeader("X-Client-ISP", encodeURIComponent(targetIsp || ""));
@@ -4636,6 +4644,50 @@ app.get("/api/channels", async (req, res) => {
     });
 
     res.send(content);
+  });
+
+  // Manual Trigger: Force invalidate & rebuild all playlist caches & static files immediately
+  app.all(["/api/export/refresh-cache", "/api/playlist/refresh-cache"], (req, res) => {
+    try {
+      invalidatePlaylistExportCache();
+      invalidateIntegratedEpgCache();
+      preGenerateIspPlaylists();
+      setGlobalLastDataUpdate(Date.now());
+
+      const { formattedTime, versionId } = getBuildVersionInfo();
+
+      let activeSources = 0;
+      let totalSources = 0;
+      let nonIsolatedChannels = 0;
+
+      channels.forEach((c) => {
+        if (!c.isolated) {
+          nonIsolatedChannels++;
+          (c.sources || []).forEach((s) => {
+            if (!s.isolated) {
+              totalSources++;
+              if (s.status === "active") activeSources++;
+            }
+          });
+        }
+      });
+
+      res.json({
+        success: true,
+        message: "播放列表导出缓存与静态文件已立即全部重建！",
+        versionId,
+        formattedTime,
+        lastDataUpdate: getGlobalLastDataUpdate(),
+        stats: {
+          channels: nonIsolatedChannels,
+          activeSources,
+          totalSources
+        }
+      });
+    } catch (err: any) {
+      console.error("[REFRESH PLAYLIST CACHE ERROR]", err);
+      res.status(500).json({ error: "重建播放列表缓存失败: " + (err.message || String(err)) });
+    }
   });
 
   app.get("/api/play/:channelName" , async (req, res) => {

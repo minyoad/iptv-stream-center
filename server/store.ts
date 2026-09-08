@@ -58,6 +58,7 @@ export function setEpgSources(val: EpgSource[]) { epgSources = val; }
 
 export let globalLastDataUpdate = Date.now();
 export function getGlobalLastDataUpdate() { return globalLastDataUpdate; }
+export function setGlobalLastDataUpdate(val: number) { globalLastDataUpdate = val; }
 
 // In-memory caches for playlists & EPG
 export const exportPlaylistMemoryCache = new Map<string, ExportPlaylistCacheItem>();
@@ -164,7 +165,7 @@ export function generateDefaultPlaylists() {
       const isFallback = group.id === "g_other" && (channel.groupIds.length === 0 || !channel.groupIds.some(id => groups.find(g => g.id === id)));
       if (!isInGroup && !isFallback) return;
 
-      let processedSources = channel.sources.filter(source => source.status === "active");
+      let processedSources = (channel.sources || []).filter(source => !source.isolated && source.status === "active");
       processedSources = sortSourcesForExport(processedSources);
       
       const sourcesToExport = processedSources.slice(0, maxPerChannel);
