@@ -31,7 +31,8 @@ import {
 import {
   testCarouselProxyAvailability,
   runConcurrentTest,
-  testStatus
+  testStatus,
+  retestOfflineSources
 } from "./speedTestService";
 import { performEpgSync } from "./epgService";
 
@@ -668,6 +669,15 @@ export async function runCronJob(job: any) {
           insertLog.run(logId, job.id, nowStr, "success", "没有符合测速条件的直播源");
           console.log(`[CronScheduler] 任务 ${job.name} 完成: 没有符合条件的直播源`);
         }
+      }
+    } else if (job.id === "job_offline_retest") {
+      if (testStatus.status === "running") {
+        insertLog.run(logId, job.id, nowStr, "failed", "当前已有测速任务在运行，跳过本次离线复测");
+        console.log(`[CronScheduler] 任务 ${job.name} 跳过: 当前已有测速任务在运行`);
+      } else {
+        const result = await retestOfflineSources(6);
+        insertLog.run(logId, job.id, nowStr, "success", result.message);
+        console.log(`[CronScheduler] 任务 ${job.name} 完成: ${result.message}`);
       }
     } else {
       insertLog.run(logId, job.id, nowStr, "failed", "未知的定时任务 ID");

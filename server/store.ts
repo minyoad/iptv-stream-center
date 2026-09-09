@@ -480,6 +480,18 @@ export function loadData() {
         for (const job of parsed.cronJobs) {
           insertCron.run(job.id, job.name, job.startTime || "00:00", job.intervalMinutes || 120, job.active === 1 || job.active === true ? 1 : 0, job.nextRun || null, job.lastRun || null);
         }
+        db.prepare(`
+          INSERT OR IGNORE INTO cron_jobs (id, name, startTime, intervalMinutes, active)
+          VALUES (?, ?, ?, ?, ?)
+        `).run("job_server_test", "全网并发测速", "04:00", 1440, 0);
+        db.prepare(`
+          INSERT OR IGNORE INTO cron_jobs (id, name, startTime, intervalMinutes, active)
+          VALUES (?, ?, ?, ?, ?)
+        `).run("job_carousel_test", "轮播代理全网检测", "05:00", 1440, 0);
+        db.prepare(`
+          INSERT OR IGNORE INTO cron_jobs (id, name, startTime, intervalMinutes, active)
+          VALUES (?, ?, ?, ?, ?)
+        `).run("job_offline_retest", "失效离线线路复测", "04:30", 720, 0);
       }
 
       if (Array.isArray(parsed.carouselProxies)) {

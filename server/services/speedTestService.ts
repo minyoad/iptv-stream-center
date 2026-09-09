@@ -1,7 +1,7 @@
 import net from "net";
 import { execFile } from "child_process";
 import { promisify } from "util";
-import { channels, ipGeoApis, autoSwitchGeoApi, saveData, carouselProxyPresets } from "../store";
+import { channels, ipGeoApis, autoSwitchGeoApi, saveData, carouselProxyPresets, invalidatePlaylistExportCache } from "../store";
 import { isPrivateOrIntranetUrl } from "../utils/network";
 import { isCarouselSource, normalizePlatform, formatProxyUrl } from "./carouselService";
 import { getDb } from "../db/sqlite";
@@ -896,6 +896,89 @@ export async function runConcurrentTest(
   await Promise.all(workers);
   testStatus.status = "idle";
   saveData(true);
+}
+
+export async function retestOfflineSources(concurrency = 6): Promise<{
+  total: number;
+  recovered: number;
+  stillOffline: number;
+  message: string;
+}> {
+  if (testStatus.status === "running") {
+    throw new Error("当前已有测速任务在运行，请等待当前任务完成");
+  }
+
+  // 收集全域所有未被隔离的失效或离线线路 (严格排除已软隔离的垃圾线路)
+  const targetSources: { id: string; channelId: string; url: string; lastChecked?: string }[] = [];
+  channels.forEach((channel) => {
+    if (channel.isolated) return;
+    if (!channel.sources) return;
+    channel.sources.forEach((source) => {
+      // 严格跳过已隔离的线路（避免复测用户手动或批量隔离的无用/垃圾源）
+      if (source.isolated) return;
+      const isInvalid = source.status === "inactive" || (source.latency !== undefined && source.latency >= 9999);
+      if (isInvalid) {
+        targetSources.push({
+          id: source.id,
+          channelId: channel.id,
+          url: source.url,
+          lastChecked: source.lastChecked,
+        });
+      }
+    });
+  });
+
+  if (targetSources.length === 0) {
+    return {
+      total: 0,
+      recovered: 0,
+      stillOffline: 0,
+      message: "当前全域没有处于失效状态的未隔离线路，无需复测",
+    };
+  }
+
+  // 按上次检测时间升序排序，优先复测长期未检测的线路
+  targetSources.sort((a, b) => {
+    const tA = a.lastChecked ? Date.parse(a.lastChecked) : 0;
+    const tB = b.lastChecked ? Date.parse(b.lastChecked) : 0;
+    return tA - tB;
+  });
+
+  // 执行并发测速
+  await runConcurrentTest(
+    targetSources.map((s) => ({ id: s.id, channelId: s.channelId, url: s.url })),
+    concurrency
+  );
+
+  // 统计复测结果
+  let recovered = 0;
+  let stillOffline = 0;
+
+  for (const item of targetSources) {
+    const channel = channels.find((c) => c.id === item.channelId);
+    if (!channel) continue;
+    const source = channel.sources.find((s) => s.id === item.id);
+    if (!source) continue;
+
+    if (source.status === "active") {
+      recovered++;
+    } else {
+      stillOffline++;
+    }
+  }
+
+  if (recovered > 0) {
+    invalidatePlaylistExportCache();
+    saveData(true);
+  }
+
+  const message = `成功复测 ${targetSources.length} 条未隔离失效线路：${recovered} 条恢复正常上线，${stillOffline} 条仍不可用（已跳过所有软隔离垃圾源）`;
+  return {
+    total: targetSources.length,
+    recovered,
+    stillOffline,
+    message,
+  };
 }
 
 export async function getClientIpGeo(ipString: string): Promise<{ province: string; isp: string }> {

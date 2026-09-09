@@ -137,6 +137,7 @@ import {
   testSingleUrl,
   isResponseContentInvalid,
   runConcurrentTest,
+  retestOfflineSources,
   updateSourceDbStatus,
   getClientIpGeo,
   testCarouselProxyAvailability
@@ -2607,6 +2608,31 @@ app.get("/api/channels", async (req, res) => {
       message: "批量多线程测速任务启动成功",
       task: {
         total: targetSources.length,
+        status: "running"
+      }
+    });
+  });
+
+  // Retest failed/offline lines endpoint
+  app.post("/api/sources/retest-offline", (req, res) => {
+    if (testStatus.status === "running") {
+      return res.status(400).json({ error: "当前已有正在运行的测速任务，请等待完成" });
+    }
+
+    const concurrency = Number(req.body?.concurrency) || 6;
+    // Run asynchronously in background
+    retestOfflineSources(concurrency)
+      .then((result) => {
+        console.log(`[ManualRetest] 失效线路复测完成: ${result.message}`);
+      })
+      .catch((err) => {
+        console.error("[ManualRetest] 失效线路复测失败:", err);
+      });
+
+    res.json({
+      success: true,
+      message: "已成功启动针对未隔离失效线路的并发复测任务，已自动跳过所有软隔离垃圾线路！",
+      task: {
         status: "running"
       }
     });

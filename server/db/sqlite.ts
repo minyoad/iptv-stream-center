@@ -287,6 +287,12 @@ export function initSqlite(): Database.Database {
     VALUES (?, ?, ?, ?, ?)
   `).run("job_carousel_test", "轮播代理全网检测", "05:00", 1440, 0);
 
+  // Ensure job_offline_retest exists
+  db.prepare(`
+    INSERT OR IGNORE INTO cron_jobs (id, name, startTime, intervalMinutes, active)
+    VALUES (?, ?, ?, ?, ?)
+  `).run("job_offline_retest", "失效离线线路复测", "04:30", 720, 0);
+
   dbInstance = db;
   return db;
 }

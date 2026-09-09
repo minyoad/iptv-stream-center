@@ -4907,6 +4907,32 @@ export default function App() {
                                 ? `针对已选 ${selectedGlobalSourceIds.length} 条线路发起服务端测速` 
                                 : "针对当前过滤器匹配的所有线路下发测速"}
                             </button>
+
+                            <button
+                              type="button"
+                              onClick={async () => {
+                                try {
+                                  const res = await fetch("/api/sources/retest-offline", {
+                                    method: "POST",
+                                    headers: { "Content-Type": "application/json" },
+                                    body: JSON.stringify({ concurrency: clientThreadCount })
+                                  });
+                                  if (res.ok) {
+                                    showFeedback("success", "已向后台下发【未隔离失效线路并发复测】命令！已自动跳过软隔离的垃圾源。");
+                                  } else {
+                                    const err = await res.json();
+                                    showFeedback("error", err.error || "提发复测失败");
+                                  }
+                                } catch (_) {
+                                  showFeedback("error", "连接故障");
+                                }
+                              }}
+                              className="w-full py-2 bg-amber-50 hover:bg-amber-100 text-amber-800 font-extrabold text-xs rounded-xl border border-amber-200 transition cursor-pointer flex items-center justify-center gap-1.5 shadow-xs"
+                            >
+                              <RotateCcw className="w-3.5 h-3.5 text-amber-600" />
+                              立即并发复测未隔离失效线路 (严格跳过软隔离垃圾源)
+                            </button>
+
                             <p className="text-[10px] text-slate-400 font-medium leading-relaxed">
                               💡 高频技巧：通过下方过滤器框选特定运营商或特定地域省份后，点按此按钮将只对该子类别的线路执行云测试。
                             </p>
@@ -7168,11 +7194,40 @@ export default function App() {
                 <div className="bg-white rounded-3xl p-6 shadow-sm border border-slate-100 flex flex-col h-full">
                   {selectedCronJob ? (
                     <>
-                      <div className="mb-6 flex items-center justify-between">
-                        <h2 className="text-xl font-bold text-slate-800 tracking-tight flex items-center">
-                          <Settings2 className="w-5 h-5 mr-2 text-indigo-500" />
-                          配置任务: {selectedCronJob.name}
-                        </h2>
+                      <div className="mb-6">
+                        <div className="flex items-center justify-between">
+                          <h2 className="text-xl font-bold text-slate-800 tracking-tight flex items-center">
+                            <Settings2 className="w-5 h-5 mr-2 text-indigo-500" />
+                            配置任务: {selectedCronJob.name}
+                          </h2>
+                        </div>
+                        {selectedCronJob.id === "job_offline_retest" && (
+                          <div className="text-xs text-amber-800 bg-amber-50/90 border border-amber-200/80 p-3 rounded-2xl mt-3 font-medium leading-relaxed flex items-start gap-2">
+                            <RotateCcw className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                            <div>
+                              <span className="font-bold text-amber-900 block mb-0.5">任务说明：未隔离失效线路定期复测</span>
+                              定期自动扫描全域未被隔离的【失效/离线】线路并发起探测。<b>已软隔离的线路（用户手动排除的垃圾线路）严格跳过</b>，绝不消耗测试资源。当失效线路恢复正常可用时，系统将自动更新其为活跃有效并加入播放/订阅中。
+                            </div>
+                          </div>
+                        )}
+                        {selectedCronJob.id === "job_server_test" && (
+                          <div className="text-xs text-indigo-800 bg-indigo-50/90 border border-indigo-200/80 p-3 rounded-2xl mt-3 font-medium leading-relaxed flex items-start gap-2">
+                            <Zap className="w-4 h-4 text-indigo-600 shrink-0 mt-0.5" />
+                            <div>
+                              <span className="font-bold text-indigo-900 block mb-0.5">任务说明：全网并发测速</span>
+                              定期在后台对所有生效且未被隔离的直播源执行连通性与画质探活，自动更新延迟与有效状态。
+                            </div>
+                          </div>
+                        )}
+                        {selectedCronJob.id === "job_carousel_test" && (
+                          <div className="text-xs text-purple-800 bg-purple-50/90 border border-purple-200/80 p-3 rounded-2xl mt-3 font-medium leading-relaxed flex items-start gap-2">
+                            <Compass className="w-4 h-4 text-purple-600 shrink-0 mt-0.5" />
+                            <div>
+                              <span className="font-bold text-purple-900 block mb-0.5">任务说明：轮播代理全网检测</span>
+                              定期全网探测轮播代理服务器在线状态，并根据最新有效代理源同步更新电视频道的轮播线路。
+                            </div>
+                          </div>
+                        )}
                       </div>
                       
                       <div className="space-y-4 mb-6 bg-slate-50 p-5 rounded-2xl border border-slate-100">
