@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo, useRef } from "react";
 import { 
   Tv, 
   Activity, 
@@ -431,23 +431,6 @@ export default function App() {
     setGlobalSourcePage(1);
   }, [globalSourceSearch, globalSourceIsp, globalSourceProvince, globalSourceStatus, globalSourceResolution]);
 
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        setIsChannelModalOpen(false);
-        setIsSourceModalOpen(false);
-        setIsSyncModalOpen(false);
-        setIsBatchGroupModalOpen(false);
-        setIsBatchSourceModalOpen(false);
-        setIsBatchGlobalSourceModalOpen(false);
-        setIsMergeModalOpen(false);
-        setIsCleanupModalOpen(false);
-        setIsMappingStatusOpen(false);
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, []);
 
   // Option 2 Client Local Speed Test engine and dynamic state
   const [isClientTesting, setIsClientTesting] = useState(false);
@@ -524,6 +507,206 @@ export default function App() {
     newPassword: "",
     confirmPassword: ""
   });
+
+  // Priority modal stack ref to handle Escape and Back key navigation gracefully without closing background lists
+  const activeModalsRef = useRef({
+    confirmModalOpen: false,
+    singleTestModalOpen: false,
+    isEpgPickerOpen: false,
+    isEpgFormOpen: false,
+    isMappingStatusOpen: false,
+    isChannelModalOpen: false,
+    isSourceModalOpen: false,
+    isSyncModalOpen: false,
+    isBatchGroupModalOpen: false,
+    isBatchSourceModalOpen: false,
+    isBatchGlobalSourceModalOpen: false,
+    isExportSelectedSourcesModalOpen: false,
+    isImportSubscriptionsOpen: false,
+    isMergeModalOpen: false,
+    isCleanupModalOpen: false,
+    isSettingPasswordModalOpen: false,
+    isAiSettingsOpen: false,
+    isSpeedTestConfigOpen: false,
+    isSmartOrganizeOpen: false,
+    isMobileMenuOpen: false,
+  });
+
+  useEffect(() => {
+    activeModalsRef.current = {
+      confirmModalOpen: !!confirmModal?.isOpen,
+      singleTestModalOpen: !!singleTestModalState.isOpen,
+      isEpgPickerOpen,
+      isEpgFormOpen,
+      isMappingStatusOpen,
+      isChannelModalOpen,
+      isSourceModalOpen,
+      isSyncModalOpen,
+      isBatchGroupModalOpen,
+      isBatchSourceModalOpen,
+      isBatchGlobalSourceModalOpen,
+      isExportSelectedSourcesModalOpen,
+      isImportSubscriptionsOpen,
+      isMergeModalOpen,
+      isCleanupModalOpen,
+      isSettingPasswordModalOpen,
+      isAiSettingsOpen,
+      isSpeedTestConfigOpen,
+      isSmartOrganizeOpen,
+      isMobileMenuOpen,
+    };
+  });
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Check for Escape, Android Back, Samsung/LG TV Return keys
+      const isBackKey = 
+        e.key === 'Escape' || 
+        e.key === 'Back' || 
+        e.key === 'GoBack' || 
+        e.keyCode === 27 || 
+        e.keyCode === 4 || 
+        e.keyCode === 10009;
+
+      if (!isBackKey) return;
+
+      const m = activeModalsRef.current;
+
+      // 1. Highest priority: Confirmation dialog
+      if (m.confirmModalOpen) {
+        e.preventDefault();
+        e.stopPropagation();
+        setConfirmModal(null);
+        return;
+      }
+
+      // 2. Single source testing modal
+      if (m.singleTestModalOpen) {
+        e.preventDefault();
+        e.stopPropagation();
+        setSingleTestModalState(prev => ({ ...prev, isOpen: false }));
+        return;
+      }
+
+      // 3. EPG Picker sub-modal (Manual match selector on top of EPG mapping status or Channel edit modal)
+      // CRITICAL FIX: When this is open, closing it must ONLY close the picker itself, leaving the background EPG mapping status list intact!
+      if (m.isEpgPickerOpen) {
+        e.preventDefault();
+        e.stopPropagation();
+        setIsEpgPickerOpen(false);
+        return;
+      }
+
+      // 4. EPG Source Form sub-modal
+      if (m.isEpgFormOpen) {
+        e.preventDefault();
+        e.stopPropagation();
+        setIsEpgFormOpen(false);
+        return;
+      }
+
+      // 5. Primary Modals (Only closed if no child dialog is active)
+      if (m.isMappingStatusOpen) {
+        e.preventDefault();
+        e.stopPropagation();
+        setIsMappingStatusOpen(false);
+        return;
+      }
+      if (m.isChannelModalOpen) {
+        e.preventDefault();
+        e.stopPropagation();
+        setIsChannelModalOpen(false);
+        return;
+      }
+      if (m.isSourceModalOpen) {
+        e.preventDefault();
+        e.stopPropagation();
+        setIsSourceModalOpen(false);
+        return;
+      }
+      if (m.isSyncModalOpen) {
+        e.preventDefault();
+        e.stopPropagation();
+        setIsSyncModalOpen(false);
+        return;
+      }
+      if (m.isBatchGroupModalOpen) {
+        e.preventDefault();
+        e.stopPropagation();
+        setIsBatchGroupModalOpen(false);
+        return;
+      }
+      if (m.isBatchSourceModalOpen) {
+        e.preventDefault();
+        e.stopPropagation();
+        setIsBatchSourceModalOpen(false);
+        return;
+      }
+      if (m.isBatchGlobalSourceModalOpen) {
+        e.preventDefault();
+        e.stopPropagation();
+        setIsBatchGlobalSourceModalOpen(false);
+        return;
+      }
+      if (m.isExportSelectedSourcesModalOpen) {
+        e.preventDefault();
+        e.stopPropagation();
+        setIsExportSelectedSourcesModalOpen(false);
+        return;
+      }
+      if (m.isImportSubscriptionsOpen) {
+        e.preventDefault();
+        e.stopPropagation();
+        setIsImportSubscriptionsOpen(false);
+        return;
+      }
+      if (m.isMergeModalOpen) {
+        e.preventDefault();
+        e.stopPropagation();
+        setIsMergeModalOpen(false);
+        return;
+      }
+      if (m.isCleanupModalOpen) {
+        e.preventDefault();
+        e.stopPropagation();
+        setIsCleanupModalOpen(false);
+        return;
+      }
+      if (m.isSettingPasswordModalOpen) {
+        e.preventDefault();
+        e.stopPropagation();
+        setIsSettingPasswordModalOpen(false);
+        return;
+      }
+      if (m.isAiSettingsOpen) {
+        e.preventDefault();
+        e.stopPropagation();
+        setIsAiSettingsOpen(false);
+        return;
+      }
+      if (m.isSpeedTestConfigOpen) {
+        e.preventDefault();
+        e.stopPropagation();
+        setIsSpeedTestConfigOpen(false);
+        return;
+      }
+      if (m.isSmartOrganizeOpen) {
+        e.preventDefault();
+        e.stopPropagation();
+        setIsSmartOrganizeOpen(false);
+        return;
+      }
+      if (m.isMobileMenuOpen) {
+        e.preventDefault();
+        e.stopPropagation();
+        setIsMobileMenuOpen(false);
+        return;
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown, true);
+    return () => window.removeEventListener('keydown', handleKeyDown, true);
+  }, []);
 
   // Playback Export config builder parameters
   const [exportParams, setExportParams] = useState({
@@ -9682,7 +9865,15 @@ export default function App() {
 
       {/* Manual EPG Match Picker Modal */}
       {isEpgPickerOpen && epgPickerTarget && (
-        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 font-sans overflow-hidden" id="epg_picker_modal">
+        <div 
+          className="fixed inset-0 z-[70] bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 font-sans overflow-hidden" 
+          id="epg_picker_modal"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) {
+              setIsEpgPickerOpen(false);
+            }
+          }}
+        >
           <div className="bg-white rounded-2xl max-w-xl w-full max-h-[85vh] shadow-2xl border border-slate-100 flex flex-col animate-fade-in font-sans overflow-hidden">
             {/* Modal Header */}
             <div className="px-5 py-3.5 border-b border-slate-100 flex justify-between items-center bg-slate-50/80 shrink-0">
