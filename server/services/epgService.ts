@@ -10,7 +10,8 @@ import {
   findAliasTemplate,
   generateDefaultEpgId,
   resolveChannelLogo,
-  getBuildVersionInfo
+  getBuildVersionInfo,
+  toSimplifiedChinese
 } from "../utils/text";
 
 export const EPG_CACHE_DIR = path.join(process.cwd(), "data", "epg_cache");
@@ -155,6 +156,25 @@ export function buildEpgIndex(channelMap: Record<string, EpgEntry>): EpgCacheInd
         if (normDisp && !nameMap.has(normDisp)) {
           nameMap.set(normDisp, entry);
         }
+        // Support Traditional/Simplified "精采" <-> "精彩"
+        if (normDisp.includes("精采")) {
+          const alt = normDisp.replace(/精采/g, "精彩");
+          if (!nameMap.has(alt)) nameMap.set(alt, entry);
+        } else if (normDisp.includes("精彩")) {
+          const alt = normDisp.replace(/精彩/g, "精采");
+          if (!nameMap.has(alt)) nameMap.set(alt, entry);
+        }
+
+        // Also map template aliases into nameMap for faster and wider matching (covers Taiwan and CCTV variants)
+        const tpl = findAliasTemplate(disp);
+        if (tpl) {
+          for (const a of tpl.aliases) {
+            const na = normalizeChannelName(a);
+            if (na && !nameMap.has(na)) {
+              nameMap.set(na, entry);
+            }
+          }
+        }
       }
     }
   }
@@ -167,11 +187,11 @@ export function buildEpgIndex(channelMap: Record<string, EpgEntry>): EpgCacheInd
 }
 
 export function getEpgCache(sourceId: string): EpgCacheIndexed | null {
-  const cachePath = path.join(EPG_CACHE_DIR, `${sourceId}.json`);
-  if (!fs.existsSync(cachePath)) return null;
   if (loadedEpgCaches[sourceId]) {
     return loadedEpgCaches[sourceId];
   }
+  const cachePath = path.join(EPG_CACHE_DIR, `${sourceId}.json`);
+  if (!fs.existsSync(cachePath)) return null;
   try {
     const data = fs.readFileSync(cachePath, "utf-8");
     const rawMap: Record<string, EpgEntry> = JSON.parse(data);
@@ -187,20 +207,59 @@ export function getEpgCache(sourceId: string): EpgCacheIndexed | null {
 export function findMatchingEpgEntry(ch: Channel, cache: EpgCacheIndexed): EpgEntry | null {
   if (!cache) return null;
 
+  // 1. Manual EPG Match: If user explicitly configured epgMatchName, prioritize it!
+  if (ch.epgMatchName && ch.epgMatchName.trim()) {
+    const target = ch.epgMatchName.trim();
+    const byId = cache.idMap.get(target.toLowerCase());
+    if (byId) return byId;
+
+    const normTarget = normalizeChannelName(target);
+    if (normTarget && cache.nameMap.has(normTarget)) {
+      return cache.nameMap.get(normTarget)!;
+    }
+
+    if (cache.raw[target]) {
+      return cache.raw[target];
+    }
+  }
+
+  // 2. Default matching: Strictly uses channel name and aliases, ignores epgId!
+  // User preference: "默认匹配方式还是使用频道名称，忽略epgid"
   const chNameNorm = normalizeChannelName(ch.name);
   if (chNameNorm && cache.nameMap.has(chNameNorm)) {
     return cache.nameMap.get(chNameNorm)!;
   }
 
+  // Check traditional/simplified "精彩" <-> "精采" variant
+  if (chNameNorm) {
+    if (chNameNorm.includes("精彩")) {
+      const alt = chNameNorm.replace(/精彩/g, "精采");
+      if (cache.nameMap.has(alt)) return cache.nameMap.get(alt)!;
+    } else if (chNameNorm.includes("精采")) {
+      const alt = chNameNorm.replace(/精采/g, "精彩");
+      if (cache.nameMap.has(alt)) return cache.nameMap.get(alt)!;
+    }
+  }
+
+  // Check user channel aliases
   if (ch.alias && Array.isArray(ch.alias)) {
     for (const a of ch.alias) {
+      if (!a) continue;
       const aNorm = normalizeChannelName(a);
       if (aNorm && cache.nameMap.has(aNorm)) {
         return cache.nameMap.get(aNorm)!;
       }
+      if (aNorm.includes("精彩")) {
+        const alt = aNorm.replace(/精彩/g, "精采");
+        if (cache.nameMap.has(alt)) return cache.nameMap.get(alt)!;
+      } else if (aNorm.includes("精采")) {
+        const alt = aNorm.replace(/精采/g, "精彩");
+        if (cache.nameMap.has(alt)) return cache.nameMap.get(alt)!;
+      }
     }
   }
 
+  // Check built-in and configured alias templates (e.g., Taiwan/CCTV channel aliases)
   const aliasTemplate = findAliasTemplate(ch.name);
   if (aliasTemplate) {
     const tNorm = normalizeChannelName(aliasTemplate.templateName);
@@ -215,7 +274,108 @@ export function findMatchingEpgEntry(ch: Channel, cache: EpgCacheIndexed): EpgEn
     }
   }
 
+  // 3. Suffix tolerance fallback matching:
+  // Strip modifiers like 主频/主频道/无线台/无线/综合台/综合/新闻台/新闻/电视台/台/inews to handle "台视主频" <-> "台视", etc.
+  if (chNameNorm) {
+    const strippedSuffix = chNameNorm.replace(/(主频|主频道|无线台|无线|综合台|综合|新闻台|新闻|电视台|台|频道|hd|fhd|inews)$/g, "");
+    if (strippedSuffix && strippedSuffix.length >= 2) {
+      if (cache.nameMap.has(strippedSuffix)) {
+        return cache.nameMap.get(strippedSuffix)!;
+      }
+    }
+  }
+
   return null;
+}
+
+export interface EpgSearchResult {
+  epgId: string;
+  displayName: string;
+  sourceId: string;
+  sourceName: string;
+  programCount: number;
+  currentProgram?: string;
+  displayNames: string[];
+}
+
+export function searchEpgChannels(keyword?: string, limit: number = 50): EpgSearchResult[] {
+  const activeSources = epgSources.filter(s => s.active);
+  const results: any[] = [];
+  const seenKeys = new Set<string>();
+
+  const kw = (keyword || "").trim();
+  const kwLower = kw.toLowerCase();
+  const kwSimp = toSimplifiedChinese(kwLower);
+  const kwNorm = normalizeChannelName(kw);
+
+  for (const src of activeSources) {
+    const cache = getEpgCache(src.id);
+    if (!cache || !cache.raw) continue;
+
+    for (const [id, entry] of Object.entries(cache.raw)) {
+      const displayNames = entry.displayNames || [id];
+      const mainName = displayNames[0] || id;
+      const key = `${id}_${mainName}`;
+      if (seenKeys.has(key)) continue;
+
+      let matched = false;
+      let score = 0;
+
+      if (!kw) {
+        matched = true;
+        score = 1;
+      } else {
+        const idLower = id.toLowerCase();
+        if (idLower === kwLower) {
+          matched = true;
+          score = 100;
+        } else if (idLower.includes(kwLower)) {
+          matched = true;
+          score = 70;
+        }
+
+        for (const dn of displayNames) {
+          const dnLower = dn.toLowerCase();
+          const dnSimp = toSimplifiedChinese(dnLower);
+          const dnNorm = normalizeChannelName(dn);
+
+          if (dnLower === kwLower || dnSimp === kwSimp || (kwNorm && dnNorm === kwNorm)) {
+            matched = true;
+            score = Math.max(score, 95);
+          } else if (dnLower.includes(kwLower) || dnSimp.includes(kwSimp) || (kwNorm && dnNorm.includes(kwNorm))) {
+            matched = true;
+            score = Math.max(score, 60);
+          }
+        }
+      }
+
+      if (matched) {
+        seenKeys.add(key);
+        let currentProgram: string | undefined;
+        if (entry.programs && entry.programs.length > 0) {
+          const nowStr = new Date().toISOString().replace(/[-:T]/g, "").slice(0, 14);
+          const prog = entry.programs.find(p => p.start <= nowStr && p.stop > nowStr) || entry.programs[0];
+          if (prog) {
+            currentProgram = prog.title;
+          }
+        }
+
+        results.push({
+          epgId: id,
+          displayName: mainName,
+          sourceId: src.id,
+          sourceName: src.name,
+          programCount: entry.programs?.length || 0,
+          currentProgram,
+          displayNames,
+          _score: score
+        });
+      }
+    }
+  }
+
+  results.sort((a, b) => (b._score || 0) - (a._score || 0));
+  return results.slice(0, limit).map(({ _score, ...rest }) => rest);
 }
 
 export function escapeXml(unsafe: string): string {

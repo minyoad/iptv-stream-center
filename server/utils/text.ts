@@ -108,10 +108,11 @@ export function normalizeChannelName(name: string): string {
   }
 
   if (!res) {
-    // For other channels, remove hyphens, spaces, and common quality tags (preserving 4k, 8k, 超高清) to improve match rates
+    // For other channels, remove hyphens, spaces, and common quality tags (preserving 4k, 8k, 超高清, and acronyms like FTV, TTV, CTV, CTS, PTS, TVBS, TVB)
     res = clean
       .replace(/[-_.\s]+/g, "")
-      .replace(/(hd|uhd|fhd|ud|(?<!超)高清|超清(?!高)|标清|sdi|channel|tv)/g, "")
+      .replace(/(fhd|uhd|hd|sd|hevc|h265|h264|1080p|720p|(?<!超)高清|超清(?!高)|标清|sdi)/g, "")
+      .replace(/(?<=[^\x00-\x7f]|.{3,})tv$/g, "")
       .replace(/(频道|电视台|台)$/, "");
   }
 
@@ -183,18 +184,145 @@ export interface DefaultAliasGroup {
   aliases: string[];
 }
 
+export const BUILTIN_DEFAULT_ALIASES: string[][] = [
+  // Taiwan 主要无线与热门电视频道 (覆盖繁简异体字与常见命名变体)
+  ["民视", "民視", "民视无线台", "民視無線台", "民视主频", "民視主頻", "民视综合", "民視綜合", "FTV", "FTV民视", "FTV民視", "民间全民电视"],
+  ["民视第一台", "民視第一台", "民视第一", "FTV1"],
+  ["民视台湾台", "民視台灣台", "民视台湾", "FTV Taiwan"],
+  ["民视新闻台", "民視新聞台", "民视新闻", "民視新聞", "FTV News"],
+  ["民视综艺台", "民視綜藝台", "民视综艺"],
+  ["台视", "台視", "台视主频", "台視主頻", "台视综合", "臺灣電視", "台湾电视", "TTV", "TTV台视", "TTV台視"],
+  ["台视新闻台", "台視新聞台", "台视新闻", "台視新聞", "TTV News"],
+  ["台视财经台", "台視財經台", "台视财经"],
+  ["台视综合台", "台視綜合台", "台视综合"],
+  ["中视", "中視", "中视主频", "中視主頻", "中视无线台", "中国电视", "CTV", "CTV中视", "CTV中視"],
+  ["中视新闻台", "中视新闻", "中視新聞台", "中視新聞", "CTV News"],
+  ["中视经典台", "中視經典台", "中视经典"],
+  ["中视菁采台", "中視菁采台", "中视精采台", "中视精彩台"],
+  ["华视", "華視", "华视主频", "華視主頻", "中华电视", "CTS", "CTS华视", "CTS華視"],
+  ["华视新闻资讯台", "華視新聞資訊台", "华视新闻", "華視新聞", "CTS News"],
+  ["华视教育体育文化台", "華視教育體育文化台", "华视教育文化台", "华视教育"],
+  ["华视闽南语频道", "華視閩南語頻道", "华视闽南", "华视台语台", "华视闽南语"],
+  ["公视", "公視", "公视主频", "公視主頻", "公共电视", "PTS", "PTS公视", "PTS公視"],
+  ["公视台语台", "公視台語台", "公视台湾台", "公視台灣台", "公视台语"],
+  ["公视戏剧台", "公視戲劇台", "公视戏剧"],
+  ["TVBS", "TVBS主频", "TVBS综合", "无线卫星电视台"],
+  ["TVBS新闻台", "TVBS新聞台", "TVBS新闻", "TVBS新聞", "TVBS-NEWS", "TVBS NEWS"],
+  ["TVBS欢乐台", "TVBS歡樂台", "TVBS欢乐"],
+  ["TVBS精采台", "TVBS精彩台", "TVBS精采", "TVBS精彩"],
+  ["三立台湾台", "三立台灣台", "三立台湾", "三立台灣"],
+  ["三立都会台", "三立都會台", "三立都会", "三立都會"],
+  ["三立新闻台", "三立新聞台", "三立新闻", "三立新聞", "三立新闻iNEWS", "三立新聞iNEWS", "三立iNEWS"],
+  ["三立综合台", "三立 rattle", "三立綜合台", "三立综合"],
+  ["东森新闻台", "東森新聞台", "东森新闻", "東森新聞", "EBC News"],
+  ["东森综合台", "東森綜合台", "东森综合", "東森綜合", "EBC Variety"],
+  ["东森电影台", "東森電影台", "东森电影", "東森電影", "EBC Movie"],
+  ["东森洋片台", "東森洋片台", "东森洋片"],
+  ["东森戏剧台", "東森戲劇台", "东森戏剧", "東森戲劇"],
+  ["东森幼幼台", "東森幼幼台", "东森幼幼", "YOYO TV", "YoYo TV"],
+  ["东森超视", "東森超視", "东森超视台"],
+  ["东森财经新闻台", "東森財經新聞台", "东森财经", "東森財經"],
+  ["中天新闻台", "中天新聞台", "中天新闻", "中天新聞", "CTi News"],
+  ["中天综合台", "中天綜合台", "中天综合", "中天綜合"],
+  ["中天娱乐台", "中天娛樂台", "中天娱乐"],
+  ["年代新闻台", "年代新聞台", "年代新闻", "年代新聞"],
+  ["年代MUCH台", "年代MUCH", "年代much台"],
+  ["壹电视新闻台", "壹電視新聞台", "壹电视新闻", "壹電視新聞"],
+  ["壹电视综合台", "壹電視綜合台", "壹电视综合"],
+  ["纬来日本台", "緯來日本台", "纬来日本", "緯來日本"],
+  ["纬来体育台", "緯來體育台", "纬来体育", "緯來體育"],
+  ["纬来综合台", "緯來綜合台", "纬来综合", "緯來綜合"],
+  ["纬来电影台", "緯來電影台", "纬来电影", "緯來電影"],
+  ["纬来育乐台", "緯來育樂台", "纬来育乐", "緯來育樂"],
+  ["纬来戏剧台", "緯來戲劇台", "纬来戏剧", "緯來戲劇"],
+  ["八大第一台", "八大第一", "GTV One"],
+  ["八大综合台", "八大綜合台", "八大综合", "GTV Variety"],
+  ["八大戏剧台", "八大戲劇台", "八大戏剧", "GTV Drama"],
+  ["非凡新闻台", "非凡新聞台", "非凡新闻", "非凡新聞"],
+  ["非凡商业台", "非凡商業台", "非凡商业", "非凡商業"],
+  ["镜电视新闻台", "鏡電視新聞台", "镜电视新闻", "鏡電視新聞", "镜新闻", "鏡新聞"],
+  ["客家电视台", "客家電視台", "客家电视", "客家電視"],
+  ["大爱电视", "大愛電視", "大爱一台", "大爱电视台", "大愛電視台"],
+  ["国兴卫视", "國興衛視"],
+  ["爱尔达体育1台", "愛爾達體育1台", "爱尔达体育一台", "ELTA 1"],
+  ["爱尔达体育2台", "愛爾達體育2台", "爱尔达体育二台", "ELTA 2"],
+  ["爱尔达体育3台", "愛爾達體育3台", "爱尔达体育三台", "ELTA 3"],
+  ["爱尔达影剧台", "愛爾達影劇台", "爱尔达影剧"],
+  ["爱尔达综合台", "愛爾達綜合台", "爱尔达综合"],
+  ["爱尔达娱乐台", "愛爾達娛樂台", "爱尔达娱乐"],
+  ["博斯运动1台", "博斯運動一台", "博斯运动一台"],
+  ["博斯无限台", "博斯無限台", "博斯无限"],
+  // 香港与其它
+  ["翡翠台", "TVB翡翠台", "无线翡翠台"],
+  ["明珠台", "TVB明珠台", "无线明珠台"],
+  ["J2", "TVB J2", "J2台"],
+  ["无线新闻台", "無綫新聞台", "TVB新闻台", "TVB News"],
+  ["凤凰卫视中文台", "凤凰中文", "鳳凰衛視中文台"],
+  ["凤凰卫视资讯台", "凤凰资讯", "鳳凰衛視資訊台"],
+  // 央视与卫视
+  ["CCTV-1", "CCTV1", "CCTV-1综合", "CCTV1综合", "中央一台", "中央1台"],
+  ["CCTV-2", "CCTV2", "CCTV-2财经", "CCTV2财经", "中央二台", "中央2台"],
+  ["CCTV-3", "CCTV3", "CCTV-3综艺", "CCTV3综艺", "中央三台", "中央3台"],
+  ["CCTV-4", "CCTV4", "CCTV-4中文国际", "CCTV4中文国际", "中央四台", "中央4台"],
+  ["CCTV-5", "CCTV5", "CCTV-5体育", "CCTV5体育", "中央五台", "中央5台"],
+  ["CCTV-5+", "CCTV5+", "CCTV-5+体育赛事", "CCTV5+体育赛事", "中央五加", "中央5+"],
+  ["CCTV-6", "CCTV6", "CCTV-6电影", "CCTV6电影", "中央六台", "中央6台"],
+  ["CCTV-7", "CCTV7", "CCTV-7国防军事", "CCTV7国防军事", "中央七台", "中央7台"],
+  ["CCTV-8", "CCTV8", "CCTV-8电视剧", "CCTV8电视剧", "中央八台", "中央8台"],
+  ["CCTV-9", "CCTV9", "CCTV-9纪录", "CCTV9纪录", "中央九台", "中央9台"],
+  ["CCTV-10", "CCTV10", "CCTV-10科教", "CCTV10科教", "中央十台", "中央10台"],
+  ["CCTV-11", "CCTV11", "CCTV-11戏曲", "CCTV11戏曲", "中央十一台", "中央11台"],
+  ["CCTV-12", "CCTV12", "CCTV-12社会与法", "CCTV12社会与法", "中央十二台", "中央12台"],
+  ["CCTV-13", "CCTV13", "CCTV-13新闻", "CCTV13新闻", "中央十三台", "中央13台", "央视新闻"],
+  ["CCTV-14", "CCTV14", "CCTV-14少儿", "CCTV14少儿", "中央十四台", "中央14台"],
+  ["CCTV-15", "CCTV15", "CCTV-15音乐", "CCTV15音乐", "中央十五台", "中央15台"],
+  ["CCTV-16", "CCTV16", "CCTV-16奥林匹克", "CCTV16奥林匹克", "中央十六台", "中央16台"],
+  ["CCTV-17", "CCTV17", "CCTV-17农业农村", "CCTV17农业农村", "中央十七台", "中央17台"],
+  ["CCTV-4K", "CCTV4K", "CCTV-4K超高清"],
+  ["CCTV-8K", "CCTV8K", "CCTV-8K超高清"],
+  ["湖南卫视", "湖南台", "芒果TV"],
+  ["浙江卫视", "浙江台", "蓝莓台"],
+  ["江苏卫视", "江苏台", "荔枝台"],
+  ["东方卫视", "上海东方卫视", "上海卫视", "番茄台"],
+  ["北京卫视", "BTV北京卫视", "北京台"],
+  ["广东卫视", "广东台"],
+  ["深圳卫视", "深圳台"]
+];
+
 export const loadedDefaultAliases: DefaultAliasGroup[] = [];
 export const aliasTemplateLookupMap = new Map<string, { templateName: string; aliases: string[] }>();
 
+function registerAliasGroup(template: string, aliases: string[]) {
+  const merged = Array.from(new Set([template, ...aliases]));
+  const groupObj = { template, aliases: merged };
+  loadedDefaultAliases.push(groupObj);
+  const entry = { templateName: template, aliases: merged };
+  for (const a of merged) {
+    const normA = normalizeChannelName(a);
+    if (normA && !aliasTemplateLookupMap.has(normA)) {
+      aliasTemplateLookupMap.set(normA, entry);
+    }
+  }
+}
+
 export function loadDefaultAliases(dataDir?: string) {
+  loadedDefaultAliases.length = 0;
+  aliasTemplateLookupMap.clear();
+
+  // 1. First seed built-in knowledge base (covering Taiwan, Hong Kong, CCTV, Satellite)
+  for (const item of BUILTIN_DEFAULT_ALIASES) {
+    if (item.length > 0) {
+      registerAliasGroup(item[0], item);
+    }
+  }
+
+  // 2. Overlay custom aliases from data/default_aliases.txt if present
   const DATA_DIR = dataDir || path.join(process.cwd(), "data");
   const filePath = path.join(DATA_DIR, "default_aliases.txt");
   if (fs.existsSync(filePath)) {
     try {
       const content = fs.readFileSync(filePath, "utf-8");
       const lines = content.split(/\r?\n/);
-      loadedDefaultAliases.length = 0;
-      aliasTemplateLookupMap.clear();
       for (const rawLine of lines) {
         let line = rawLine.trim();
         if (!line || line.startsWith("#")) continue;
@@ -203,18 +331,7 @@ export function loadDefaultAliases(dataDir?: string) {
         }
         const parts = line.split(",").map((s) => s.trim()).filter(Boolean);
         if (parts.length > 0) {
-          const template = parts[0];
-          const aliases = Array.from(new Set([template, ...parts]));
-          const groupObj = { template, aliases };
-          loadedDefaultAliases.push(groupObj);
-          
-          const entry = { templateName: template, aliases };
-          for (const a of aliases) {
-            const normA = normalizeChannelName(a);
-            if (normA && !aliasTemplateLookupMap.has(normA)) {
-              aliasTemplateLookupMap.set(normA, entry);
-            }
-          }
+          registerAliasGroup(parts[0], parts);
         }
       }
       console.log(`[Aliases] Loaded ${loadedDefaultAliases.length} default channel alias templates.`);

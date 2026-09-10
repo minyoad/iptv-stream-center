@@ -34,6 +34,7 @@ export function initSqlite(): Database.Database {
       groupIds TEXT,
       alias TEXT,
       epgId TEXT,
+      epgMatchName TEXT DEFAULT '',
       description TEXT DEFAULT '',
       isolated INTEGER DEFAULT 0
     );
@@ -184,6 +185,11 @@ export function initSqlite(): Database.Database {
   // Column migration for channels description column
   try {
     db.prepare("ALTER TABLE channels ADD COLUMN description TEXT DEFAULT ''").run();
+  } catch (e) {}
+
+  // Column migration for channels epgMatchName column
+  try {
+    db.prepare("ALTER TABLE channels ADD COLUMN epgMatchName TEXT DEFAULT ''").run();
   } catch (e) {}
 
   // Seed default carousel proxies (only on first startup initialization)

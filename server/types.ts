@@ -28,6 +28,7 @@ export interface Channel {
   groupIds: string[];
   alias: string[];
   epgId: string;
+  epgMatchName?: string; // 手动指定 EPG 匹配名称或ID (优先匹配，若未设置则按频道名称默认匹配并忽略 epgId)
   description?: string;
   sources: LiveSource[];
   isolated?: boolean;

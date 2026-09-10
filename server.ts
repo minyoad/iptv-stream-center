@@ -153,7 +153,8 @@ import {
   findMatchingEpgEntry,
   performEpgSync,
   getOrGenerateIntegratedEpgXml,
-  invalidateIntegratedEpgCache
+  invalidateIntegratedEpgCache,
+  searchEpgChannels
 } from "./server/services/epgService";
 
 // Sync & Cron Services
@@ -742,6 +743,7 @@ app.get("/api/channels", async (req, res) => {
       logo: logo || "https://images.unsplash.com/photo-1598257006458-087169a1f08d?auto=format&fit=crop&w=48&h=48&q=80",
       alias: alias ? (Array.isArray(alias) ? alias : alias.split(",").map((s: string) => s.trim())) : [name],
       epgId: epgId || generateDefaultEpgId(name),
+      epgMatchName: req.body.epgMatchName ? req.body.epgMatchName.trim() : "",
       description: description || "",
       isolated: !!req.body.isolated,
       sources: []
@@ -754,7 +756,7 @@ app.get("/api/channels", async (req, res) => {
 
   app.put("/api/channels/:id", (req, res) => {
     const { id } = req.params;
-    const { name, groupIds, category, logo, alias, epgId, description, isolated } = req.body;
+    const { name, groupIds, category, logo, alias, epgId, epgMatchName, description, isolated } = req.body;
 
     const channel = channels.find((c) => c.id === id);
     if (!channel) {
@@ -784,6 +786,10 @@ app.get("/api/channels", async (req, res) => {
       channel.alias = Array.from(new Set(Array.isArray(alias) ? alias : alias.split(/[,;，；:]/).map((s: string) => s.trim()).filter(Boolean)));
     }
     if (epgId !== undefined) channel.epgId = epgId;
+    if (epgMatchName !== undefined) {
+      channel.epgMatchName = (epgMatchName || "").trim();
+      invalidateIntegratedEpgCache();
+    }
     if (description !== undefined) channel.description = toSimplifiedChinese(description);
     if (isolated !== undefined) {
       channel.isolated = !!isolated;
@@ -4166,6 +4172,7 @@ app.get("/api/channels", async (req, res) => {
           id: ch.id,
           name: ch.name,
           epgId: ch.epgId,
+          epgMatchName: ch.epgMatchName || "",
           matchedId: matchedOriginalId,
           matchedName: matchedEntry.displayNames[0] || matchedOriginalId,
           sourceName: matchedSourceName
@@ -4174,7 +4181,8 @@ app.get("/api/channels", async (req, res) => {
         unmappedChannels.push({
           id: ch.id,
           name: ch.name,
-          epgId: ch.epgId
+          epgId: ch.epgId,
+          epgMatchName: ch.epgMatchName || ""
         });
       }
     }
@@ -4184,6 +4192,19 @@ app.get("/api/channels", async (req, res) => {
       mappedChannels,
       unmappedChannels
     });
+  });
+
+  // Search available channels from loaded active EPG sources for manual channel matching
+  app.get("/api/epg/search-channels", (req, res) => {
+    try {
+      const query = (req.query.q as string) || (req.query.keyword as string) || "";
+      const limit = parseInt(req.query.limit as string, 10) || 50;
+      const results = searchEpgChannels(query, limit);
+      res.json(results);
+    } catch (e: any) {
+      console.error("[EPG Search Channels Error]", e);
+      res.status(500).json({ error: e.message || "Failed to search EPG channels" });
+    }
   });
 
   // EPG Generator Timeline Helper

@@ -270,7 +270,7 @@ export function saveDataSync() {
       db.exec("DELETE FROM channels");
       db.exec("DELETE FROM sources");
 
-      const insertChannel = db.prepare("INSERT INTO channels (id, name, logo, groupIds, alias, epgId, description, isolated) VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
+      const insertChannel = db.prepare("INSERT INTO channels (id, name, logo, groupIds, alias, epgId, epgMatchName, description, isolated) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)");
       const insertSource = db.prepare(`
         INSERT INTO sources (id, channelId, url, province, isp, status, latency, resolution, lastChecked, clientIspReported, clientProvinceReported, testCount, successCount, isolated)
               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -284,6 +284,7 @@ export function saveDataSync() {
           JSON.stringify(ch.groupIds || []),
           JSON.stringify(ch.alias || []),
           ch.epgId || "",
+          ch.epgMatchName || "",
           ch.description || "",
           ch.isolated ? 1 : 0
         );
@@ -652,6 +653,7 @@ export function loadData() {
           groupIds,
           alias,
           epgId: ch.epgId || "",
+          epgMatchName: ch.epgMatchName || "",
           description: ch.description || "",
           isolated: ch.isolated === 1 ? true : false,
           sources: sourceMap.get(ch.id) || []
@@ -679,6 +681,13 @@ export function loadData() {
           url: "https://epg.pw/xmltv/epg_CN.xml",
           active: true,
           status: "never",
+        },
+        {
+          id: "epg_pw_tw",
+          name: "EPG.pw 台湾频道 XML 源",
+          url: "https://epg.pw/xmltv/epg_TW.xml",
+          active: true,
+          status: "never",
         }
       ];
       saveData();
@@ -686,6 +695,18 @@ export function loadData() {
 
     let updated = false;
     
+    // Ensure Taiwan EPG source is available for Taiwan channels
+    if (!epgSources.some(s => s.id === "epg_pw_tw" || s.url?.includes("epg_TW.xml") || s.url?.includes("epg_HKTW.xml"))) {
+      epgSources.push({
+        id: "epg_pw_tw",
+        name: "EPG.pw 台湾频道 XML 源",
+        url: "https://epg.pw/xmltv/epg_TW.xml",
+        active: true,
+        status: "never",
+      });
+      updated = true;
+    }
+
     // Migrate dead EPG sources
     epgSources.forEach((s) => {
       if (s.url === "http://epg.51zmt.top:11111/e.xml" || s.id === "epg_51zmt") {

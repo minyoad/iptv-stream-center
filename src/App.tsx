@@ -281,6 +281,7 @@ export default function App() {
     logo: "",
     alias: "",
     epgId: "",
+    epgMatchName: "",
     description: "",
     isolated: false
   });
@@ -335,6 +336,14 @@ export default function App() {
   const [aiRecommends, setAiRecommends] = useState<{ epgId: string; displayName: string; reason: string; confidence: number }[]>([]);
   const [aiRecommendLoading, setAiRecommendLoading] = useState(false);
   const [aiRecommendError, setAiRecommendError] = useState("");
+
+  // Manual EPG Match Picker states
+  const [isEpgPickerOpen, setIsEpgPickerOpen] = useState(false);
+  const [epgPickerTarget, setEpgPickerTarget] = useState<{ id: string; name: string; epgMatchName?: string } | null>(null);
+  const [epgPickerInsideForm, setEpgPickerInsideForm] = useState(false);
+  const [epgPickerQuery, setEpgPickerQuery] = useState("");
+  const [epgPickerResults, setEpgPickerResults] = useState<any[]>([]);
+  const [epgPickerLoading, setEpgPickerLoading] = useState(false);
 
   // Batch channel operations state
   const [selectedChannelIds, setSelectedChannelIds] = useState<string[]>([]);
@@ -1350,6 +1359,7 @@ export default function App() {
         logo: channelForm.logo,
         alias: Array.from(new Set(channelForm.alias.split(/[,;，；:]/).map(s => s.trim()).filter(Boolean))),
         epgId: channelForm.epgId,
+        epgMatchName: channelForm.epgMatchName || "",
         description: channelForm.description,
         isolated: channelForm.isolated
       };
@@ -2475,6 +2485,7 @@ export default function App() {
       logo: "",
       alias: "",
       epgId: "",
+      epgMatchName: "",
       description: "",
       isolated: false
     });
@@ -2495,11 +2506,71 @@ export default function App() {
       logo: ch.logo || "",
       alias: ch.alias ? ch.alias.join(", ") : "",
       epgId: ch.epgId || "",
+      epgMatchName: ch.epgMatchName || "",
       description: ch.description || "",
       isolated: !!ch.isolated
     });
     setChannelModalGroupFilter("");
     setIsChannelModalOpen(true);
+  };
+
+  // EPG Manual Match Selection Helpers
+  const fetchEpgPickerResults = async (query: string) => {
+    setEpgPickerLoading(true);
+    try {
+      const res = await fetch(`/api/epg/search-channels?q=${encodeURIComponent(query)}&limit=60`);
+      if (res.ok) {
+        const data = await res.json();
+        setEpgPickerResults(data);
+      }
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setEpgPickerLoading(false);
+    }
+  };
+
+  const openEpgPickerForChannel = (target: { id: string; name: string; epgMatchName?: string }, insideForm = false) => {
+    setEpgPickerTarget(target);
+    setEpgPickerInsideForm(insideForm);
+    const initialQuery = target.epgMatchName || target.name || "";
+    setEpgPickerQuery(initialQuery);
+    setIsEpgPickerOpen(true);
+    fetchEpgPickerResults(initialQuery);
+  };
+
+  const handleApplyEpgMatch = async (matchVal: string) => {
+    if (!epgPickerTarget) return;
+    if (epgPickerInsideForm) {
+      setChannelForm(prev => ({ ...prev, epgMatchName: matchVal }));
+      setIsEpgPickerOpen(false);
+      showFeedback("success", matchVal ? `已关联 EPG 频道 "${matchVal}"` : "已恢复默认按频道名称自动匹配");
+    } else {
+      try {
+        const res = await fetch(`/api/channels/${epgPickerTarget.id}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ epgMatchName: matchVal })
+        });
+        if (res.ok) {
+          showFeedback("success", matchVal ? `频道 [${epgPickerTarget.name}] EPG 已指定为 "${matchVal}"` : `频道 [${epgPickerTarget.name}] 已恢复默认按频道名称自动匹配`);
+          setIsEpgPickerOpen(false);
+          await fetchData();
+          if (isMappingStatusOpen) {
+            try {
+              const mapRes = await fetch("/api/epg/mapping-status");
+              if (mapRes.ok) {
+                setEpgMappingData(await mapRes.json());
+              }
+            } catch (_) {}
+          }
+        } else {
+          showFeedback("error", "更新 EPG 关联失败");
+        }
+      } catch (e) {
+        showFeedback("error", "网络连接异常");
+      }
+    }
   };
 
   // Live Source CRUD Handlers
@@ -6818,12 +6889,32 @@ export default function App() {
                                 <p className="text-center text-[10px] text-slate-400 py-4">完美！所有频道均已匹配 EPG</p>
                               ) : (
                                 epgMappingData.unmappedChannels.map((ch: any) => (
-                                  <div key={ch.id} className="flex justify-between items-center p-2 rounded-lg bg-rose-50/50 hover:bg-rose-50">
-                                    <div className="truncate flex-1 pr-2">
-                                      <p className="text-xs font-bold text-slate-700 truncate">{ch.name}</p>
+                                  <div key={ch.id} className="flex justify-between items-center p-2 rounded-lg bg-rose-50/50 hover:bg-rose-50 gap-2">
+                                    <div className="truncate flex-1 pr-1">
+                                      <div className="flex items-center gap-1.5 flex-wrap">
+                                        <p className="text-xs font-bold text-slate-700 truncate">{ch.name}</p>
+                                        {ch.epgMatchName ? (
+                                          <span className="text-[9px] px-1.5 py-0.2 bg-amber-100 text-amber-800 rounded font-mono font-medium">
+                                            指定: {ch.epgMatchName}
+                                          </span>
+                                        ) : (
+                                          <span className="text-[9px] px-1 bg-slate-100 text-slate-500 rounded">
+                                            默认名匹配
+                                          </span>
+                                        )}
+                                      </div>
                                       <p className="text-[9px] text-slate-400 font-mono mt-0.5 truncate">EPG_ID: {ch.epgId}</p>
                                     </div>
-                                    <span className="text-[9px] px-1.5 py-0.5 rounded border border-rose-200 text-rose-500 flex-shrink-0">未找到映射</span>
+                                    <div className="flex items-center gap-1.5 shrink-0">
+                                      <span className="text-[9px] px-1.5 py-0.5 rounded border border-rose-200 text-rose-500">未找到映射</span>
+                                      <button
+                                        type="button"
+                                        onClick={() => openEpgPickerForChannel(ch)}
+                                        className="text-[10px] px-2 py-1 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-lg shadow-2xs transition cursor-pointer"
+                                      >
+                                        手动修改匹配
+                                      </button>
+                                    </div>
                                   </div>
                                 ))
                               )}
@@ -6840,12 +6931,32 @@ export default function App() {
                                 <p className="text-center text-[10px] text-slate-400 py-4">暂无频道匹配成功</p>
                               ) : (
                                 epgMappingData.mappedChannels.map((ch: any) => (
-                                  <div key={ch.id} className="flex justify-between items-center p-2 rounded-lg hover:bg-slate-50 border border-transparent hover:border-slate-100">
-                                    <div className="truncate flex-1 pr-2">
-                                      <p className="text-xs font-bold text-slate-700 truncate">{ch.name}</p>
+                                  <div key={ch.id} className="flex justify-between items-center p-2 rounded-lg hover:bg-slate-50 border border-transparent hover:border-slate-100 gap-2">
+                                    <div className="truncate flex-1 pr-1">
+                                      <div className="flex items-center gap-1.5 flex-wrap">
+                                        <p className="text-xs font-bold text-slate-700 truncate">{ch.name}</p>
+                                        {ch.epgMatchName ? (
+                                          <span className="text-[9px] px-1.5 py-0.2 bg-indigo-100 text-indigo-800 rounded font-mono font-bold">
+                                            手动: {ch.epgMatchName}
+                                          </span>
+                                        ) : (
+                                          <span className="text-[9px] px-1 bg-emerald-50 text-emerald-700 rounded border border-emerald-100">
+                                            按频道名自动匹配
+                                          </span>
+                                        )}
+                                      </div>
                                       <p className="text-[9px] text-slate-400 font-mono mt-0.5 truncate">映射到: {ch.matchedName} ({ch.matchedId})</p>
                                     </div>
-                                    <span className="text-[9px] px-1.5 py-0.5 rounded border border-emerald-200 text-emerald-600 flex-shrink-0 truncate max-w-[80px]" title={ch.sourceName}>{ch.sourceName}</span>
+                                    <div className="flex items-center gap-1.5 shrink-0">
+                                      <span className="text-[9px] px-1.5 py-0.5 rounded border border-emerald-200 text-emerald-600 truncate max-w-[80px]" title={ch.sourceName}>{ch.sourceName}</span>
+                                      <button
+                                        type="button"
+                                        onClick={() => openEpgPickerForChannel(ch)}
+                                        className="text-[10px] px-1.5 py-1 bg-slate-100 hover:bg-indigo-50 hover:text-indigo-600 text-slate-600 rounded font-medium border border-slate-200 transition cursor-pointer"
+                                      >
+                                        修改
+                                      </button>
+                                    </div>
                                   </div>
                                 ))
                               )}
@@ -7970,6 +8081,59 @@ export default function App() {
                       className="w-full text-xs p-2 border border-slate-200 rounded-lg focus:border-indigo-500 bg-slate-50 focus:outline-none placeholder-slate-400 text-slate-800"
                     />
                   </div>
+                </div>
+
+                {/* Manual EPG Match Override & Picker Card */}
+                <div className="p-3 bg-indigo-50/40 rounded-xl border border-indigo-100 space-y-2 font-sans">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-1.5">
+                      <Tv className="w-3.5 h-3.5 text-indigo-600" />
+                      <span className="text-xs font-bold text-slate-800">EPG 节目匹配模式 (可手动指定)</span>
+                    </div>
+                    <span className="text-[10px] text-slate-400">默认匹配忽略 epgId，按频道名称/别名自动对齐</span>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <div className="flex-1">
+                      <input 
+                        type="text"
+                        value={channelForm.epgMatchName}
+                        onChange={(e) => setChannelForm({ ...channelForm, epgMatchName: e.target.value })}
+                        placeholder="留空为默认自动匹配；或输入/选择 EPG 频道名或 ID"
+                        className="w-full text-xs p-2 border border-slate-200 rounded-lg focus:border-indigo-500 bg-white font-mono placeholder-slate-400 text-slate-800"
+                      />
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => openEpgPickerForChannel({ id: editingChannel?.id || "", name: channelForm.name, epgMatchName: channelForm.epgMatchName }, true)}
+                      className="px-2.5 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-[11px] font-bold rounded-lg shadow-xs transition cursor-pointer shrink-0 flex items-center gap-1"
+                    >
+                      <Search className="w-3 h-3" />
+                      从 EPG 库挑选
+                    </button>
+                    {channelForm.epgMatchName && (
+                      <button
+                        type="button"
+                        onClick={() => setChannelForm({ ...channelForm, epgMatchName: "" })}
+                        className="px-2 py-1.5 bg-slate-200 hover:bg-slate-300 text-slate-700 text-[11px] font-bold rounded-lg transition cursor-pointer shrink-0"
+                        title="清除手动指定，恢复默认按频道名称自动匹配"
+                      >
+                        恢复默认
+                      </button>
+                    )}
+                  </div>
+
+                  <p className="text-[10px] text-slate-500 leading-relaxed">
+                    {channelForm.epgMatchName ? (
+                      <span className="text-indigo-800 font-medium">
+                        已手动指定：优先使用 <span className="font-bold underline">{channelForm.epgMatchName}</span> 关联 EPG 节目单。
+                      </span>
+                    ) : (
+                      <span>
+                        当前：<span className="font-semibold text-emerald-700">默认使用频道名称自动匹配</span>（忽略 epgId，内置台湾频道繁简转换、主频/无线台及电视机构别名映射）。
+                      </span>
+                    )}
+                  </p>
                 </div>
 
                 {aiRecommendError && (
@@ -9515,6 +9679,230 @@ export default function App() {
         onClose={() => setIsAiSettingsOpen(false)}
         showFeedback={showFeedback}
       />
+
+      {/* Manual EPG Match Picker Modal */}
+      {isEpgPickerOpen && epgPickerTarget && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 font-sans overflow-hidden" id="epg_picker_modal">
+          <div className="bg-white rounded-2xl max-w-xl w-full max-h-[85vh] shadow-2xl border border-slate-100 flex flex-col animate-fade-in font-sans overflow-hidden">
+            {/* Modal Header */}
+            <div className="px-5 py-3.5 border-b border-slate-100 flex justify-between items-center bg-slate-50/80 shrink-0">
+              <div className="flex items-center gap-2.5 min-w-0">
+                <div className="w-7 h-7 rounded-lg bg-indigo-600 text-white flex items-center justify-center shadow-xs shrink-0">
+                  <Tv className="w-4 h-4" />
+                </div>
+                <div className="min-w-0">
+                  <h3 className="text-sm font-bold text-slate-800 truncate">
+                    手动关联 EPG 节目单 - {epgPickerTarget.name}
+                  </h3>
+                  <p className="text-[10px] text-slate-400 truncate">
+                    默认按频道名称匹配（忽略 epgId）。若未自动对齐，可在此搜索选择目标 EPG 频道。
+                  </p>
+                </div>
+              </div>
+              <button 
+                className="text-slate-400 hover:text-slate-600 p-1.5 rounded-lg hover:bg-slate-200/60 cursor-pointer transition shrink-0" 
+                onClick={() => setIsEpgPickerOpen(false)}
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Current Matching State Banner */}
+            <div className="px-5 py-2.5 bg-indigo-50/50 border-b border-indigo-100/60 flex items-center justify-between gap-2 shrink-0">
+              <div className="text-[11px] text-indigo-950 flex items-center gap-1.5 min-w-0 truncate">
+                <span className="text-slate-500 font-medium shrink-0">当前设定:</span>
+                {epgPickerTarget.epgMatchName ? (
+                  <span className="font-bold text-indigo-700 bg-indigo-100/70 px-2 py-0.5 rounded font-mono truncate">
+                    手动指定: {epgPickerTarget.epgMatchName}
+                  </span>
+                ) : (
+                  <span className="font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200 shrink-0">
+                    默认按频道名称自动匹配
+                  </span>
+                )}
+              </div>
+              {epgPickerTarget.epgMatchName && (
+                <button
+                  type="button"
+                  onClick={() => handleApplyEpgMatch("")}
+                  className="text-[11px] px-2.5 py-1 bg-white hover:bg-rose-50 text-rose-600 hover:text-rose-700 font-bold rounded-lg border border-rose-200 shadow-2xs transition cursor-pointer shrink-0"
+                >
+                  恢复默认匹配
+                </button>
+              )}
+            </div>
+
+            {/* Search Input Box */}
+            <div className="p-4 border-b border-slate-100 bg-white shrink-0">
+              <div className="relative">
+                <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                <input
+                  type="text"
+                  value={epgPickerQuery}
+                  onChange={(e) => {
+                    setEpgPickerQuery(e.target.value);
+                    fetchEpgPickerResults(e.target.value);
+                  }}
+                  placeholder="输入 EPG 频道名称或关键词搜索 (如: 台视, 民视, CCTV, 456505)..."
+                  className="w-full text-xs pl-9 pr-20 py-2 border border-slate-200 rounded-xl focus:border-indigo-500 bg-slate-50 focus:outline-none placeholder-slate-400 text-slate-800"
+                />
+                <button
+                  type="button"
+                  onClick={() => fetchEpgPickerResults(epgPickerQuery)}
+                  className="absolute right-1.5 top-1/2 -translate-y-1/2 px-2.5 py-1 bg-indigo-600 hover:bg-indigo-700 text-white text-[10px] font-bold rounded-lg transition cursor-pointer flex items-center gap-1"
+                >
+                  {epgPickerLoading ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Search className="w-3 h-3" />}
+                  检索
+                </button>
+              </div>
+
+              {/* Quick Preset Buttons for common queries */}
+              <div className="flex items-center gap-1.5 mt-2 flex-wrap text-[10px]">
+                <span className="text-slate-400">快速填入:</span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setEpgPickerQuery(epgPickerTarget.name);
+                    fetchEpgPickerResults(epgPickerTarget.name);
+                  }}
+                  className="px-2 py-0.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded transition cursor-pointer truncate max-w-[120px]"
+                >
+                  {epgPickerTarget.name}
+                </button>
+                {["台视", "中视", "华视", "民视", "TVBS", "公视", "三立", "东森", "八大", "纬来", "年代", "卫视"].map(tag => (
+                  <button
+                    key={tag}
+                    type="button"
+                    onClick={() => {
+                      setEpgPickerQuery(tag);
+                      fetchEpgPickerResults(tag);
+                    }}
+                    className="px-1.5 py-0.5 bg-slate-100 hover:bg-indigo-50 hover:text-indigo-600 text-slate-600 rounded transition cursor-pointer"
+                  >
+                    {tag}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Results List */}
+            <div className="flex-1 overflow-y-auto p-4 space-y-2 max-h-[360px] bg-slate-50/50">
+              {epgPickerLoading ? (
+                <div className="flex flex-col items-center justify-center py-10 text-slate-400">
+                  <RefreshCw className="w-6 h-6 animate-spin text-indigo-500 mb-2" />
+                  <p className="text-xs font-medium">正在检索 EPG 数据库频道...</p>
+                </div>
+              ) : epgPickerResults.length === 0 ? (
+                <div className="text-center py-10 bg-white rounded-xl border border-dashed border-slate-200 p-6">
+                  <Tv className="w-8 h-8 text-slate-300 mx-auto mb-2" />
+                  <p className="text-xs font-bold text-slate-600">未找到相关 EPG 频道</p>
+                  <p className="text-[10px] text-slate-400 mt-1">
+                    请尝试更换关键词，或在 EPG 管理中确认已启用对应的 EPG 来源。
+                  </p>
+                  {epgPickerQuery && (
+                    <div className="mt-4">
+                      <button
+                        type="button"
+                        onClick={() => handleApplyEpgMatch(epgPickerQuery.trim())}
+                        className="px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-xs font-bold rounded-lg border border-indigo-200 transition cursor-pointer"
+                      >
+                        直接强制手动指定为 &quot;{epgPickerQuery.trim()}&quot;
+                      </button>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                epgPickerResults.map((item: any, idx: number) => {
+                  const isCurrent = epgPickerTarget.epgMatchName === item.displayName || epgPickerTarget.epgMatchName === item.epgId;
+                  return (
+                    <div
+                      key={item.sourceId + "_" + item.epgId + "_" + idx}
+                      className={`p-3 rounded-xl border transition flex items-center justify-between gap-3 ${
+                        isCurrent 
+                          ? "bg-indigo-50/80 border-indigo-300 ring-1 ring-indigo-200" 
+                          : "bg-white border-slate-200/80 hover:border-indigo-200 hover:shadow-xs"
+                      }`}
+                    >
+                      <div className="flex items-center gap-3 min-w-0 flex-1">
+                        {item.logo ? (
+                          <img
+                            src={item.logo}
+                            alt=""
+                            referrerPolicy="no-referrer"
+                            className="w-8 h-8 object-contain rounded bg-slate-50 p-0.5 border border-slate-100 shrink-0"
+                            onError={(e) => { (e.target as HTMLElement).style.display = 'none'; }}
+                          />
+                        ) : (
+                          <div className="w-8 h-8 rounded bg-slate-100 flex items-center justify-center text-slate-400 shrink-0">
+                            <Tv className="w-4 h-4" />
+                          </div>
+                        )}
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="font-bold text-slate-800 text-xs truncate">
+                              {item.displayName}
+                            </span>
+                            <span className="text-[9px] px-1.5 py-0.2 bg-slate-100 text-slate-600 rounded font-mono truncate">
+                              ID: {item.epgId}
+                            </span>
+                            <span className="text-[9px] px-1.5 py-0.2 bg-indigo-50 text-indigo-700 rounded border border-indigo-100 truncate max-w-[120px]" title={item.sourceName}>
+                              {item.sourceName}
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-3 text-[10px] text-slate-400 mt-1">
+                            <span>节目条数: {item.programCount}</span>
+                            {item.currentTitle && (
+                              <span className="truncate text-slate-500">
+                                当前播出: <span className="text-slate-700 font-medium">{item.currentTitle}</span>
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-2 shrink-0">
+                        {isCurrent ? (
+                          <span className="px-2.5 py-1 bg-indigo-600 text-white text-[11px] font-bold rounded-lg flex items-center gap-1 shadow-2xs">
+                            <Check className="w-3 h-3" />
+                            当前选择
+                          </span>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => handleApplyEpgMatch(item.displayName || item.epgId)}
+                            className="px-3 py-1 bg-slate-100 hover:bg-indigo-600 hover:text-white text-slate-700 text-[11px] font-bold rounded-lg transition cursor-pointer"
+                          >
+                            选择此 EPG
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+
+            {/* Modal Footer */}
+            <div className="px-5 py-3 border-t border-slate-100 bg-slate-50 flex items-center justify-between gap-3 shrink-0">
+              <button
+                type="button"
+                onClick={() => handleApplyEpgMatch("")}
+                className="text-xs text-slate-600 hover:text-rose-600 font-medium transition cursor-pointer flex items-center gap-1"
+              >
+                <RotateCcw className="w-3.5 h-3.5" />
+                恢复默认按频道名称自动匹配
+              </button>
+              <button
+                type="button"
+                onClick={() => setIsEpgPickerOpen(false)}
+                className="px-4 py-1.5 bg-slate-200 hover:bg-slate-300 text-slate-700 text-xs font-bold rounded-xl transition cursor-pointer"
+              >
+                关闭
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
     </div>
   );
