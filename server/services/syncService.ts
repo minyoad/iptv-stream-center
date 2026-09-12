@@ -290,10 +290,10 @@ export async function performSync(config: SyncConfig, force = false): Promise<bo
             return;
           }
           const channelId = "ch_" + Math.random().toString(36).substring(2, 10);
-          const cleanName = stdInfo ? stdInfo.templateName : info.name;
+          const cleanName = info.name;
           const cleanAliases = stdInfo 
-            ? Array.from(new Set([cleanName, info.name, ...stdInfo.aliases, ...(info.alias || [])]))
-            : info.alias;
+            ? Array.from(new Set([cleanName, ...stdInfo.aliases, ...(info.alias || [])]))
+            : (info.alias || []);
 
           channel = {
             id: channelId,
@@ -308,7 +308,6 @@ export async function performSync(config: SyncConfig, force = false): Promise<bo
           importedChannelsCount++;
         } else {
           if (stdInfo) {
-            channel.name = stdInfo.templateName;
             helper.registerChannelAliases(channel, stdInfo.aliases);
           }
           if (info.alias) {
@@ -463,7 +462,7 @@ export async function performSync(config: SyncConfig, force = false): Promise<bo
               continue;
             }
             const channelId = "ch_" + Math.random().toString(36).substring(2, 10);
-            const cleanName = stdInfo ? stdInfo.templateName : name;
+            const cleanName = name;
             const cleanAliases = stdInfo 
               ? Array.from(new Set([cleanName, ...nameParts, ...stdInfo.aliases]))
               : Array.from(new Set(nameParts));
@@ -481,7 +480,6 @@ export async function performSync(config: SyncConfig, force = false): Promise<bo
             importedChannelsCount++;
           } else {
             if (stdInfo) {
-              channel.name = stdInfo.templateName;
               helper.registerChannelAliases(channel, stdInfo.aliases);
             }
             if (autoCreateChannel) {

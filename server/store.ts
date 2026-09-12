@@ -27,7 +27,7 @@ import {
 
 export { DATA_DIR, DATA_FILE, PLAYLIST_CACHE_DIR, READABLE_PLAYLIST_DIR };
 import { getDb } from "./db/sqlite";
-import { normalizeChannelName, generateDefaultEpgId } from "./utils/text";
+import { normalizeChannelName, generateDefaultEpgId, findAliasTemplate } from "./utils/text";
 import { isPrivateOrIntranetUrl } from "./utils/network";
 import { resolveChannelLogo } from "./aiService";
 
