@@ -2527,7 +2527,7 @@ export default function App() {
           // Web browsers (including iOS Safari / Chrome WebKit) cannot open raw TCP/UDP sockets for RTSP/RTMP via DOM fetch().
           // Inherit status directly from server-side socket test result to guarantee 100% server alignment consistency!
           clearTimeout(timer);
-          status = item.status === "inactive" ? "inactive" : "active";
+          status = item.status === "active" ? "active" : (item.status === "inactive" ? "inactive" : "unknown" as any);
           latency = status === "active" ? (item.latency && item.latency > 0 ? item.latency : 60) : 9999;
         } else {
           // Standard HTTP / HTTPS / HLS / FLV probe

@@ -431,15 +431,6 @@ export async function testSingleUrl(url: string, timeoutMs: number = 5000): Prom
         }
       }
 
-      if (isPrivateOrIntranetUrl(url)) {
-        return {
-          status: "active",
-          latency: 60,
-          resolution: parseResolution(url),
-          diagMsg: buildDiagMsg({ httpStatus: 200, contentType: "socket/intranet", reason: "专网/内网保留地址(免检测测通)" })
-        };
-      }
-
       const socketTimeout = Math.max(timeoutMs, 4000);
       return new Promise((resolve) => {
         const socket = net.connect({
@@ -465,48 +456,22 @@ export async function testSingleUrl(url: string, timeoutMs: number = 5000): Prom
         });
         socket.on("error", (err: any) => {
           socket.destroy();
-          if (isPrivateOrIntranetUrl(url) || urlLower.startsWith("rtsp://")) {
-            resolve({
-              status: "active",
-              latency: 80,
-              resolution: parseResolution(url),
-              diagMsg: buildDiagMsg({ httpStatus: 200, contentType: "socket/stream", reason: "RTSP 缺省握手忽略断开" })
-            });
-          } else {
-            resolve({
-              status: "inactive",
-              latency: Date.now() - startTime,
-              diagMsg: buildDiagMsg({ httpStatus: 0, contentType: "socket/stream", reason: `Socket 连接拒绝/失败: ${err?.message || 'ECONNREFUSED'}` })
-            });
-          }
+          resolve({
+            status: "inactive",
+            latency: Date.now() - startTime,
+            diagMsg: buildDiagMsg({ httpStatus: 0, contentType: "socket/stream", reason: `Socket 连接拒绝/失败: ${err?.message || 'ECONNREFUSED'}` })
+          });
         });
         socket.on("timeout", () => {
           socket.destroy();
-          if (isPrivateOrIntranetUrl(url) || urlLower.startsWith("rtsp://")) {
-            resolve({
-              status: "active",
-              latency: 80,
-              resolution: parseResolution(url),
-              diagMsg: buildDiagMsg({ httpStatus: 200, contentType: "socket/stream", reason: "RTSP 缺省握手超时忽略" })
-            });
-          } else {
-            resolve({
-              status: "inactive",
-              latency: Date.now() - startTime,
-              diagMsg: buildDiagMsg({ httpStatus: 0, contentType: "socket/stream", reason: `Socket 连接握手超时 (${socketTimeout}ms)` })
-            });
-          }
+          resolve({
+            status: "inactive",
+            latency: Date.now() - startTime,
+            diagMsg: buildDiagMsg({ httpStatus: 0, contentType: "socket/stream", reason: `Socket 连接握手超时 (${socketTimeout}ms)` })
+          });
         });
       });
     } catch (e: any) {
-      if (isPrivateOrIntranetUrl(url) || urlLower.startsWith("rtsp://")) {
-        return {
-          status: "active",
-          latency: 80,
-          resolution: parseResolution(url),
-          diagMsg: buildDiagMsg({ httpStatus: 200, contentType: "socket/stream", reason: "专网 RTSP 尝试建立握手" })
-        };
-      }
       return {
         status: "inactive",
         latency: Date.now() - startTime,

@@ -4920,9 +4920,6 @@ app.get("/api/channels", async (req, res) => {
                 s.isolated = false;
                 restoredRtspCount++;
               }
-              if (s.status === "inactive") {
-                s.status = "active";
-              }
               return; // Skip isolating RTSP / Intranet streams
             }
           }
@@ -4990,7 +4987,7 @@ app.get("/api/channels", async (req, res) => {
         ch.sources.push({
           id: `src_m3u_${ch.sources.length + 1}_${Date.now()}`,
           url,
-          status: "active",
+          status: "unknown",
           isolated: false
         });
       }
@@ -5112,7 +5109,7 @@ app.get("/api/channels", async (req, res) => {
           if (Array.isArray(item.sources)) {
             sources = item.sources;
           } else if (item.url) {
-            sources = [{ id: `src_imp_${idx}_1`, url: item.url, status: "active", isolated: false }];
+            sources = [{ id: `src_imp_${idx}_1`, url: item.url, status: "unknown", isolated: false }];
           }
           channels.push({
             id: chId,
