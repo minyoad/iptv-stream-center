@@ -2476,6 +2476,14 @@ export default function App() {
       if (res.ok) {
         const data = await res.json();
         listToTest = data.sources || [];
+        if (data.meta && listToTest.length > 0) {
+          const { specificIspCount = 0, bgpMultiCount = 0 } = data.meta;
+          if (specificIspCount > 0) {
+            showFeedback("success", `已智能排程 ${listToTest.length} 条待测线路：优先发送 ${specificIspCount} 条 [${clientTestIsp}] 专属线路（${bgpMultiCount} 条 BGP/多线已后置，可依靠服务端测速维护）`);
+          } else {
+            showFeedback("info", `已排程 ${listToTest.length} 条待测线路（含 ${bgpMultiCount} 条 BGP/多线及通用源，暂无该运营商专属专网源）`);
+          }
+        }
       }
     } catch (e) {
       console.error("无法拉取客户端代测线路清单:", e);
@@ -2580,7 +2588,7 @@ export default function App() {
     await Promise.all(pool);
 
     setIsClientTesting(false);
-    showFeedback("success", `[${clientTestIsp} + BGP/多线] 探针测速完成！评估出 ${(resultsTemp || []).filter(r => r.status === "active").length} 条可用源，正在自动同步至服务器...`);
+    showFeedback("success", `[${clientTestIsp} 专线优先] 探针测速完成！评估出 ${(resultsTemp || []).filter(r => r.status === "active").length} 条可用源，正在自动同步至服务器...`);
     
     // Automatically submit results
     if (resultsTemp.length > 0) {
@@ -5209,7 +5217,7 @@ export default function App() {
                           <span className="text-[9px] bg-sky-100 text-sky-700 px-2 py-0.5 rounded-full font-bold shrink-0">100% 契合</span>
                         </div>
                         <p className="text-[11px] text-slate-500 leading-relaxed font-semibold">
-                          在您的本地设备（含 iOS/Mobile 浏览器）上发起探针代测。HTML5 浏览器探针原生支持 HTTP/HTTPS/HLS/FLV 探测；遇到 RTSP/RTMP 协议源时将自动同步继承服务端 TCP Socket 测速数据，确保客户端仅匹配与播放其 ISP 运营商专享源。
+                          在您的本地设备（含 iOS/Mobile 浏览器）上发起探针代测。系统已开启<b>「ISP 专属线路优先分发」</b>策略，客户端将<b>严格优先测速需匹配对应运营商（如电信、联通、移动）的专网专线</b>；而全网通用的 BGP/多线可依靠服务端全网多线程测速，无需客户端重复消耗宝贵探针算力。
                         </p>
                       </div>
 
@@ -5417,7 +5425,7 @@ export default function App() {
                           <span className="text-emerald-400 font-bold block pb-1">4. 客户端探针 - 获取待测源清单接口 (Get Target Test Sources)：</span>
                           <span className="text-white font-extrabold pr-2">GET</span>
                           <span className="text-indigo-300 select-all">/api/sources/client-test-list?isp=中国电信&province=广东&onlyActive=true&limit=100&page=1</span>
-                          <p className="text-[10.5px] text-slate-400 pt-1 font-sans">自动返回匹配指定运营商 (如中国电信) + 所有 BGP/多线/未知 专线的线路。<strong>轮播线路已自动排除（由服务端轮播代理独立测速）</strong>，且开启了智能防重复测速机制，自动优先返回未测或极久未测直播源。支持 <strong>limit</strong> 与 <strong>page</strong> 分页。</p>
+                          <p className="text-[10.5px] text-slate-400 pt-1 font-sans"><strong>优先发送对应运营商 (如中国电信/联通/移动) 的专属专网线路</strong>，未知运营商次之，全网通用的 BGP/多线自动后置（可依靠服务端全网测速进行日常维护）。<strong>轮播线路已自动排除（由服务端轮播代理独立测速）</strong>，且开启了智能防重复测速机制，自动优先返回未测或极久未测直播源。支持 <strong>limit</strong> 与 <strong>page</strong> 分页。</p>
                         </div>
 
                         <div className="space-y-1 bg-slate-950 p-3 rounded-xl border border-slate-800 text-[11px] font-mono">

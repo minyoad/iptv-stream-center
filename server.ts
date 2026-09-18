@@ -2644,7 +2644,7 @@ app.get("/api/channels", async (req, res) => {
     });
   });
 
-  // Endpoint to fetch test list for client/browser probes, filtered by ISP + BGP/多线/未知, independent of UI filters
+  // Endpoint to fetch test list for client/browser probes, prioritizing specific ISP lines while deprioritizing BGP/multi-lines
   app.get("/api/sources/client-test-list", (req, res) => {
     const clientIsp = ((req.query.isp as string) || "").trim();
     const clientProvince = ((req.query.province as string) || "").trim();
@@ -2652,6 +2652,35 @@ app.get("/api/channels", async (req, res) => {
     const includeCarousel = req.query.includeCarousel === "true";
     const limit = req.query.limit ? parseInt(req.query.limit as string) : 0;
     const page = req.query.page ? parseInt(req.query.page as string) : 1;
+
+    // 运营商标准化识别工具
+    const normalizeIspKey = (str: string): string => {
+      const s = (str || "").toLowerCase();
+      if (s.includes("电信")) return "电信";
+      if (s.includes("联通")) return "联通";
+      if (s.includes("移动")) return "移动";
+      if (s.includes("广电")) return "广电";
+      if (s.includes("铁通")) return "铁通";
+      return "";
+    };
+
+    const isBgpOrMulti = (str: string): boolean => {
+      const s = (str || "").toLowerCase();
+      return (
+        s.includes("bgp") ||
+        s.includes("多线") ||
+        s.includes("混合") ||
+        s.includes("全网") ||
+        s.includes("双线") ||
+        s.includes("三线") ||
+        s.includes("公共") ||
+        s.includes("公网")
+      );
+    };
+
+    const clientIspKey = normalizeIspKey(clientIsp);
+    const hasSpecificClientIsp = Boolean(clientIspKey);
+    const clientProvClean = clientProvince && clientProvince !== "全国" && clientProvince !== "all" ? clientProvince.trim() : "";
 
     const targetSources: any[] = [];
 
@@ -2670,17 +2699,49 @@ app.get("/api/channels", async (req, res) => {
           return;
         }
 
+        const sIspRaw = (s.isp || "").trim();
+        const sIspKey = normalizeIspKey(sIspRaw);
+        const sIsBgp = isBgpOrMulti(sIspRaw);
+        const sIsUnknown = !sIspRaw || sIspRaw === "未知" || sIspRaw === "其它" || sIspRaw === "其他";
+
         let isIspMatch = false;
+        let tier = 2; // 0: 本地匹配ISP专线, 1: 对应ISP专线, 2: 未知ISP待识别, 3: BGP/多线(依靠服务端测速后置)
+
         if (!clientIsp || clientIsp === "all" || clientIsp === "全部") {
           isIspMatch = true;
+          if (sIspKey && !sIsBgp) {
+            tier = 0; // 各运营商单网专线优先客户端测速
+          } else if (sIsUnknown) {
+            tier = 1;
+          } else {
+            tier = 2; // BGP多线依靠服务端测速
+          }
+        } else if (hasSpecificClientIsp) {
+          // 客户端指定了具体运营商（如电信、联通、移动、广电等）
+          const isDirectIsp = !sIsBgp && (sIspKey === clientIspKey || sIspRaw.toLowerCase().includes(clientIsp.toLowerCase()));
+          if (isDirectIsp) {
+            isIspMatch = true;
+            // 需对应ISP的专属线路：最高优先级发送给客户端测速！
+            const sProv = (s.province || "").trim();
+            const isProvMatch = clientProvClean && sProv && (sProv.includes(clientProvClean) || clientProvClean.includes(sProv));
+            tier = isProvMatch ? 0 : 1; // 0: 同省同ISP专属线路，1: 同ISP专属线路
+          } else if (sIsUnknown) {
+            isIspMatch = true;
+            tier = 2; // 未知运营商线路，次级优先测速以探针推导归属
+          } else if (sIsBgp) {
+            isIspMatch = true;
+            tier = 3; // BGP多线，可依靠服务端测速，客户端测速排在最后
+          } else {
+            // 其他不匹配的单网运营商线路（如电信客户端不测联通/移动单网专线）
+            isIspMatch = false;
+          }
         } else {
-          const sIsp = (s.isp || "").toLowerCase();
+          // 客户端传入了其他类型（如选了"BGP"或"其它"）
+          const sIsp = sIspRaw.toLowerCase();
           const cIsp = clientIsp.toLowerCase();
-
-          if (!sIsp || sIsp === "未知" || sIsp.includes("bgp") || sIsp.includes("多线") || sIsp.includes("混合") || sIsp.includes("全网")) {
+          if (sIsp.includes(cIsp) || cIsp.includes(sIsp) || sIsBgp || sIsUnknown) {
             isIspMatch = true;
-          } else if (sIsp.includes(cIsp) || cIsp.includes(sIsp)) {
-            isIspMatch = true;
+            tier = sIsp.includes(cIsp) ? 0 : (sIsUnknown ? 1 : 2);
           }
         }
 
@@ -2697,13 +2758,15 @@ app.get("/api/channels", async (req, res) => {
             resolution: s.resolution,
             lastChecked: s.lastChecked || "",
             testCount: s.testCount || 0,
-            successCount: s.successCount || 0
+            successCount: s.successCount || 0,
+            _tier: tier
           });
         }
       });
     });
 
-    // 智能测速优先排序策略：
+    // 智能测速优先调度排序策略：
+    // 0. 【核心】：优先发送需对应 ISP 的线路测速（tier 0/1 绝对优先，BGP 多线依靠服务端测速排在最后 tier 3）
     // 1. 优先待测试/极久未测速的直播源（lastChecked 为空或时间戳越小/越久远排在最前面）
     // 2. 优先测试次数少的直播源（testCount 升序）
     // 3. 优先 pending 状态（status 为 unknown / checking 排在 active / inactive 之前）
@@ -2723,6 +2786,10 @@ app.get("/api/channels", async (req, res) => {
     });
 
     targetSources.sort((a, b) => {
+      // 0. ISP 匹配梯队：需对应 ISP 专线优先排在最前，BGP多线后置
+      if (a._tier !== b._tier) {
+        return a._tier - b._tier;
+      }
       // 1. 时间最久远的（0 / 从未测速的排在最前）
       if (a._checkTime !== b._checkTime) {
         return a._checkTime - b._checkTime;
@@ -2739,8 +2806,14 @@ app.get("/api/channels", async (req, res) => {
       return a._jitter - b._jitter;
     });
 
+    // 统计各梯队数量
+    const specificIspCount = targetSources.filter(s => s._tier <= 1).length;
+    const unknownIspCount = targetSources.filter(s => s._tier === 2).length;
+    const bgpMultiCount = targetSources.filter(s => s._tier === 3).length;
+
     // 清理临时排序辅助属性
     targetSources.forEach((s) => {
+      delete s._tier;
       delete s._checkTime;
       delete s._testCount;
       delete s._isPending;
@@ -2763,6 +2836,11 @@ app.get("/api/channels", async (req, res) => {
       limit: limit > 0 ? limit : totalCount,
       clientIsp: clientIsp || "全部",
       clientProvince: clientProvince || "全国",
+      meta: {
+        specificIspCount,
+        unknownIspCount,
+        bgpMultiCount
+      },
       sources: paginatedSources
     });
   });
