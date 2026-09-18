@@ -293,6 +293,11 @@ export function initSqlite(): Database.Database {
     VALUES (?, ?, ?, ?, ?)
   `).run("job_carousel_test", "轮播代理全网检测", "05:00", 1440, 0);
 
+  // Migrate existing client_access_logs to recognize MyTV-android
+  try {
+    db.prepare("UPDATE client_access_logs SET clientApp = 'MyTV-android' WHERE LOWER(userAgent) LIKE '%mytv-android%' AND clientApp != 'MyTV-android'").run();
+  } catch (e) {}
+
   // Ensure job_offline_retest exists
   db.prepare(`
     INSERT OR IGNORE INTO cron_jobs (id, name, startTime, intervalMinutes, active)

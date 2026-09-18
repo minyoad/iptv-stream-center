@@ -538,7 +538,11 @@ export default function StatsView({ channels, initialSubTab = "client_access" }:
                       </td>
                       <td className="py-3 px-4">
                         <div className="flex flex-col max-w-xs">
-                          <span className="font-semibold text-slate-700">{log.clientApp}</span>
+                          <span className={`font-semibold text-xs inline-flex items-center gap-1 ${
+                            log.clientApp === 'MyTV-android' ? 'text-teal-700 bg-teal-50 px-1.5 py-0.5 rounded border border-teal-200 w-fit' : 'text-slate-700'
+                          }`}>
+                            {log.clientApp}
+                          </span>
                           <span className="text-[10px] text-slate-400 truncate" title={log.userAgent}>
                             {log.userAgent || "-"}
                           </span>
@@ -572,7 +576,7 @@ export default function StatsView({ channels, initialSubTab = "client_access" }:
                       <td colSpan={7} className="py-12 text-center text-slate-400">
                         <Globe className="w-12 h-12 mx-auto mb-3 opacity-20" />
                         <p className="text-sm font-semibold">暂无客户端接口访问日志</p>
-                        <p className="text-xs text-slate-400 mt-1">当客户端（TiviMate、TVBox、PotPlayer等）请求 M3U / EPG 接口时将自动产生记录</p>
+                        <p className="text-xs text-slate-400 mt-1">当客户端（TiviMate、TVBox、MyTV-android、PotPlayer等）请求 M3U / EPG 接口时将自动产生记录</p>
                       </td>
                     </tr>
                   )}

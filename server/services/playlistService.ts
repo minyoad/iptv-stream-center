@@ -361,6 +361,7 @@ export function parseClientApp(ua: string): string {
   if (!ua) return "未知客户端 / Direct";
   const lower = ua.toLowerCase();
   
+  if (lower.includes("mytv-android")) return "MyTV-android";
   if (lower.includes("tivimate")) return "TiviMate";
   if (lower.includes("tvbox") || lower.includes("fongmi") || lower.includes("catvod") || lower.includes("okplayer") || lower.includes("q21")) return "TVBox / 影视仓";
   if (lower.includes("potplayer")) return "PotPlayer";

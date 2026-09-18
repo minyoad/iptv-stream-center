@@ -767,11 +767,16 @@ export function updateSourceDbStatus(
       }
 
       if (status === "active" || status === "inactive") {
+        source.testCount = (source.testCount || 0) + 1;
+        if (status === "active") {
+          source.successCount = (source.successCount || 0) + 1;
+        }
+
         try {
           const db = getDb();
           db.prepare(`
             UPDATE sources 
-            SET status = ?, latency = ?, resolution = ?, lastChecked = ?, isolated = ?
+            SET status = ?, latency = ?, resolution = ?, lastChecked = ?, isolated = ?, testCount = ?, successCount = ?
             WHERE id = ?
           `).run(
             source.status,
@@ -779,6 +784,8 @@ export function updateSourceDbStatus(
             source.resolution || "",
             source.lastChecked,
             source.isolated ? 1 : 0,
+            source.testCount || 0,
+            source.successCount || 0,
             source.id
           );
         } catch (_) {}
@@ -867,6 +874,7 @@ export async function retestOfflineSources(concurrency = 6): Promise<{
   total: number;
   recovered: number;
   stillOffline: number;
+  autoIsolated: number;
   message: string;
 }> {
   if (testStatus.status === "running") {
@@ -898,6 +906,7 @@ export async function retestOfflineSources(concurrency = 6): Promise<{
       total: 0,
       recovered: 0,
       stillOffline: 0,
+      autoIsolated: 0,
       message: "当前全域没有处于失效状态的未隔离线路，无需复测",
     };
   }
@@ -932,16 +941,45 @@ export async function retestOfflineSources(concurrency = 6): Promise<{
     }
   }
 
-  if (recovered > 0) {
+  // 复测结束后：检查失效离线线路，将失效次数大于5次的顽固线路自动执行隔离
+  let autoIsolated = 0;
+  const db = getDb();
+  const updateIsolatedStmt = db.prepare("UPDATE sources SET isolated = 1 WHERE id = ?");
+
+  channels.forEach((channel) => {
+    if (!channel.sources) return;
+    channel.sources.forEach((source) => {
+      if (source.isolated) return;
+      const isInvalid = source.status === "inactive" || (source.latency !== undefined && source.latency >= 9999);
+      if (isInvalid) {
+        // 失效次数：净失败次数 = (testCount || 0) - (successCount || 0)
+        const failures = (source.testCount || 0) - (source.successCount || 0);
+        if (failures > 5) {
+          source.isolated = true;
+          autoIsolated++;
+          try {
+            updateIsolatedStmt.run(source.id);
+          } catch (_) {}
+        }
+      }
+    });
+  });
+
+  if (recovered > 0 || autoIsolated > 0) {
     invalidatePlaylistExportCache();
     saveData(true);
   }
 
-  const message = `成功复测 ${targetSources.length} 条未隔离失效线路：${recovered} 条恢复正常上线，${stillOffline} 条仍不可用（已跳过所有软隔离垃圾源）`;
+  let message = `成功复测 ${targetSources.length} 条未隔离失效线路：${recovered} 条恢复正常上线，${stillOffline} 条仍不可用`;
+  if (autoIsolated > 0) {
+    message += `（已将 ${autoIsolated} 条累计失效次数大于5次的线路自动隔离）`;
+  }
+
   return {
     total: targetSources.length,
     recovered,
     stillOffline,
+    autoIsolated,
     message,
   };
 }
