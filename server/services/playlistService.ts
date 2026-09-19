@@ -201,6 +201,42 @@ export function getPlayableSources(sources: LiveSource[], targetIsp: string, tar
     });
   }
 
+  // 3. 【核心针对 RTSP 协议链接的严格跨区域隔离】
+  // RTSP 链接多为城域专网/IPTV专网，跨省或跨运营商通常无法跨越路由，必须实施严格隔离
+  filtered = filtered.filter(src => {
+    const isRtsp = (src.url || "").trim().toLowerCase().startsWith("rtsp://");
+    if (!isRtsp) return true;
+
+    const srcProv = (src.province || "").trim();
+    const srcIsp = (src.isp || "").trim().replace("中国", "");
+    const isNationwideSrc = isNationwideProvince(srcProv);
+
+    // 规则 A：若 RTSP 属于具体省份（如广东、福建、四川等）
+    if (!isNationwideSrc) {
+      const normSrcProv = normalizeProvinceName(srcProv);
+      if (hasTargetProv) {
+        // 目标省份与源省份不匹配时，严禁下发该 RTSP
+        if (normSrcProv !== normTargetProv) {
+          return false;
+        }
+      } else {
+        // 全网/未定位省份的通用请求，严禁将特定省份的 RTSP 专网源作为通用源导出（避免外省黑屏）
+        return false;
+      }
+    }
+
+    // 规则 B：若 RTSP 属于具体运营商（电信/移动/联通/广电）
+    if (srcIsp && srcIsp !== "BGP" && srcIsp !== "未知" && srcIsp !== "其它") {
+      if (normTargetIsp) {
+        if (!srcIsp.includes(normTargetIsp) && !normTargetIsp.includes(srcIsp)) {
+          return false; // 排除跨运营商的 RTSP
+        }
+      }
+    }
+
+    return true;
+  });
+
   if (targetIsp || targetProvince) {
     filtered = sortSourcesByGeo(filtered, targetProvince, targetIsp);
   }

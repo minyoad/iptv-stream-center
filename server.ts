@@ -181,6 +181,14 @@ import {
   parseClientApp
 } from "./server/services/playlistService";
 
+// RTSP Geo & ISP Detection Services
+import {
+  isRtspUrl,
+  detectRtspGeoAndIsp,
+  enrichSourceIfRtsp,
+  enrichChannelsRtspSources
+} from "./server/services/rtspGeoService";
+
 const db = getDb();
 
 async function startServer() {
@@ -1757,7 +1765,7 @@ app.get("/api/channels", async (req, res) => {
   });
 
   // Source endpoints
-  app.post("/api/channels/:channelId/sources", (req, res) => {
+  app.post("/api/channels/:channelId/sources", async (req, res) => {
     const { channelId } = req.params;
     const { url, province, isp, resolution } = req.body;
 
@@ -1774,11 +1782,29 @@ app.get("/api/channels", async (req, res) => {
       return res.status(400).json({ error: "该直播源链接在此频道下已存在，重复添加已自动拦截" });
     }
 
+    let finalProvince = province || "全国";
+    let finalIsp = isp || "BGP";
+
+    // 针对 RTSP 协议链接，入库时自动检测所属 ISP 和省份
+    if (isRtspUrl(url)) {
+      const needsProv = !province || province === "全国" || province === "未知";
+      const needsIsp = !isp || isp === "BGP" || isp === "未知" || isp === "其它";
+      if (needsProv || needsIsp) {
+        try {
+          const detected = await detectRtspGeoAndIsp(url, `${channel.name} ${channel.alias?.join(" ") || ""}`);
+          if (needsProv && detected.province) finalProvince = detected.province;
+          if (needsIsp && detected.isp && detected.isp !== "BGP") finalIsp = detected.isp;
+        } catch (e) {
+          console.warn("[RTSP Ingest Auto-Detect Error]", e);
+        }
+      }
+    }
+
     const newSource: LiveSource = {
       id: "src_" + Math.random().toString(36).substring(2, 10),
       url,
-      province: province || "全国",
-      isp: isp || "BGP",
+      province: finalProvince,
+      isp: finalIsp,
       status: "unknown",
       resolution: resolution || undefined,
     };
@@ -1789,7 +1815,7 @@ app.get("/api/channels", async (req, res) => {
     res.status(201).json(newSource);
   });
 
-  app.put("/api/channels/:channelId/sources/:sourceId", (req, res) => {
+  app.put("/api/channels/:channelId/sources/:sourceId", async (req, res) => {
     const { channelId, sourceId } = req.params;
     const { url, province, isp, status, resolution } = req.body;
 
@@ -1811,6 +1837,19 @@ app.get("/api/channels", async (req, res) => {
     if (isp) source.isp = isp;
     if (status) source.status = status;
     if (resolution !== undefined) source.resolution = resolution;
+
+    // 若当前为 RTSP 协议源且省份或 ISP 不明确，自动检测补全
+    if (isRtspUrl(source.url)) {
+      const needsProv = !source.province || source.province === "全国" || source.province === "未知";
+      const needsIsp = !source.isp || source.isp === "BGP" || source.isp === "未知" || source.isp === "其它";
+      if (needsProv || needsIsp) {
+        try {
+          const detected = await detectRtspGeoAndIsp(source.url, `${channel.name} ${channel.alias?.join(" ") || ""}`);
+          if (needsProv && detected.province) source.province = detected.province;
+          if (needsIsp && detected.isp && detected.isp !== "BGP") source.isp = detected.isp;
+        } catch (e) {}
+      }
+    }
 
     saveData();
     res.json(source);
@@ -1993,6 +2032,65 @@ app.get("/api/channels", async (req, res) => {
       saveData();
     }
     res.json({ success: true, count: deletedCount });
+  });
+
+  // Batch / Full-library RTSP ISP & Province Auto-Detection
+  app.post("/api/sources/rtsp-auto-detect", async (req, res) => {
+    const { sourceIds } = req.body || {};
+    try {
+      let targetSources: { source: LiveSource; contextText: string }[] = [];
+      channels.forEach((c) => {
+        c.sources.forEach((s) => {
+          if (isRtspUrl(s.url)) {
+            if (!Array.isArray(sourceIds) || sourceIds.length === 0 || sourceIds.includes(s.id)) {
+              targetSources.push({
+                source: s,
+                contextText: `${c.name} ${c.alias?.join(" ") || ""}`
+              });
+            }
+          }
+        });
+      });
+
+      if (targetSources.length === 0) {
+        return res.json({ success: true, count: 0, message: "未发现需要检测的 RTSP 直播源" });
+      }
+
+      let updatedCount = 0;
+      const concurrency = 6;
+      for (let i = 0; i < targetSources.length; i += concurrency) {
+        const batch = targetSources.slice(i, i + concurrency);
+        const results = await Promise.all(
+          batch.map(async (item) => {
+            const detected = await detectRtspGeoAndIsp(item.source.url, item.contextText);
+            let changed = false;
+            if (detected.province && detected.province !== "全国") {
+              item.source.province = detected.province;
+              changed = true;
+            }
+            if (detected.isp && detected.isp !== "BGP" && detected.isp !== "未知") {
+              item.source.isp = detected.isp;
+              changed = true;
+            }
+            return changed;
+          })
+        );
+        updatedCount += results.filter(Boolean).length;
+      }
+
+      if (updatedCount > 0) {
+        saveData();
+      }
+
+      res.json({
+        success: true,
+        scanned: targetSources.length,
+        count: updatedCount,
+        message: `扫描了 ${targetSources.length} 条 RTSP 线路，成功识别并更新 ${updatedCount} 条线路的省份与运营商归属`
+      });
+    } catch (e: any) {
+      res.status(500).json({ error: `RTSP 检测失败: ${e.message || e}` });
+    }
   });
 
   // Bulk Upload File Handler Endpoint
@@ -5512,6 +5610,14 @@ app.get("/api/channels", async (req, res) => {
   app.listen(PORT, "0.0.0.0", () => {
     preGenerateIspPlaylists();
     startCronScheduler();
+    enrichChannelsRtspSources(channels).then((c) => {
+      if (c > 0) {
+        saveData();
+        console.log(`[RTSP Startup Geo Auto-Detect] Automatically enriched ${c} RTSP sources with ISP & Province.`);
+      }
+    }).catch((err) => {
+      console.warn("[RTSP Startup Geo Auto-Detect Error]", err);
+    });
     console.log(`Server loaded with ${channels.length} channels, running on http://localhost:${PORT}`);
   });
 }

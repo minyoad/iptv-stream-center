@@ -35,6 +35,7 @@ import {
   retestOfflineSources
 } from "./speedTestService";
 import { performEpgSync } from "./epgService";
+import { enrichSourceIfRtsp, isRtspUrl } from "./rtspGeoService";
 
 export class ChannelImportHelper {
   private channels: Channel[];
@@ -169,11 +170,28 @@ export class ChannelImportHelper {
       };
       if (!ch.sources) ch.sources = [];
       ch.sources.push(newSource);
+
+      if (isRtspUrl(url)) {
+        enrichSourceIfRtsp(newSource, `${ch.name} ${ch.alias?.join(" ") || ""}`).then(changed => {
+          if (changed) saveData();
+        }).catch(() => {});
+      }
+
       return { added: true, source: newSource };
     } else {
-      if (isp) {
-        const existing = ch.sources.find(s => s.url === url);
-        if (existing) existing.isp = isp;
+      const existing = ch.sources.find(s => s.url === url);
+      if (existing) {
+        if (isp && (!existing.isp || existing.isp === "BGP" || existing.isp === "未知")) {
+          existing.isp = isp;
+        }
+        if (province && (!existing.province || existing.province === "全国" || existing.province === "未知")) {
+          existing.province = province;
+        }
+        if (isRtspUrl(url)) {
+          enrichSourceIfRtsp(existing, `${ch.name} ${ch.alias?.join(" ") || ""}`).then(changed => {
+            if (changed) saveData();
+          }).catch(() => {});
+        }
       }
       return { added: false };
     }

@@ -2468,6 +2468,27 @@ export default function App() {
     }
   };
 
+  const handleRtspAutoDetect = async (sourceIds?: string[]) => {
+    try {
+      showFeedback("info", "正在对 RTSP 直播源执行 IP/DNS 归属地与运营商智能解析探测...");
+      const res = await fetch("/api/sources/rtsp-auto-detect", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sourceIds })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        showFeedback("success", data.message || `成功检测并更新了 ${data.count} 条 RTSP 线路的归属`);
+        await fetchData();
+      } else {
+        const err = await res.json();
+        showFeedback("error", err.error || "RTSP 检测失败");
+      }
+    } catch (e) {
+      showFeedback("error", "网络连接异常");
+    }
+  };
+
   const fetchClientSideProbeList = async () => {
     let listToTest: any[] = [];
     try {
@@ -5630,6 +5651,14 @@ export default function App() {
                           取消隔离
                         </button>
                         <button
+                          onClick={() => handleRtspAutoDetect(selectedGlobalSourceIds)}
+                          className="bg-purple-600 hover:bg-purple-700 text-white text-[11px] sm:text-xs font-bold px-3 py-2 rounded-xl transition cursor-pointer flex items-center justify-center gap-1"
+                          title="自动识别选中线路中的 RTSP 省份和运营商归属"
+                        >
+                          <Compass className="w-3.5 h-3.5" />
+                          RTSP归属检测
+                        </button>
+                        <button
                           onClick={handleGlobalBatchDelete}
                           className="bg-rose-600 hover:bg-rose-700 text-white text-[11px] sm:text-xs font-bold px-3 py-2 rounded-xl transition cursor-pointer flex items-center justify-center gap-1 col-span-2 sm:col-span-1"
                         >
@@ -8680,6 +8709,18 @@ export default function App() {
                   className="w-full text-xs p-2.5 border border-slate-200 rounded-xl focus:border-indigo-500 bg-slate-50 focus:outline-none font-mono"
                 />
               </div>
+
+              {sourceForm.url.trim().toLowerCase().startsWith("rtsp://") && (
+                <div className="p-2.5 rounded-xl bg-purple-50 border border-purple-200 text-[11px] text-purple-800 space-y-1">
+                  <div className="font-bold flex items-center gap-1.5">
+                    <ShieldCheck className="w-3.5 h-3.5 text-purple-600 shrink-0" />
+                    RTSP 专网协议：已启用入库归属检测与严格跨区域隔离保护
+                  </div>
+                  <p className="text-purple-600 text-[10px] leading-relaxed">
+                    系统在入库及导出时将严格绑定该 RTSP 的 ISP 与省份，非对应省份或运营商的客户端将严格隔离排除，避免跨区黑屏。
+                  </p>
+                </div>
+              )}
 
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-1.5">
