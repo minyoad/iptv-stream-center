@@ -1,7 +1,6 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { History, Trash2, MapPin, Globe, Zap, Users, RefreshCw, BarChart2, Filter, Search, Terminal, Laptop, HardDrive, Clock } from 'lucide-react';
+import { History, Trash2, MapPin, Globe, Zap, Users, RefreshCw, BarChart2, Filter, Search, Terminal, Laptop, HardDrive, Clock, Activity, Copy, AlertCircle, CheckCircle, XCircle, Check, ExternalLink, RotateCw } from 'lucide-react';
 import { Channel } from '../types';
-import { Activity, Copy, AlertCircle, CheckCircle, XCircle } from 'lucide-react';
 import { authFetch as fetch } from "../utils/api";
 
 interface StatsViewProps {
@@ -15,6 +14,121 @@ export default function StatsView({ channels, initialSubTab = "client_access" }:
   const [reports, setReports] = useState<any[]>([]);
   const [activeTab, setActiveTab] = useState<"client_access" | "current" | "history">(initialSubTab);
   const [selectedReport, setSelectedReport] = useState<any>(null);
+
+  // Detailed report modal states & functions
+  const [reportFilterStatus, setReportFilterStatus] = useState<"all" | "active" | "inactive">("all");
+  const [reportSearchText, setReportSearchText] = useState("");
+  const [testingSourceIds, setTestingSourceIds] = useState<Set<string>>(new Set());
+  const [copiedSourceId, setCopiedSourceId] = useState<string | null>(null);
+  const [retestingAll, setRetestingAll] = useState(false);
+
+  // Helper to get complete metadata (URL, Channel Name, ISP, Province) for any test detail item
+  const getSourceMeta = (item: any) => {
+    let channelName = item.channelName || "";
+    let url = item.url || "";
+    let isp = item.isp || "";
+    let province = item.province || "";
+
+    if (!url || !channelName) {
+      for (const c of channels || []) {
+        if (item.channelId && c.id !== item.channelId) continue;
+        const src = (c.sources || []).find((s: any) => s.id === item.sourceId);
+        if (src) {
+          if (!url) url = src.url;
+          if (!channelName) channelName = c.name;
+          if (!isp) isp = src.isp || "未知";
+          if (!province) province = src.province || "全国";
+          break;
+        }
+      }
+    }
+    return {
+      channelName: channelName || item.channelId || item.sourceId || "未知频道",
+      url: url || "",
+      isp: isp || "未知",
+      province: province || "全国"
+    };
+  };
+
+  const retestSingleSource = async (item: any) => {
+    const meta = getSourceMeta(item);
+    if (!meta.url) return;
+
+    setTestingSourceIds(prev => new Set(prev).add(item.sourceId));
+    try {
+      const password = localStorage.getItem("iptv_admin_password") || "";
+      const res = await fetch("/api/sources/test-single", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-admin-password": password
+        },
+        body: JSON.stringify({
+          sourceId: item.sourceId,
+          channelId: item.channelId,
+          url: meta.url
+        })
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        setSelectedReport((prevReport: any) => {
+          if (!prevReport || !prevReport.details) return prevReport;
+          const updatedDetails = prevReport.details.map((d: any) => {
+            if (d.sourceId === item.sourceId) {
+              return {
+                ...d,
+                status: data.status,
+                latency: data.latency,
+                resolution: data.resolution,
+                diagMsg: data.diagMsg,
+                url: meta.url,
+                channelName: meta.channelName,
+                isp: meta.isp,
+                province: meta.province
+              };
+            }
+            return d;
+          });
+
+          const activeCount = updatedDetails.filter((d: any) => d.status === "active").length;
+          const inactiveCount = updatedDetails.filter((d: any) => d.status === "inactive").length;
+
+          return {
+            ...prevReport,
+            activeCount,
+            inactiveCount,
+            details: updatedDetails
+          };
+        });
+      }
+    } catch (e) {
+      console.error("现场测速线路异常:", e);
+    } finally {
+      setTestingSourceIds(prev => {
+        const next = new Set(prev);
+        next.delete(item.sourceId);
+        return next;
+      });
+    }
+  };
+
+  const retestBatchSources = async (targetItems: any[]) => {
+    if (!targetItems || targetItems.length === 0) return;
+    setRetestingAll(true);
+    const queue = [...targetItems];
+    const worker = async () => {
+      while (queue.length > 0) {
+        const item = queue.shift();
+        if (item) {
+          await retestSingleSource(item);
+        }
+      }
+    };
+    const pool = Array.from({ length: Math.min(4, targetItems.length) }, worker);
+    await Promise.all(pool);
+    setRetestingAll(false);
+  };
 
   // Client access statistics state
   const [clientStats, setClientStats] = useState<any>(null);
@@ -795,60 +909,292 @@ export default function StatsView({ channels, initialSubTab = "client_access" }:
       )}
 
       {selectedReport && (
-        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl max-w-4xl w-full flex flex-col max-h-[85vh] shadow-2xl overflow-hidden animate-fade-in">
-            <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-slate-50">
-              <h3 className="text-sm font-bold text-slate-800 flex items-center gap-2">
-                <Activity className="w-4 h-4 text-indigo-500" />
-                单次测速详细报告 - {new Date(selectedReport.createdAt).toLocaleString()}
-              </h3>
-              <button onClick={() => setSelectedReport(null)} className="text-slate-400 hover:text-slate-600">
-                <XCircle className="w-5 h-5" />
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-5">
+          <div className="bg-white rounded-2xl max-w-5xl w-full flex flex-col max-h-[90vh] shadow-2xl overflow-hidden animate-fade-in border border-slate-200">
+            {/* Modal Header */}
+            <div className="p-4 border-b border-slate-200 flex justify-between items-center bg-slate-900 text-white shrink-0">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-xl bg-indigo-500/20 border border-indigo-400/30 flex items-center justify-center text-indigo-400">
+                  <Activity className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-black tracking-wide text-slate-100 flex items-center gap-2">
+                    单次测速详细报告
+                    <span className="text-[10.5px] font-mono font-normal text-indigo-300 bg-indigo-950/80 px-2 py-0.5 rounded border border-indigo-800/60">
+                      {new Date(selectedReport.createdAt).toLocaleString()}
+                    </span>
+                  </h3>
+                  <p className="text-[10px] text-slate-400 mt-0.5 font-sans">
+                    测速探针真实物理打点记录 · 支持在线检索与现场重新深度验证
+                  </p>
+                </div>
+              </div>
+              <button 
+                onClick={() => { setSelectedReport(null); setReportSearchText(""); setReportFilterStatus("all"); }} 
+                className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800 transition cursor-pointer"
+                title="关闭弹窗"
+              >
+                <XCircle className="w-6 h-6" />
               </button>
             </div>
-            <div className="p-4 flex gap-4 border-b border-slate-100 overflow-x-auto text-xs whitespace-nowrap">
-               <div className="bg-slate-100 px-3 py-1.5 rounded-lg">总探测线路数: <span className="font-bold">{selectedReport.totalTested}</span></div>
-               <div className="bg-emerald-50 text-emerald-700 px-3 py-1.5 rounded-lg">连通可用: <span className="font-bold">{selectedReport.activeCount}</span></div>
-               <div className="bg-rose-50 text-rose-700 px-3 py-1.5 rounded-lg">离线阻断: <span className="font-bold">{selectedReport.inactiveCount}</span></div>
-               <div className="bg-slate-100 px-3 py-1.5 rounded-lg flex items-center gap-1.5"><MapPin className="w-3.5 h-3.5" />环境: <span className="font-bold">{selectedReport.clientProvince || "未知"} / {selectedReport.clientIsp || "未知"}</span></div>
+
+            {/* Modal Stats & Filter Banner */}
+            <div className="p-3.5 bg-slate-50 border-b border-slate-200 flex flex-col gap-3 shrink-0">
+              <div className="flex flex-wrap items-center justify-between gap-2.5 text-xs">
+                {/* Metrics */}
+                <div className="flex flex-wrap items-center gap-2 font-mono">
+                  <div className="bg-white px-3 py-1.5 rounded-xl border border-slate-200 text-slate-700 shadow-2xs font-semibold">
+                    总探测数: <span className="font-extrabold text-slate-900">{selectedReport.totalTested}</span>
+                  </div>
+                  <div className="bg-emerald-50 text-emerald-800 px-3 py-1.5 rounded-xl border border-emerald-200 shadow-2xs font-semibold">
+                    连通可用: <span className="font-black text-emerald-600">{selectedReport.activeCount}</span>
+                  </div>
+                  <div className="bg-rose-50 text-rose-800 px-3 py-1.5 rounded-xl border border-rose-200 shadow-2xs font-semibold">
+                    离线阻断: <span className="font-black text-rose-600">{selectedReport.inactiveCount}</span>
+                  </div>
+                  <div className="bg-indigo-50/70 text-indigo-900 px-3 py-1.5 rounded-xl border border-indigo-200/80 shadow-2xs flex items-center gap-1.5 font-semibold">
+                    <MapPin className="w-3.5 h-3.5 text-indigo-500 shrink-0" />
+                    测速环境: <span className="font-bold">{selectedReport.clientProvince || "未知"} / {selectedReport.clientIsp || "未知"}</span>
+                  </div>
+                </div>
+
+                {/* Batch Retest Action Buttons */}
+                <div className="flex items-center gap-2">
+                  <button
+                    disabled={retestingAll || !selectedReport.details || selectedReport.inactiveCount === 0}
+                    onClick={() => {
+                      const failItems = (selectedReport.details || []).filter((d: any) => d.status === "inactive");
+                      retestBatchSources(failItems);
+                    }}
+                    className="px-3 py-1.5 bg-rose-600 hover:bg-rose-700 disabled:opacity-50 text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer shadow-sm shadow-rose-200"
+                    title="对所有离线阻断的线路发起现场复测验证"
+                  >
+                    <Zap className={`w-3.5 h-3.5 ${retestingAll ? "animate-bounce" : ""}`} />
+                    {retestingAll ? "复测验证中..." : `现场复测离线源 (${(selectedReport.details || []).filter((d: any) => d.status === "inactive").length}条)`}
+                  </button>
+                  <button
+                    disabled={retestingAll || !selectedReport.details || selectedReport.details.length === 0}
+                    onClick={() => retestBatchSources(selectedReport.details || [])}
+                    className="px-3 py-1.5 bg-slate-800 hover:bg-slate-900 disabled:opacity-50 text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer"
+                    title="对本次报告所有线路发起全量复测"
+                  >
+                    <RotateCw className={`w-3.5 h-3.5 ${retestingAll ? "animate-spin" : ""}`} />
+                    全量复测
+                  </button>
+                </div>
+              </div>
+
+              {/* Search & Filter Controls */}
+              <div className="flex flex-col sm:flex-row items-center justify-between gap-2.5 pt-1">
+                {/* Search Box */}
+                <div className="relative w-full sm:w-80">
+                  <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-2.5" />
+                  <input
+                    type="text"
+                    value={reportSearchText}
+                    onChange={(e) => setReportSearchText(e.target.value)}
+                    placeholder="按频道名、URL 关键字或源 ID 搜索..."
+                    className="w-full text-xs pl-8 pr-7 py-1.5 bg-white border border-slate-200 rounded-xl focus:outline-none focus:border-indigo-500 font-medium text-slate-700 shadow-2xs"
+                  />
+                  {reportSearchText && (
+                    <button 
+                      onClick={() => setReportSearchText("")}
+                      className="absolute right-2 top-2 text-slate-400 hover:text-slate-600 text-xs font-bold"
+                    >
+                      ✕
+                    </button>
+                  )}
+                </div>
+
+                {/* Filter Tabs */}
+                <div className="flex items-center gap-1 bg-slate-200/60 p-1 rounded-xl text-xs font-bold text-slate-600 w-full sm:w-auto">
+                  <button
+                    onClick={() => setReportFilterStatus("all")}
+                    className={`flex-1 sm:flex-initial px-3 py-1 rounded-lg transition ${reportFilterStatus === "all" ? "bg-white text-indigo-600 shadow-2xs" : "hover:text-slate-900"}`}
+                  >
+                    全部 ({(selectedReport.details || []).length})
+                  </button>
+                  <button
+                    onClick={() => setReportFilterStatus("active")}
+                    className={`flex-1 sm:flex-initial px-3 py-1 rounded-lg transition ${reportFilterStatus === "active" ? "bg-emerald-500 text-white shadow-2xs" : "hover:text-slate-900"}`}
+                  >
+                    仅可用 ({(selectedReport.details || []).filter((d: any) => d.status === "active").length})
+                  </button>
+                  <button
+                    onClick={() => setReportFilterStatus("inactive")}
+                    className={`flex-1 sm:flex-initial px-3 py-1 rounded-lg transition ${reportFilterStatus === "inactive" ? "bg-rose-500 text-white shadow-2xs" : "hover:text-slate-900"}`}
+                  >
+                    仅离线 ({(selectedReport.details || []).filter((d: any) => d.status === "inactive").length})
+                  </button>
+                </div>
+              </div>
             </div>
-            <div className="overflow-y-auto flex-1 p-4 bg-slate-50">
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-                {selectedReport.details && selectedReport.details.map((item: any, i: number) => {
-                  const isOk = item.status === "active";
+
+            {/* Modal Body: Cards List */}
+            <div className="overflow-y-auto flex-1 p-4 bg-slate-100/70">
+              {(() => {
+                const filteredDetails = (selectedReport.details || []).filter((item: any) => {
+                  const meta = getSourceMeta(item);
+                  // Status Filter
+                  if (reportFilterStatus === "active" && item.status !== "active") return false;
+                  if (reportFilterStatus === "inactive" && item.status !== "inactive") return false;
+                  
+                  // Text Search Filter
+                  if (reportSearchText) {
+                    const q = reportSearchText.toLowerCase();
+                    const matchName = meta.channelName.toLowerCase().includes(q);
+                    const matchUrl = meta.url.toLowerCase().includes(q);
+                    const matchId = (item.sourceId || "").toLowerCase().includes(q);
+                    const matchChannelId = (item.channelId || "").toLowerCase().includes(q);
+                    return matchName || matchUrl || matchId || matchChannelId;
+                  }
+                  return true;
+                });
+
+                if (filteredDetails.length === 0) {
                   return (
-                    <div key={i} className={`p-3 border rounded-xl bg-white text-xs ${isOk ? "border-emerald-100" : "border-rose-100"}`}>
-                      <div className="flex justify-between items-start mb-2">
-                        <span className="font-mono text-[10px] text-slate-400 truncate w-3/4" title={item.sourceId}>{item.sourceId}</span>
-                        <span className={`font-bold px-1.5 py-0.5 rounded text-[10px] ${isOk ? "bg-emerald-50 text-emerald-600" : "bg-rose-50 text-rose-600"}`}>
-                          {isOk ? "PASS" : "FAIL"}
-                        </span>
-                      </div>
-                      {item.url && (
-                        <div className="flex items-center justify-between gap-2 bg-slate-50 border border-slate-150 p-1.5 rounded-lg mb-2">
-                          <span className="font-mono text-[10px] text-slate-600 truncate select-all flex-1" title={item.url}>{item.url}</span>
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              navigator.clipboard.writeText(item.url);
-                              alert("已复制 URL");
-                            }}
-                            className="p-1 text-slate-400 hover:text-indigo-600 bg-white hover:bg-indigo-50 border border-slate-200 rounded transition shrink-0 cursor-pointer"
-                            title="拷贝流地址"
-                          >
-                            <Copy className="w-3 h-3" />
-                          </button>
-                        </div>
-                      )}
-                      {isOk && item.latency !== undefined && (
-                        <div className="text-[10px] text-slate-500 font-bold mb-1">
-                          首帧延迟: <span className={`${item.latency < 500 ? "text-emerald-500" : item.latency < 1500 ? "text-amber-500" : "text-rose-500"}`}>{item.latency}ms</span>
-                        </div>
-                      )}
+                    <div className="py-16 text-center text-slate-400 bg-white rounded-2xl border border-dashed border-slate-200">
+                      <Search className="w-10 h-10 mx-auto mb-2 opacity-30 text-slate-400" />
+                      <p className="text-xs font-bold text-slate-500">未检索到匹配的测速线路记录</p>
+                      <p className="text-[11px] text-slate-400 mt-1">请尝试清空关键字或切换状态筛选选项</p>
                     </div>
                   );
-                })}
-              </div>
+                }
+
+                return (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
+                    {filteredDetails.map((item: any, i: number) => {
+                      const isOk = item.status === "active";
+                      const meta = getSourceMeta(item);
+                      const isTesting = testingSourceIds.has(item.sourceId);
+                      const isCopied = copiedSourceId === item.sourceId;
+
+                      return (
+                        <div 
+                          key={i} 
+                          className={`p-3.5 border rounded-2xl bg-white shadow-2xs transition hover:shadow-md flex flex-col justify-between gap-2.5 ${
+                            isOk ? "border-emerald-200/80 hover:border-emerald-300" : "border-rose-200/80 hover:border-rose-300"
+                          }`}
+                        >
+                          {/* Top: Channel Name & Status Badge */}
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="min-w-0 flex-1">
+                              <h4 className="font-black text-slate-800 text-xs sm:text-sm truncate flex items-center gap-1.5" title={meta.channelName}>
+                                <span className={`w-2 h-2 rounded-full shrink-0 ${isOk ? "bg-emerald-500" : "bg-rose-500 animate-pulse"}`} />
+                                {meta.channelName}
+                              </h4>
+                              <div className="flex items-center gap-2 text-[10px] text-slate-400 font-mono mt-0.5">
+                                <span>源ID: <strong className="text-slate-600">{item.sourceId}</strong></span>
+                                {item.channelId && <span>· 频道ID: {item.channelId}</span>}
+                                {meta.isp && <span className="bg-slate-100 text-slate-600 px-1.5 py-0.2 rounded font-bold">{meta.isp}</span>}
+                                {meta.province && meta.province !== "全国" && <span className="bg-slate-100 text-slate-600 px-1.5 py-0.2 rounded font-bold">{meta.province}</span>}
+                              </div>
+                            </div>
+
+                            <span className={`font-extrabold px-2 py-1 rounded-lg text-[10.5px] shrink-0 flex items-center gap-1 font-mono ${
+                              isOk 
+                                ? "bg-emerald-50 text-emerald-700 border border-emerald-200" 
+                                : "bg-rose-50 text-rose-700 border border-rose-200"
+                            }`}>
+                              {isOk ? <CheckCircle className="w-3 h-3 text-emerald-500 shrink-0" /> : <AlertCircle className="w-3 h-3 text-rose-500 shrink-0" />}
+                              {isOk ? "PASS 可用" : "FAIL 离线"}
+                            </span>
+                          </div>
+
+                          {/* Middle: Stream URL Box with Copy & Preview Buttons */}
+                          <div className="bg-slate-900 rounded-xl p-2 sm:p-2.5 border border-slate-800 space-y-1.5 text-slate-200">
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="text-[9.5px] font-bold text-slate-400 font-mono flex items-center gap-1">
+                                🔗 物理流地址 (URL)
+                              </span>
+                              <div className="flex items-center gap-1 shrink-0">
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    if (meta.url) {
+                                      navigator.clipboard.writeText(meta.url);
+                                      setCopiedSourceId(item.sourceId);
+                                      setTimeout(() => setCopiedSourceId(null), 2000);
+                                    }
+                                  }}
+                                  disabled={!meta.url}
+                                  className={`px-2 py-0.5 text-[10px] font-bold rounded flex items-center gap-1 transition cursor-pointer ${
+                                    isCopied 
+                                      ? "bg-emerald-500 text-white" 
+                                      : "bg-slate-800 hover:bg-slate-700 text-indigo-300 border border-slate-700"
+                                  }`}
+                                  title="复制直播源物理地址"
+                                >
+                                  {isCopied ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+                                  {isCopied ? "已复制" : "复制 URL"}
+                                </button>
+                                {meta.url && (
+                                  <a
+                                    href={meta.url}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    onClick={(e) => e.stopPropagation()}
+                                    className="px-2 py-0.5 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700 rounded text-[10px] font-bold flex items-center gap-1 transition"
+                                    title="在浏览器新标签页打开流地址"
+                                  >
+                                    <ExternalLink className="w-3 h-3" />
+                                    预览/测试
+                                  </a>
+                                )}
+                              </div>
+                            </div>
+                            <div className="font-mono text-[10.5px] text-sky-300 break-all leading-snug bg-slate-950/80 p-1.5 rounded-lg border border-slate-800/80 select-all max-h-16 overflow-y-auto">
+                              {meta.url || <span className="text-slate-500 italic">未查找到匹配的源地址（可能已被删除）</span>}
+                            </div>
+                          </div>
+
+                          {/* Bottom: Diagnostics & Live Single Retest Button */}
+                          <div className="flex items-center justify-between gap-2 pt-1 border-t border-slate-100 text-xs">
+                            <div className="text-[10.5px] font-mono font-bold text-slate-500 truncate">
+                              {isOk ? (
+                                <span className="flex items-center gap-1.5">
+                                  <span>首帧延迟:</span>
+                                  <span className={`font-black ${item.latency < 500 ? "text-emerald-600" : item.latency < 1500 ? "text-amber-600" : "text-rose-600"}`}>
+                                    {item.latency ?? 0}ms
+                                  </span>
+                                  {item.resolution && (
+                                    <span className="bg-indigo-50 text-indigo-700 px-1.5 py-0.2 rounded text-[9.5px] border border-indigo-200 font-extrabold">
+                                      {item.resolution}
+                                    </span>
+                                  )}
+                                </span>
+                              ) : (
+                                <span className="text-rose-500 font-semibold truncate block" title={item.diagMsg || "连接超时 / 离线阻断"}>
+                                  {item.diagMsg ? `诊断: ${item.diagMsg}` : "连接超时 / 离线阻断"}
+                                </span>
+                              )}
+                            </div>
+
+                            <button
+                              type="button"
+                              disabled={isTesting || !meta.url}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                retestSingleSource(item);
+                              }}
+                              className={`px-2.5 py-1 text-[10.5px] font-bold rounded-xl transition flex items-center gap-1 shrink-0 cursor-pointer ${
+                                isTesting
+                                  ? "bg-amber-100 text-amber-700 animate-pulse cursor-wait"
+                                  : "bg-indigo-50 hover:bg-indigo-600 hover:text-white text-indigo-700 border border-indigo-200 hover:border-indigo-600"
+                              }`}
+                              title="现场实时重新测试该线路"
+                            >
+                              <Zap className={`w-3 h-3 ${isTesting ? "animate-spin text-amber-600" : ""}`} />
+                              {isTesting ? "现场测试中..." : "⚡ 现场复测"}
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                );
+              })()}
             </div>
           </div>
         </div>

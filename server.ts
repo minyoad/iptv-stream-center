@@ -2908,12 +2908,39 @@ app.get("/api/channels", async (req, res) => {
       });
     });
 
-    // Save test report history
+    // Save test report history with enriched channelName and url
     try {
       const reportId = Date.now().toString() + Math.random().toString(36).substring(2, 7);
       const activeCount = results.filter(r => r.status === 'active').length;
       const inactiveCount = results.filter(r => r.status === 'inactive').length;
       
+      const enrichedResults = results.map((r: any) => {
+        let matchedUrl = r.url || "";
+        let matchedChannelName = r.channelName || "";
+        let matchedIsp = r.isp || "";
+        let matchedProvince = r.province || "";
+
+        for (const c of channels) {
+          if (r.channelId && c.id !== r.channelId) continue;
+          const src = c.sources.find((s) => s.id === r.sourceId);
+          if (src) {
+            if (!matchedUrl) matchedUrl = src.url;
+            if (!matchedChannelName) matchedChannelName = c.name;
+            if (!matchedIsp) matchedIsp = src.isp || "未知";
+            if (!matchedProvince) matchedProvince = src.province || "全国";
+            break;
+          }
+        }
+
+        return {
+          ...r,
+          url: matchedUrl,
+          channelName: matchedChannelName,
+          isp: matchedIsp,
+          province: matchedProvince
+        };
+      });
+
       const stmt = db.prepare(`
         INSERT INTO test_reports (id, createdAt, totalTested, activeCount, inactiveCount, clientIsp, clientProvince, details)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -2926,7 +2953,7 @@ app.get("/api/channels", async (req, res) => {
         inactiveCount,
         clientIsp || "",
         clientProvince || "",
-        JSON.stringify(results)
+        JSON.stringify(enrichedResults)
       );
     } catch (e) {
       console.error("Error saving test report:", e);
@@ -3887,11 +3914,28 @@ app.get("/api/channels", async (req, res) => {
       const report = db.prepare("SELECT * FROM test_reports WHERE id = ?").get(req.params.id) as any;
       if (report) {
         report.details = JSON.parse(report.details);
+        if (Array.isArray(report.details)) {
+          report.details.forEach((item: any) => {
+            if (!item.url || !item.channelName) {
+              for (const c of channels) {
+                if (item.channelId && c.id !== item.channelId) continue;
+                const src = c.sources.find((s: any) => s.id === item.sourceId);
+                if (src) {
+                  if (!item.url) item.url = src.url;
+                  if (!item.channelName) item.channelName = c.name;
+                  if (!item.isp) item.isp = src.isp || "未知";
+                  if (!item.province) item.province = src.province || "全国";
+                  break;
+                }
+              }
+            }
+          });
+        }
         res.json(report);
       } else {
         res.status(404).json({ error: "Not found" });
       }
-    } catch (e) {
+    } catch (e: any) {
       res.status(500).json({ error: e.message });
     }
   });
