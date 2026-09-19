@@ -42,6 +42,31 @@ export function getPlaylistCacheKey(params: {
   return crypto.createHash("md5").update(rawKey).digest("hex");
 }
 
+export function normalizeProvinceName(prov: string): string {
+  if (!prov) return "";
+  return prov
+    .trim()
+    .replace(/省|市|自治区|特别行政区|壮族|回族|维吾尔/g, "")
+    .trim();
+}
+
+export function isNationwideProvince(prov: string): boolean {
+  if (!prov) return true;
+  const p = prov.trim();
+  return p === "" || p === "全国" || p === "全网" || p === "通用" || p === "默认" || p === "未知" || p === "全部";
+}
+
+export function isProvinceMatch(srcProv: string, targetProv: string): boolean {
+  if (!targetProv || isNationwideProvince(targetProv)) return true;
+  if (!srcProv || isNationwideProvince(srcProv)) return true;
+  
+  const normSrc = normalizeProvinceName(srcProv);
+  const normTarget = normalizeProvinceName(targetProv);
+  
+  if (!normSrc || !normTarget) return true;
+  return normSrc.includes(normTarget) || normTarget.includes(normSrc);
+}
+
 export function sortSourcesByGeo(sources: LiveSource[], clientProvince: string, clientIsp: string): LiveSource[] {
   if (!clientProvince && !clientIsp) return sources;
   
@@ -51,8 +76,8 @@ export function sortSourcesByGeo(sources: LiveSource[], clientProvince: string, 
       const srcProv = (s.province || "").trim();
       const srcIsp = (s.isp || "").trim();
 
-      const normSrcProv = srcProv.replace(/省|市|自治区|特别行政区/g, "");
-      const normClientProv = clientProvince.replace(/省|市|自治区|特别行政区/g, "");
+      const normSrcProv = normalizeProvinceName(srcProv);
+      const normClientProv = normalizeProvinceName(clientProvince);
       const provinceMatch = normClientProv && normSrcProv && (normSrcProv.includes(normClientProv) || normClientProv.includes(normSrcProv));
       
       const normSrcIsp = srcIsp.replace("中国", "");
@@ -63,9 +88,9 @@ export function sortSourcesByGeo(sources: LiveSource[], clientProvince: string, 
         score += 100;
       } else if (provinceMatch) {
         score += 50;
-      } else if (ispMatch && (srcProv === "全国" || !srcProv)) {
+      } else if (ispMatch && isNationwideProvince(srcProv)) {
         score += 30;
-      } else if (srcProv === "全国" || !srcProv) {
+      } else if (isNationwideProvince(srcProv)) {
         score += 10;
       } else if (ispMatch) {
         score += 5;
@@ -74,7 +99,7 @@ export function sortSourcesByGeo(sources: LiveSource[], clientProvince: string, 
       }
 
       if ((s.url || "").trim().toLowerCase().startsWith("rtsp://")) {
-        if (!clientIsp || ispMatch || !srcIsp || srcIsp === "未知" || srcIsp.toUpperCase().includes("BGP") || srcProv === "全国") {
+        if (!clientIsp || ispMatch || !srcIsp || srcIsp === "未知" || srcIsp.toUpperCase().includes("BGP") || isNationwideProvince(srcProv)) {
           score += 200;
         }
       }
@@ -109,12 +134,15 @@ export function sortSourcesForExport(sources: LiveSource[]): LiveSource[] {
 export function getPlayableSources(sources: LiveSource[], targetIsp: string, targetProvince: string): LiveSource[] {
   let filtered = [...sources].filter(s => !s.isolated);
   
-  if (targetIsp) {
-    const normTargetIsp = targetIsp.trim();
+  const normTargetIsp = targetIsp ? targetIsp.trim().replace("中国", "") : "";
+  const normTargetProv = targetProvince ? normalizeProvinceName(targetProvince) : "";
+  const hasTargetProv = normTargetProv !== "" && !isNationwideProvince(targetProvince);
+
+  if (normTargetIsp) {
     filtered = filtered.filter(src => {
       let srcIsp = (src.isp || "").trim();
       
-      if (!srcIsp || srcIsp === "其它" || srcIsp === "其他") {
+      if (!srcIsp || srcIsp === "其它" || srcIsp === "其他" || srcIsp === "未知") {
         const urlLower = (src.url || "").toLowerCase();
         if (urlLower.includes("chinamobile") || urlLower.includes("cmvideo") || urlLower.includes("cmcc") || urlLower.includes(".yd.") || urlLower.includes("migu")) {
           srcIsp = "移动";
@@ -127,22 +155,49 @@ export function getPlayableSources(sources: LiveSource[], targetIsp: string, tar
         }
       }
 
-      if (!srcIsp || srcIsp === "其它" || srcIsp === "其他") {
-        return true;
-      }
       const isBGP = srcIsp.toUpperCase().includes("BGP") || srcIsp.toUpperCase().includes("BPG");
-      if (isBGP) {
-        return true;
-      }
       const sIsp = srcIsp.replace("中国", "");
-      const tIsp = normTargetIsp.replace("中国", "");
-      
-      if (!sIsp) return true;
 
-      if (sIsp.includes(tIsp) || tIsp.includes(sIsp)) {
-        return true;
+      // 1. ISP 匹配判定
+      let ispMatched = false;
+      if (!sIsp || srcIsp === "其它" || srcIsp === "其他" || isBGP) {
+        ispMatched = true;
+      } else if (sIsp.includes(normTargetIsp) || normTargetIsp.includes(sIsp)) {
+        ispMatched = true;
       }
-      return false;
+
+      if (!ispMatched) {
+        return false;
+      }
+
+      // 2. 【核心】限定 ISP 时的省份互斥过滤（特别是电信、移动、联通等专网源）：
+      // 如果当前确定了目标省份（如福建），且此源标明了具体的省份（如广东、四川等）
+      const srcProv = (src.province || "").trim();
+      if (hasTargetProv && !isNationwideProvince(srcProv)) {
+        const normSrcProv = normalizeProvinceName(srcProv);
+        // 如果源省份与目标省份不一致，且源不是 BGP 通用源
+        if (normSrcProv && normSrcProv !== normTargetProv && !isBGP) {
+          // 排除非当前省份的运营商专网直播源（例如福建电信排除广东电信、四川电信等）
+          return false;
+        }
+      }
+
+      return true;
+    });
+  } else if (hasTargetProv) {
+    // 仅限定了省份但未限定 ISP：排除标记为其它具体省份的专网直播源
+    filtered = filtered.filter(src => {
+      const srcProv = (src.province || "").trim();
+      if (!isNationwideProvince(srcProv)) {
+        const normSrcProv = normalizeProvinceName(srcProv);
+        if (normSrcProv && normSrcProv !== normTargetProv) {
+          const isBGP = (src.isp || "").toUpperCase().includes("BGP");
+          if (!isBGP) {
+            return false;
+          }
+        }
+      }
+      return true;
     });
   }
 

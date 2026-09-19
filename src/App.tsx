@@ -6708,14 +6708,33 @@ export default function App() {
                     </div>
 
                     <div className="space-y-1.5">
-                      <label>限定直辖市/省份省源</label>
+                      <div className="flex items-center justify-between">
+                        <label>限定直辖市/省份省源 (Province Filter)</label>
+                        <span className="text-[10px] text-indigo-600 font-normal">同省专线隔离保护</span>
+                      </div>
                       <input 
                         type="text"
                         value={exportParams.province}
                         onChange={(e) => setExportParams({...exportParams, province: e.target.value})}
-                        placeholder="例如: 广东, 北京, 山东, 上海"
+                        placeholder="例如: 福建, 广东, 北京, 山东, 上海"
                         className="w-full text-xs p-2.5 border border-slate-200 rounded-xl focus:outline-none focus:border-indigo-500"
                       />
+                      <div className="flex flex-wrap gap-1 pt-1">
+                        {["福建", "广东", "北京", "上海", "浙江", "江苏", "四川", "山东", "湖北", "全国"].map((pName) => (
+                          <button
+                            key={pName}
+                            type="button"
+                            onClick={() => setExportParams({ ...exportParams, province: pName === "全国" ? "" : pName })}
+                            className={`px-2 py-0.5 text-[10px] rounded-md transition ${
+                              (pName === "全国" && !exportParams.province) || exportParams.province === pName
+                                ? "bg-indigo-600 text-white font-bold"
+                                : "bg-slate-100 hover:bg-slate-200 text-slate-600"
+                            }`}
+                          >
+                            {pName}
+                          </button>
+                        ))}
+                      </div>
                     </div>
 
                     <div className="space-y-1.5">
@@ -6767,8 +6786,20 @@ export default function App() {
                     
                     {/* Live active dynamic preview params */}
                     {Object.values(exportParams).some(Boolean) && (
-                      <div className="bg-amber-50/40 p-3 rounded-lg border border-amber-100 text-[10px] text-amber-900 leading-none">
-                        当前已应用过滤条件: {exportParams.isp && `[运营商:${exportParams.isp}]`} {exportParams.status && `[高可用:${exportParams.status}]`} {exportParams.province && `[省份:${exportParams.province}]`} {exportParams.maxPerChannel && `[单频道备线:${exportParams.maxPerChannel}]`} {exportParams.limit && `[全局数量限制:${exportParams.limit}]`}
+                      <div className="bg-amber-50/60 p-3 rounded-xl border border-amber-100/80 text-[11px] text-amber-900 space-y-1">
+                        <div className="font-semibold">
+                          当前已应用过滤条件: {exportParams.isp && `[运营商:${exportParams.isp}]`} {exportParams.status && `[高可用:${exportParams.status}]`} {exportParams.province && `[省份:${exportParams.province}]`} {exportParams.maxPerChannel && `[单频道备线:${exportParams.maxPerChannel}]`} {exportParams.limit && `[全局数量限制:${exportParams.limit}]`}
+                        </div>
+                        {exportParams.isp && (
+                          <div className="text-[10px] text-amber-700 flex items-center gap-1">
+                            <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
+                            <span>
+                              {exportParams.province 
+                                ? `专网保护生效中：[${exportParams.province}${exportParams.isp}] 模式已自动剔除其它省份 ${exportParams.isp} 内网源（如排除广东${exportParams.isp}等），仅保留本省与全国通用源。`
+                                : `客户端请求时将根据访问 IP 自动探测所属省份（如福建），并自动排除其它省份的 ${exportParams.isp} 内网专线源。`}
+                            </span>
+                          </div>
+                        )}
                       </div>
                     )}
 

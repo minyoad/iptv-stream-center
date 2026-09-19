@@ -4526,9 +4526,9 @@ app.get("/api/channels", async (req, res) => {
     let targetProvince = province ? String(province) : "";
     let targetIsp = isp ? String(isp) : "";
 
-    // If province/isp not explicitly provided, detect from IP
+    // If province or isp not explicitly provided, detect from IP
     let resolvedClientIp = "";
-    if (!province && !isp) {
+    if (!targetProvince || !targetIsp) {
       if (typeof ip === "string" && ip) {
         resolvedClientIp = ip;
       } else if (typeof clientIp === "string" && clientIp) {
@@ -4544,10 +4544,18 @@ app.get("/api/channels", async (req, res) => {
       }
 
       if (resolvedClientIp) {
-        const geo = await getClientIpGeo(resolvedClientIp);
-        targetProvince = geo.province;
-        targetIsp = geo.isp;
-        console.log(`[EXPORT M3U AUTO-IP] Client IP ${resolvedClientIp} matched Province: ${targetProvince}, ISP: ${targetIsp}`);
+        try {
+          const geo = await getClientIpGeo(resolvedClientIp);
+          if (!targetProvince && geo.province) {
+            targetProvince = geo.province;
+          }
+          if (!targetIsp && geo.isp) {
+            targetIsp = geo.isp;
+          }
+          console.log(`[EXPORT M3U AUTO-IP] Client IP ${resolvedClientIp} matched Province: ${targetProvince}, ISP: ${targetIsp}`);
+        } catch (e) {
+          console.error("[EXPORT M3U AUTO-IP ERROR]", e);
+        }
       }
     }
 
@@ -4598,11 +4606,8 @@ app.get("/api/channels", async (req, res) => {
 
           let processedSources = channel.sources;
 
+          // Strict ISP & Province matching via getPlayableSources (excludes cross-province telecom/ISP sources)
           processedSources = getPlayableSources(processedSources, finalIsp, finalProvince);
-
-          if (province) {
-            processedSources = processedSources.filter(source => source.province === String(province));
-          }
 
           // Status filtering: if status is "all", output all sources; if specific status, match it; default to "active"
           if (status === "all") {
@@ -4678,9 +4683,9 @@ app.get("/api/channels", async (req, res) => {
     let targetProvince = province ? String(province) : "";
     let targetIsp = isp ? String(isp) : "";
 
-    // If province/isp not explicitly provided, detect from IP
+    // If province or isp not explicitly provided, detect from IP
     let resolvedClientIp = "";
-    if (!province && !isp) {
+    if (!targetProvince || !targetIsp) {
       if (typeof ip === "string" && ip) {
         resolvedClientIp = ip;
       } else if (typeof clientIp === "string" && clientIp) {
@@ -4696,10 +4701,18 @@ app.get("/api/channels", async (req, res) => {
       }
 
       if (resolvedClientIp) {
-        const geo = await getClientIpGeo(resolvedClientIp);
-        targetProvince = geo.province;
-        targetIsp = geo.isp;
-        console.log(`[EXPORT TXT AUTO-IP] Client IP ${resolvedClientIp} matched Province: ${targetProvince}, ISP: ${targetIsp}`);
+        try {
+          const geo = await getClientIpGeo(resolvedClientIp);
+          if (!targetProvince && geo.province) {
+            targetProvince = geo.province;
+          }
+          if (!targetIsp && geo.isp) {
+            targetIsp = geo.isp;
+          }
+          console.log(`[EXPORT TXT AUTO-IP] Client IP ${resolvedClientIp} matched Province: ${targetProvince}, ISP: ${targetIsp}`);
+        } catch (e) {
+          console.error("[EXPORT TXT AUTO-IP ERROR]", e);
+        }
       }
     }
 
@@ -4739,11 +4752,8 @@ app.get("/api/channels", async (req, res) => {
 
           let processedSources = channel.sources;
 
+          // Strict ISP & Province matching via getPlayableSources (excludes cross-province telecom/ISP sources)
           processedSources = getPlayableSources(processedSources, finalIsp, finalProvince);
-
-          if (province) {
-            processedSources = processedSources.filter(source => source.province === String(province));
-          }
 
           // Status filtering: if status is "all", output all sources; if specific status, match it; default to "active"
           if (status === "all") {
