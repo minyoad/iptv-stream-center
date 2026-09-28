@@ -14,6 +14,7 @@ import {
 import { resolveChannelLogo, getBuildVersionInfo } from "../utils/text";
 import { getDb } from "../db/sqlite";
 import { getClientIpGeo } from "./speedTestService";
+import { calculateQualityScore, detectStreamType } from "../utils/quality";
 
 export { exportPlaylistMemoryCache, invalidatePlaylistExportCache };
 
@@ -27,6 +28,10 @@ export function getPlaylistCacheKey(params: {
   maxPerChannel?: string | number;
   baseUrl?: string;
   v?: string;
+  excludeRtp?: boolean | string;
+  streamType?: string;
+  sortByQuality?: boolean | string;
+  preferGeneral?: boolean | string;
 }): string {
   const rawKey = [
     params.format || "m3u",
@@ -37,7 +42,11 @@ export function getPlaylistCacheKey(params: {
     params.limit || "",
     params.maxPerChannel || "",
     params.baseUrl || "",
-    params.v || ""
+    params.v || "",
+    params.excludeRtp ? "no_rtp_ts" : "",
+    params.streamType || "",
+    params.sortByQuality ? "quality_sort" : "",
+    params.preferGeneral ? "prefer_gen" : ""
   ].join("|");
   return crypto.createHash("md5").update(rawKey).digest("hex");
 }
@@ -53,70 +62,128 @@ export function normalizeProvinceName(prov: string): string {
 export function isNationwideProvince(prov: string): boolean {
   if (!prov) return true;
   const p = prov.trim();
-  return p === "" || p === "全国" || p === "全网" || p === "通用" || p === "默认" || p === "未知" || p === "全部";
+  return (
+    p === "" ||
+    p === "全国" ||
+    p === "全网" ||
+    p === "通用" ||
+    p === "央视" ||
+    p === "卫视" ||
+    p === "无" ||
+    p === "未知" ||
+    p === "BGP"
+  );
 }
 
-export function isProvinceMatch(srcProv: string, targetProv: string): boolean {
-  if (!targetProv || isNationwideProvince(targetProv)) return true;
-  if (!srcProv || isNationwideProvince(srcProv)) return true;
-  
-  const normSrc = normalizeProvinceName(srcProv);
-  const normTarget = normalizeProvinceName(targetProv);
-  
-  if (!normSrc || !normTarget) return true;
-  return normSrc.includes(normTarget) || normTarget.includes(normSrc);
-}
+export function sortSourcesByGeo(
+  sources: LiveSource[],
+  targetProvince: string,
+  targetIsp: string
+): LiveSource[] {
+  const normTargetProv = targetProvince ? normalizeProvinceName(targetProvince) : "";
+  const normTargetIsp = targetIsp ? targetIsp.trim().replace("中国", "") : "";
+  const hasTargetProv = normTargetProv !== "" && !isNationwideProvince(targetProvince);
 
-export function sortSourcesByGeo(sources: LiveSource[], clientProvince: string, clientIsp: string): LiveSource[] {
-  if (!clientProvince && !clientIsp) return sources;
-  
   return [...sources].sort((a, b) => {
-    const getScore = (s: LiveSource) => {
+    // 1. Status weight: active > unknown > inactive
+    const statusWeightA = a.status === "active" ? 3 : (a.status === "inactive" ? 1 : 2);
+    const statusWeightB = b.status === "active" ? 3 : (b.status === "inactive" ? 1 : 2);
+    if (statusWeightA !== statusWeightB) {
+      return statusWeightB - statusWeightA;
+    }
+
+    // 2. Calculate geographic & ISP matching scores
+    const getMatchScore = (s: LiveSource): number => {
       let score = 0;
       const srcProv = (s.province || "").trim();
-      const srcIsp = (s.isp || "").trim();
+      const srcIsp = (s.isp || "").trim().replace("中国", "");
+      const isSrcNationwide = isNationwideProvince(srcProv);
+      const isBGP = srcIsp.toUpperCase().includes("BGP") || srcIsp.toUpperCase().includes("BPG");
 
-      const normSrcProv = normalizeProvinceName(srcProv);
-      const normClientProv = normalizeProvinceName(clientProvince);
-      const provinceMatch = normClientProv && normSrcProv && (normSrcProv.includes(normClientProv) || normClientProv.includes(normSrcProv));
-      
-      const normSrcIsp = srcIsp.replace("中国", "");
-      const normClientIsp = clientIsp.replace("中国", "");
-      const ispMatch = normClientIsp && normSrcIsp && (normSrcIsp.includes(normClientIsp) || normClientIsp.includes(normSrcIsp));
-
-      if (provinceMatch && ispMatch) {
-        score += 100;
-      } else if (provinceMatch) {
-        score += 50;
-      } else if (ispMatch && isNationwideProvince(srcProv)) {
-        score += 30;
-      } else if (isNationwideProvince(srcProv)) {
-        score += 10;
-      } else if (ispMatch) {
-        score += 5;
+      // Province match
+      if (hasTargetProv) {
+        const normSrcProv = normalizeProvinceName(srcProv);
+        if (normSrcProv === normTargetProv) {
+          score += 200; // Exact province match
+        } else if (isSrcNationwide) {
+          score += 100; // Nationwide fallback
+        } else {
+          score -= 300; // Other province (heavily penalized)
+        }
       } else {
-        score += 1;
+        if (isSrcNationwide) {
+          score += 100;
+        }
       }
 
-      if ((s.url || "").trim().toLowerCase().startsWith("rtsp://")) {
-        if (!clientIsp || ispMatch || !srcIsp || srcIsp === "未知" || srcIsp.toUpperCase().includes("BGP") || isNationwideProvince(srcProv)) {
-          score += 200;
+      // ISP match
+      if (normTargetIsp) {
+        if (srcIsp.includes(normTargetIsp) || normTargetIsp.includes(srcIsp)) {
+          score += 150; // Exact ISP match
+        } else if (isBGP || !srcIsp || srcIsp === "其它" || srcIsp === "其他" || srcIsp === "未知") {
+          score += 80; // BGP / General fallback
+        } else {
+          score -= 200; // Cross ISP penalty
         }
       }
 
       return score;
     };
 
-    return getScore(b) - getScore(a);
+    const scoreA = getMatchScore(a);
+    const scoreB = getMatchScore(b);
+    if (scoreA !== scoreB) {
+      return scoreB - scoreA;
+    }
+
+    // 3. Prefer general standard streams over /rtp/ or /tsfile/ if other params match
+    const typeA = detectStreamType(a.url);
+    const typeB = detectStreamType(b.url);
+    if (typeA.isRtpOrTsSlice !== typeB.isRtpOrTsSlice) {
+      return typeA.isRtpOrTsSlice ? 1 : -1;
+    }
+
+    // 4. Quality Score
+    const qA = calculateQualityScore(a).score;
+    const qB = calculateQualityScore(b).score;
+    if (Math.abs(qA - qB) >= 8) {
+      return qB - qA;
+    }
+
+    const latencyA = a.latency && a.latency > 0 ? a.latency : 9999;
+    const latencyB = b.latency && b.latency > 0 ? b.latency : 9999;
+    return latencyA - latencyB;
   });
 }
 
-export function sortSourcesForExport(sources: LiveSource[]): LiveSource[] {
+export function sortSourcesForExport(
+  sources: LiveSource[],
+  sortByQuality: boolean = true,
+  preferGeneral: boolean = true
+): LiveSource[] {
   return [...sources].sort((a, b) => {
+    // 1. Status weight: active > unknown > inactive
     const statusWeightA = a.status === "active" ? 3 : (a.status === "inactive" ? 1 : 2);
     const statusWeightB = b.status === "active" ? 3 : (b.status === "inactive" ? 1 : 2);
     if (statusWeightA !== statusWeightB) {
       return statusWeightB - statusWeightA;
+    }
+
+    const typeA = detectStreamType(a.url);
+    const typeB = detectStreamType(b.url);
+
+    // 2. Protocol General Compatibility: HLS/standard unicast has priority over /rtp/ and /tsfile/
+    if (preferGeneral && typeA.isRtpOrTsSlice !== typeB.isRtpOrTsSlice) {
+      return typeA.isRtpOrTsSlice ? 1 : -1; // General streams come first
+    }
+
+    // 3. Quality Score ranking
+    if (sortByQuality) {
+      const qA = calculateQualityScore(a).score;
+      const qB = calculateQualityScore(b).score;
+      if (Math.abs(qA - qB) >= 5) {
+        return qB - qA;
+      }
     }
 
     const isRtspA = (a.url || "").trim().toLowerCase().startsWith("rtsp://");
@@ -131,12 +198,101 @@ export function sortSourcesForExport(sources: LiveSource[]): LiveSource[] {
   });
 }
 
-export function getPlayableSources(sources: LiveSource[], targetIsp: string, targetProvince: string): LiveSource[] {
+/**
+ * 智能保障流类型多样性：当频道内既有 /rtp/、/tsfile/ 切片源，又有通用 HLS/单播源时，
+ * 绝不允许切片源占满全部下发名额，确保普通网络环境客户端始终能获得可播放的通用备选源。
+ */
+export function ensureStreamDiversity(sources: LiveSource[], limit: number): LiveSource[] {
+  if (sources.length <= limit) return sources;
+
+  const generalSources: LiveSource[] = [];
+  const rtpTsSources: LiveSource[] = [];
+
+  for (const src of sources) {
+    const typeInfo = detectStreamType(src.url);
+    if (typeInfo.isRtpOrTsSlice) {
+      rtpTsSources.push(src);
+    } else {
+      generalSources.push(src);
+    }
+  }
+
+  if (generalSources.length === 0 || rtpTsSources.length === 0) {
+    return sources.slice(0, limit);
+  }
+
+  // 保证通用 HLS/单播源至少获得 1~2 个名额（或上限的 50%）
+  const generalQuota = Math.max(1, Math.min(generalSources.length, Math.ceil(limit / 2)));
+  const rtpTsQuota = Math.min(rtpTsSources.length, limit - generalQuota);
+
+  const selectedGeneral = generalSources.slice(0, generalQuota);
+  const selectedRtpTs = rtpTsSources.slice(0, rtpTsQuota);
+
+  const combined = [...selectedGeneral, ...selectedRtpTs];
+
+  if (combined.length < limit) {
+    const usedIds = new Set(combined.map(s => s.id));
+    for (const s of sources) {
+      if (!usedIds.has(s.id)) {
+        combined.push(s);
+        usedIds.add(s.id);
+        if (combined.length >= limit) break;
+      }
+    }
+  }
+
+  return combined;
+}
+
+export function getPlayableSources(
+  sources: LiveSource[],
+  targetIsp: string,
+  targetProvince: string,
+  options: {
+    excludeRtp?: boolean;
+    streamType?: string;
+  } = {}
+): LiveSource[] {
   let filtered = [...sources].filter(s => !s.isolated);
   
   const normTargetIsp = targetIsp ? targetIsp.trim().replace("中国", "") : "";
   const normTargetProv = targetProvince ? normalizeProvinceName(targetProvince) : "";
   const hasTargetProv = normTargetProv !== "" && !isNationwideProvince(targetProvince);
+
+  // 0. Stream Protocol & RTP/TS Slice Filtering (针对 /rtp/、/tsfile/ 无法播放的防护方案)
+  if (options.excludeRtp) {
+    // 开启了排除 RTP/TS 切片源，严格排除 /rtp/、/tsfile/ 等专网流
+    filtered = filtered.filter(src => {
+      const typeInfo = detectStreamType(src.url);
+      return !typeInfo.isRtpOrTsSlice;
+    });
+  }
+
+  if (options.streamType && options.streamType !== "all") {
+    const stLower = options.streamType.toLowerCase();
+    filtered = filtered.filter(src => {
+      const typeInfo = detectStreamType(src.url);
+      if (stLower === "general" || stLower === "通用" || stLower === "公网") {
+        return !typeInfo.isRtpOrTsSlice;
+      }
+      if (stLower === "rtp-ts" || stLower === "rtp" || stLower === "tsfile" || stLower === "切片") {
+        return typeInfo.isRtpOrTsSlice;
+      }
+      if (stLower === "hls" || stLower === "m3u8") {
+        return typeInfo.type === "HLS";
+      }
+      if (stLower === "flv" || stLower === "http-flv") {
+        return typeInfo.type === "HTTP-FLV";
+      }
+      if (stLower === "ts" || stLower === "http-ts") {
+        return typeInfo.type === "HTTP-TS";
+      }
+      if (stLower === "rtsp") {
+        return typeInfo.type === "RTSP";
+      }
+      return true;
+    });
+  }
 
   if (normTargetIsp) {
     filtered = filtered.filter(src => {
@@ -170,14 +326,11 @@ export function getPlayableSources(sources: LiveSource[], targetIsp: string, tar
         return false;
       }
 
-      // 2. 【核心】限定 ISP 时的省份互斥过滤（特别是电信、移动、联通等专网源）：
-      // 如果当前确定了目标省份（如福建），且此源标明了具体的省份（如广东、四川等）
+      // 2. 限定 ISP 时的省份互斥过滤
       const srcProv = (src.province || "").trim();
       if (hasTargetProv && !isNationwideProvince(srcProv)) {
         const normSrcProv = normalizeProvinceName(srcProv);
-        // 如果源省份与目标省份不一致，且源不是 BGP 通用源
         if (normSrcProv && normSrcProv !== normTargetProv && !isBGP) {
-          // 排除非当前省份的运营商专网直播源（例如福建电信排除广东电信、四川电信等）
           return false;
         }
       }
@@ -185,7 +338,6 @@ export function getPlayableSources(sources: LiveSource[], targetIsp: string, tar
       return true;
     });
   } else if (hasTargetProv) {
-    // 仅限定了省份但未限定 ISP：排除标记为其它具体省份的专网直播源
     filtered = filtered.filter(src => {
       const srcProv = (src.province || "").trim();
       if (!isNationwideProvince(srcProv)) {
@@ -201,8 +353,7 @@ export function getPlayableSources(sources: LiveSource[], targetIsp: string, tar
     });
   }
 
-  // 3. 【核心针对 RTSP 协议链接的严格跨区域隔离】
-  // RTSP 链接多为城域专网/IPTV专网，跨省或跨运营商通常无法跨越路由，必须实施严格隔离
+  // 3. RTSP 协议跨区域隔离
   filtered = filtered.filter(src => {
     const isRtsp = (src.url || "").trim().toLowerCase().startsWith("rtsp://");
     if (!isRtsp) return true;
@@ -211,25 +362,21 @@ export function getPlayableSources(sources: LiveSource[], targetIsp: string, tar
     const srcIsp = (src.isp || "").trim().replace("中国", "");
     const isNationwideSrc = isNationwideProvince(srcProv);
 
-    // 规则 A：若 RTSP 属于具体省份（如广东、福建、四川等）
     if (!isNationwideSrc) {
       const normSrcProv = normalizeProvinceName(srcProv);
       if (hasTargetProv) {
-        // 目标省份与源省份不匹配时，严禁下发该 RTSP
         if (normSrcProv !== normTargetProv) {
           return false;
         }
       } else {
-        // 全网/未定位省份的通用请求，严禁将特定省份的 RTSP 专网源作为通用源导出（避免外省黑屏）
         return false;
       }
     }
 
-    // 规则 B：若 RTSP 属于具体运营商（电信/移动/联通/广电）
     if (srcIsp && srcIsp !== "BGP" && srcIsp !== "未知" && srcIsp !== "其它") {
       if (normTargetIsp) {
         if (!srcIsp.includes(normTargetIsp) && !normTargetIsp.includes(srcIsp)) {
-          return false; // 排除跨运营商的 RTSP
+          return false;
         }
       }
     }
@@ -255,6 +402,9 @@ export function getOrGeneratePlaylistExport(
     maxPerChannel?: string | number;
     baseUrl?: string;
     v?: string;
+    excludeRtp?: boolean | string;
+    streamType?: string;
+    sortByQuality?: boolean | string;
   },
   generatorFn: () => string
 ): { content: string; etag: string } {
@@ -303,6 +453,8 @@ export function getOrGeneratePlaylistExport(
     if (params.isp) parts.push(params.isp);
     if (params.province) parts.push(params.province);
     if (params.status) parts.push(`status_${params.status}`);
+    if (params.excludeRtp) parts.push("no_rtp_ts");
+    if (params.streamType) parts.push(`type_${params.streamType}`);
     const humanName = (parts.length > 1 ? parts.join("_") : parts[0] + "_all") + (params.format === "txt" ? ".txt" : ".m3u");
     fs.writeFileSync(path.join(READABLE_DIR, humanName.replace(/[<>:"/\\|?*]+/g, "_")), content, "utf-8");
   } catch (err) {
@@ -319,8 +471,11 @@ export function generateM3uPlaylist(options: {
   category?: string;
   status?: string;
   maxPerChannel?: number;
+  excludeRtp?: boolean;
+  streamType?: string;
+  sortByQuality?: boolean;
 }): string {
-  const { baseUrl, isp, province, category, status, maxPerChannel } = options;
+  const { baseUrl, isp, province, category, status, maxPerChannel, excludeRtp, streamType, sortByQuality } = options;
   const { formattedTime, versionId } = getBuildVersionInfo();
   
   let playlistRows = [
@@ -344,16 +499,19 @@ export function generateM3uPlaylist(options: {
       if (!isInGroup && !isFallback) return;
       
       let processedSources = channel.sources || [];
-      processedSources = getPlayableSources(processedSources, isp || "", province || "");
+      processedSources = getPlayableSources(processedSources, isp || "", province || "", {
+        excludeRtp,
+        streamType
+      });
       if (status && status !== "all") {
         processedSources = processedSources.filter(source => source.status === status);
       } else if (!status) {
         processedSources = processedSources.filter(source => source.status === "active");
       }
-      processedSources = sortSourcesForExport(processedSources);
+      processedSources = sortSourcesForExport(processedSources, sortByQuality !== false);
       
       const limit = maxPerChannel && maxPerChannel > 0 ? maxPerChannel : 15;
-      const sourcesToExport = processedSources.slice(0, limit);
+      const sourcesToExport = ensureStreamDiversity(processedSources, limit);
       sourcesToExport.forEach(bestSource => {
         const subLogo = resolveChannelLogo(channel.logo || "");
         playlistRows.push(
@@ -374,8 +532,11 @@ export function generateTxtPlaylist(options: {
   category?: string;
   status?: string;
   maxPerChannel?: number;
+  excludeRtp?: boolean;
+  streamType?: string;
+  sortByQuality?: boolean;
 }): string {
-  const { isp, province, category, status, maxPerChannel } = options;
+  const { isp, province, category, status, maxPerChannel, excludeRtp, streamType, sortByQuality } = options;
   const { formattedTime, versionId } = getBuildVersionInfo();
   
   let playlistRows: string[] = [
@@ -401,16 +562,19 @@ export function generateTxtPlaylist(options: {
       if (!isInGroup && !isFallback) return;
       
       let processedSources = channel.sources || [];
-      processedSources = getPlayableSources(processedSources, isp || "", province || "");
+      processedSources = getPlayableSources(processedSources, isp || "", province || "", {
+        excludeRtp,
+        streamType
+      });
       if (status && status !== "all") {
         processedSources = processedSources.filter(source => source.status === status);
       } else if (!status) {
         processedSources = processedSources.filter(source => source.status === "active");
       }
-      processedSources = sortSourcesForExport(processedSources);
+      processedSources = sortSourcesForExport(processedSources, sortByQuality !== false);
       
       const limit = maxPerChannel && maxPerChannel > 0 ? maxPerChannel : 15;
-      const sourcesToExport = processedSources.slice(0, limit);
+      const sourcesToExport = ensureStreamDiversity(processedSources, limit);
       if (sourcesToExport.length > 0) {
         const urls = sourcesToExport.map(s => s.url).join("#");
         groupChannels.push(`${channel.name},${urls}`);
@@ -559,4 +723,3 @@ export function recordClientAccess(
     console.error("[RECORD CLIENT ACCESS ERROR]", err);
   }
 }
-

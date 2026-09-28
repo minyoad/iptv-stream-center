@@ -43,6 +43,7 @@ import {
   Film,
   Globe,
   Folder,
+  Radio,
   Loader2,
   Save,
   RotateCcw,
@@ -59,6 +60,12 @@ import { AiSettingsModal } from "./components/AiSettingsModal";
 import { GroupBadgeTag } from "./components/GroupBadgeTag";
 import { IpGeoApi } from "./types";
 import { authFetch as fetch, safeJson } from "./utils/api";
+import {
+  calculateQualityScore,
+  detectStreamType,
+  StreamProtocolType,
+  QualityScoreDetail,
+} from "./utils/quality";
 
 // Define the global variable provided by Vite
 declare const __APP_BUILD_VERSION__: string;
@@ -410,6 +417,8 @@ export default function App() {
   const [globalSourceProvince, setGlobalSourceProvince] = useState("all");
   const [globalSourceStatus, setGlobalSourceStatus] = useState("all");
   const [globalSourceResolution, setGlobalSourceResolution] = useState("all");
+  const [globalSourceType, setGlobalSourceType] = useState("all");
+  const [globalSourceSortBy, setGlobalSourceSortBy] = useState<"quality" | "quality_asc" | "latency" | "stability" | "resolution" | "name" | "default">("quality");
   const [sourceFilterResolution, setSourceFilterResolution] = useState("all");
   const [selectedGlobalSourceIds, setSelectedGlobalSourceIds] = useState<string[]>([]);
   const [isBatchGlobalSourceModalOpen, setIsBatchGlobalSourceModalOpen] = useState(false);
@@ -429,7 +438,7 @@ export default function App() {
 
   useEffect(() => {
     setGlobalSourcePage(1);
-  }, [globalSourceSearch, globalSourceIsp, globalSourceProvince, globalSourceStatus, globalSourceResolution]);
+  }, [globalSourceSearch, globalSourceIsp, globalSourceProvince, globalSourceStatus, globalSourceResolution, globalSourceType, globalSourceSortBy]);
 
 
   // Option 2 Client Local Speed Test engine and dynamic state
@@ -716,6 +725,9 @@ export default function App() {
     limit: "",
     maxPerChannel: "",
     v: "",
+    excludeRtp: false,
+    streamType: "",
+    sortByQuality: true,
   });
   const [isRefreshingCache, setIsRefreshingCache] = useState(false);
   const [lastCacheRefreshTime, setLastCacheRefreshTime] = useState<string | null>(null);
@@ -765,20 +777,24 @@ export default function App() {
       if (ch && ch.sources) {
         ch.sources.forEach((src) => {
           if (src) {
+            const streamTypeInfo = detectStreamType(src.url);
+            const qualityScoreInfo = calculateQualityScore(src);
             list.push({
               ...src,
               channelId: ch.id,
               channelName: ch.name || "",
               channelLogo: ch.logo,
               channelGroupIds: Array.isArray(ch.groupIds) ? ch.groupIds : [],
-              channelIsolated: ch.isolated
+              channelIsolated: ch.isolated,
+              streamTypeInfo,
+              qualityScore: qualityScoreInfo,
             });
           }
         });
       }
     });
 
-    return (list || []).filter((item) => {
+    const filtered = (list || []).filter((item) => {
       const query = globalSourceSearch.trim().toLowerCase();
       const matchesText = !query || 
         (item.channelName || "").toLowerCase().includes(query) || 
@@ -822,9 +838,70 @@ export default function App() {
         }
       }
 
-      return matchesText && matchesIsp && matchesProvince && matchesStatus && matchesResolution;
+      let matchesType = true;
+      if (globalSourceType !== "all") {
+        const typeInfo = item.streamTypeInfo;
+        if (globalSourceType === "unicast") {
+          matchesType = !typeInfo.isMulticast;
+        } else if (globalSourceType === "multicast") {
+          matchesType = typeInfo.isMulticast;
+        } else if (globalSourceType === "hls") {
+          matchesType = typeInfo.type === "HLS";
+        } else if (globalSourceType === "flv") {
+          matchesType = typeInfo.type === "HTTP-FLV";
+        } else if (globalSourceType === "ts") {
+          matchesType = typeInfo.type === "HTTP-TS";
+        } else if (globalSourceType === "rtsp") {
+          matchesType = typeInfo.type === "RTSP";
+        } else if (globalSourceType === "rtp") {
+          matchesType = typeInfo.type === "RTP";
+        } else if (globalSourceType === "udp") {
+          matchesType = typeInfo.type === "UDP";
+        } else if (globalSourceType === "rtmp") {
+          matchesType = typeInfo.type === "RTMP";
+        } else if (globalSourceType === "http") {
+          matchesType = typeInfo.type === "HTTP";
+        }
+      }
+
+      return matchesText && matchesIsp && matchesProvince && matchesStatus && matchesResolution && matchesType;
     });
-  }, [channels, globalSourceSearch, globalSourceIsp, globalSourceProvince, globalSourceStatus, globalSourceResolution]);
+
+    // Sort according to globalSourceSortBy
+    return [...filtered].sort((a, b) => {
+      if (globalSourceSortBy === "quality") {
+        return b.qualityScore.score - a.qualityScore.score;
+      }
+      if (globalSourceSortBy === "quality_asc") {
+        return a.qualityScore.score - b.qualityScore.score;
+      }
+      if (globalSourceSortBy === "latency") {
+        const latA = a.latency && a.latency > 0 ? a.latency : 9999;
+        const latB = b.latency && b.latency > 0 ? b.latency : 9999;
+        return latA - latB;
+      }
+      if (globalSourceSortBy === "stability") {
+        const rateA = a.testCount && a.testCount > 0 ? (a.successCount || 0) / a.testCount : (a.status === "active" ? 0.8 : 0);
+        const rateB = b.testCount && b.testCount > 0 ? (b.successCount || 0) / b.testCount : (b.status === "active" ? 0.8 : 0);
+        return rateB - rateA;
+      }
+      if (globalSourceSortBy === "resolution") {
+        const getResRank = (res?: string) => {
+          const r = (res || "").toLowerCase();
+          if (r.includes("4k") || r.includes("2160")) return 5;
+          if (r.includes("1080")) return 4;
+          if (r.includes("720")) return 3;
+          if (r.includes("576") || r.includes("480")) return 2;
+          return 1;
+        };
+        return getResRank(b.resolution) - getResRank(a.resolution);
+      }
+      if (globalSourceSortBy === "name") {
+        return (a.channelName || "").localeCompare(b.channelName || "", "zh");
+      }
+      return 0;
+    });
+  }, [channels, globalSourceSearch, globalSourceIsp, globalSourceProvince, globalSourceStatus, globalSourceResolution, globalSourceType, globalSourceSortBy]);
 
   const slicedGlobalSources = useMemo(() => {
     return filteredGlobalSources.slice(0, globalSourcePage * SOURCES_PER_PAGE);
@@ -2378,6 +2455,7 @@ export default function App() {
       setSingleTestModalState(prev => ({ ...prev, isRetesting: false }));
     }
   };
+
   const handleGlobalBatchDelete = () => {
     if (selectedGlobalSourceIds.length === 0) {
       showFeedback("info", "请先选择需要批量删除的线路");
@@ -3569,6 +3647,9 @@ export default function App() {
     if (exportParams.isp) parts.push(`isp=${encodeURIComponent(exportParams.isp)}`);
     if (exportParams.province) parts.push(`province=${encodeURIComponent(exportParams.province)}`);
     if (exportParams.status) parts.push(`status=${encodeURIComponent(exportParams.status)}`);
+    if (exportParams.streamType) parts.push(`streamType=${encodeURIComponent(exportParams.streamType)}`);
+    if (exportParams.excludeRtp) parts.push(`excludeRtp=true`);
+    if (exportParams.sortByQuality) parts.push(`sortByQuality=true`);
     if (exportParams.limit) parts.push(`limit=${encodeURIComponent(exportParams.limit)}`);
     if (exportParams.maxPerChannel) parts.push(`maxPerChannel=${encodeURIComponent(exportParams.maxPerChannel)}`);
     return parts.length > 0 ? "?" + parts.join("&") : "";
@@ -4822,6 +4903,29 @@ export default function App() {
                           })()}
                         </div>
                         
+                        {/* RTP/TS Slice Sources Warning Notice */}
+                        {(() => {
+                          const nonIsolated = (selectedChannel.sources || []).filter(s => !s.isolated);
+                          const isAllRtpTs = nonIsolated.length > 0 && nonIsolated.every(s => detectStreamType(s.url).isRtpOrTsSlice);
+                          if (!isAllRtpTs) return null;
+                          return (
+                            <div className="bg-amber-50/90 border border-amber-200/90 p-3 rounded-xl text-xs text-amber-950 flex items-start gap-2.5 animate-fade-in shadow-2xs shrink-0">
+                              <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                              <div className="space-y-1">
+                                <div className="font-bold text-amber-900 flex items-center gap-1.5">
+                                  <span>⚠️ 纯切片源提示：当前频道所有可用线路均为包含 /rtp/ 或 /tsfile/ 的专网切片流</span>
+                                  <span className="text-[10px] bg-amber-200/80 px-1.5 py-0.2 rounded font-semibold text-amber-900">部分网络可能无法播放</span>
+                                </div>
+                                <p className="text-[11px] text-amber-800 leading-relaxed">
+                                  此类流多为特定运营商内网切片，在普通公网、跨网或移动端可能无法播放。系统已在全局导出时启用智能多样性保障。
+                                  <br />
+                                  <b>推荐优化：</b>点击右上角<b>「新增加播线路」</b>补充标准 HLS (.m3u8) 或 HTTP-FLV 通用单播备用源，确保全网设备均能秒开！
+                                </p>
+                              </div>
+                            </div>
+                          );
+                        })()}
+
                         {(!selectedChannel.sources || selectedChannel.sources.length === 0) ? (
                           <div className="flex flex-col items-center justify-center py-16 text-slate-350 border border-dashed rounded-2xl border-slate-200 shrink-0">
                             <Compass className="w-12 h-12 stroke-[1]" />
@@ -4831,6 +4935,8 @@ export default function App() {
                           <div className="space-y-2.5 overflow-y-auto pr-1 flex-1 min-h-0 pb-2">
                             {filterSourcesByStatus(selectedChannel.sources || [], sourceFilterStatus, sourceFilterResolution).map((src, index) => {
                               const isChecked = selectedSourceIds.includes(src.id);
+                              const streamType = detectStreamType(src.url);
+                              const qScore = calculateQualityScore(src);
                               return (
                                 <div 
                                   key={src.id} 
@@ -4857,6 +4963,27 @@ export default function App() {
                                     <div className="min-w-0 flex-1 space-y-1.5">
                                       <div className="flex items-center gap-1.5 flex-wrap">
                                         <span className="font-bold text-slate-400 font-mono select-none text-[11px]">#{index + 1}</span>
+                                        
+                                        {/* Protocol Badge */}
+                                        <span className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold border ${streamType.badgeClass}`}>
+                                          {streamType.label}
+                                        </span>
+
+                                        {/* Quality Score Pill */}
+                                        <div 
+                                          className="inline-flex items-center gap-1 cursor-help"
+                                          title={`综合质量评分: ${qScore.score}分 (${qScore.levelText})\n- 状态基线: ${qScore.breakdown.statusScore}分\n- 延迟得分: +${qScore.breakdown.latencyScore}分\n- 历史稳定性: +${qScore.breakdown.stabilityScore}分\n- 画质加分: +${qScore.breakdown.resolutionScore}分\n- 协议兼容加分: +${qScore.breakdown.protocolScore}分`}
+                                        >
+                                          <span className={`px-1.5 py-0.5 rounded text-[10px] font-mono font-black border ${
+                                            qScore.score >= 85 ? "bg-emerald-50 text-emerald-700 border-emerald-300" :
+                                            qScore.score >= 70 ? "bg-blue-50 text-blue-700 border-blue-200" :
+                                            qScore.score >= 50 ? "bg-amber-50 text-amber-700 border-amber-200" :
+                                            "bg-rose-50 text-rose-700 border-rose-200"
+                                          }`}>
+                                            ★ {qScore.score}
+                                          </span>
+                                        </div>
+
                                         <span className="bg-slate-100 text-slate-700 font-semibold px-2 py-0.5 rounded text-[10px]">
                                           {src.province || "未知省份"}
                                         </span>
@@ -5497,7 +5624,7 @@ export default function App() {
                       </span>
                     </div>
 
-                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2.5 sm:gap-4">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-7 gap-2.5 sm:gap-3">
                       <div className="space-y-1">
                         <label className="text-[10px] uppercase font-bold text-slate-400 block">搜索频道或流链接</label>
                         <div className="relative">
@@ -5506,7 +5633,7 @@ export default function App() {
                             type="text"
                             value={globalSourceSearch}
                             onChange={(e) => setGlobalSourceSearch(e.target.value)}
-                            placeholder="如: cctv, m3u8, rst..."
+                            placeholder="如: cctv, m3u8, rtp..."
                             className="w-full text-xs pl-8 pr-3 p-2 border border-slate-200 rounded-xl bg-slate-50 focus:outline-none focus:border-indigo-500 font-medium"
                           />
                         </div>
@@ -5518,7 +5645,7 @@ export default function App() {
                           onChange={(e) => setGlobalSourceIsp(e.target.value)}
                           className="w-full text-xs p-2 border border-slate-200 rounded-xl bg-slate-50 focus:outline-none focus:border-indigo-500 font-bold"
                         >
-                          <option value="all">所有运营商类型 (不限)</option>
+                          <option value="all">所有运营商 (不限)</option>
                           <option value="电信">🟢 中国电信 (Telecom)</option>
                           <option value="联通">🔴 中国联通 (Unicom)</option>
                           <option value="移动">🔵 中国移动 (Mobile)</option>
@@ -5536,11 +5663,28 @@ export default function App() {
                           onChange={(e) => setGlobalSourceProvince(e.target.value)}
                           className="w-full text-xs p-2 border border-slate-200 rounded-xl bg-slate-50 focus:outline-none focus:border-indigo-500 font-bold"
                         >
-                          <option value="all">所有省份地区 (不限)</option>
+                          <option value="all">所有省份 (不限)</option>
                           <option value="全国">⭐ 全国通用</option>
                           {(allUniqueProvinceOptions || []).filter(x => x !== "全国" && x !== "全国通用").map(x => (
                             <option key={x} value={x}>{x}</option>
                           ))}
+                        </select>
+                      </div>
+                      <div className="space-y-1">
+                        <label className="text-[10px] uppercase font-bold text-slate-400 block">直播源协议类型 (Protocol)</label>
+                        <select
+                          value={globalSourceType}
+                          onChange={(e) => setGlobalSourceType(e.target.value)}
+                          className="w-full text-xs p-2 border border-slate-200 rounded-xl bg-slate-50 focus:outline-none focus:border-indigo-500 font-bold text-indigo-700"
+                        >
+                          <option value="all">所有协议类型 (不限)</option>
+                          <option value="general">🌐 仅通用/公网流 (排除 /rtp/、/tsfile/)</option>
+                          <option value="rtp_ts">⚠️ 仅 RTP/TS 切片流 (含 /rtp/、/tsfile/)</option>
+                          <option value="hls">🚀 HLS (m3u8 兼容最广)</option>
+                          <option value="flv">⚡ HTTP-FLV (低延迟)</option>
+                          <option value="ts">📦 HTTP-TS (传输流)</option>
+                          <option value="rtsp">📹 RTSP (专线/监控)</option>
+                          <option value="rtmp">📺 RTMP</option>
                         </select>
                       </div>
                       <div className="space-y-1">
@@ -5550,16 +5694,13 @@ export default function App() {
                           onChange={(e) => setGlobalSourceResolution(e.target.value)}
                           className="w-full text-xs p-2 border border-slate-200 rounded-xl bg-slate-50 focus:outline-none focus:border-indigo-500 font-bold"
                         >
-                          <option value="all">所有画质分辨率 (不限)</option>
+                          <option value="all">所有画质 (不限)</option>
                           <option value="4K">📺 4K (超高清 2160p)</option>
                           <option value="1080p">🎬 1080p (全高清)</option>
                           <option value="720p">⚡ 720p (高清)</option>
                           <option value="576p">📺 576p (标清)</option>
                           <option value="480p">📱 480p (标清)</option>
-                          <option value="unknown">❓ 未知 (未检测到/未设置)</option>
-                          {(allUniqueResolutionOptions || []).filter(x => !["4K", "1080p", "720p", "576p", "480p", "未知"].includes(x)).map(x => (
-                            <option key={x} value={x}>🎥 {x}</option>
-                          ))}
+                          <option value="unknown">❓ 未知 (未设置/未识别)</option>
                         </select>
                       </div>
                       <div className="space-y-1">
@@ -5578,9 +5719,24 @@ export default function App() {
                           <option value="unknown">⚪ 未测试 (Unknown)</option>
                         </select>
                       </div>
+                      <div className="space-y-1">
+                        <label className="text-[10px] uppercase font-bold text-slate-400 block">综合排序 (Sort Order)</label>
+                        <select
+                          value={globalSourceSortBy}
+                          onChange={(e) => setGlobalSourceSortBy(e.target.value as any)}
+                          className="w-full text-xs p-2 border border-indigo-200 rounded-xl bg-indigo-50/50 focus:outline-none focus:border-indigo-500 font-bold text-indigo-900"
+                        >
+                          <option value="quality">⭐ 综合质量分最高 (默认)</option>
+                          <option value="quality_asc">⭐ 综合质量分最低</option>
+                          <option value="latency">⚡ 最低网络延迟 (ms)</option>
+                          <option value="stability">🛡️ 最高连通稳定性</option>
+                          <option value="resolution">📺 最高画面分辨率</option>
+                          <option value="default">📋 默认收录顺序</option>
+                        </select>
+                      </div>
                     </div>
 
-                    {(globalSourceSearch || globalSourceIsp !== "all" || globalSourceProvince !== "all" || globalSourceStatus !== "all" || globalSourceResolution !== "all") && (
+                    {(globalSourceSearch || globalSourceIsp !== "all" || globalSourceProvince !== "all" || globalSourceStatus !== "all" || globalSourceResolution !== "all" || globalSourceType !== "all" || globalSourceSortBy !== "quality") && (
                       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center pt-2 border-t border-slate-100 gap-1.5">
                         <span className="text-[10px] text-slate-400 font-semibold">🔍 筛选出 {filteredGlobalSources.length} 条符合物理描述的直播源</span>
                         <button 
@@ -5590,6 +5746,8 @@ export default function App() {
                             setGlobalSourceProvince("all");
                             setGlobalSourceStatus("all");
                             setGlobalSourceResolution("all");
+                            setGlobalSourceType("all");
+                            setGlobalSourceSortBy("quality");
                           }}
                           className="text-xs font-bold text-slate-500 hover:text-indigo-650 flex items-center gap-1.5 transition-all cursor-pointer"
                         >
@@ -5706,11 +5864,22 @@ export default function App() {
                                     }}
                                   />
                                 </th>
-                                <th className="py-4 px-3 w-48">所属电视频道</th>
+                                <th className="py-4 px-3 w-44">所属电视频道</th>
                                 <th className="py-4 px-3">全量播放源链接</th>
-                                <th className="py-4 px-3 w-28">画质/分辨率</th>
-                                <th className="py-4 px-3 w-32">运营商 (ISP)</th>
-                                <th className="py-4 px-3 w-32">地区省份</th>
+                                <th className="py-4 px-3 w-28">流协议类型</th>
+                                <th 
+                                  className="py-4 px-3 w-32 cursor-pointer hover:text-indigo-650 select-none transition"
+                                  onClick={() => setGlobalSourceSortBy(prev => prev === "quality" ? "quality_asc" : "quality")}
+                                  title="点击切换质量评分升降序"
+                                >
+                                  <div className="flex items-center gap-1 font-extrabold text-indigo-700">
+                                    <span>综合质量分</span>
+                                    <span>{globalSourceSortBy === "quality" ? "▼" : globalSourceSortBy === "quality_asc" ? "▲" : "↕"}</span>
+                                  </div>
+                                </th>
+                                <th className="py-4 px-3 w-24">画质/分辨率</th>
+                                <th className="py-4 px-3 w-24">运营商</th>
+                                <th className="py-4 px-3 w-24">省份地区</th>
                                 <th className="py-4 px-3 w-32">网络连通状态</th>
                                 <th className="py-4 px-4 w-32 text-right">线路日常管理</th>
                               </tr>
@@ -5741,14 +5910,14 @@ export default function App() {
                                       ) : (
                                         <div className="w-5.5 h-5.5 rounded bg-slate-100 text-[10px] font-black flex items-center justify-center text-slate-400 font-mono p-0.5">TV</div>
                                       )}
-                                      <div className="truncate max-w-[140px]">
+                                      <div className="truncate max-w-[130px]">
                                         <span className="font-extrabold text-slate-800 text-xs block truncate" title={item.channelName}>{item.channelName}</span>
                                       </div>
                                     </div>
                                   </td>
                                   <td className="py-3.5 px-3 font-mono">
                                     <div className="flex items-center gap-2">
-                                      <span className="truncate max-w-sm block text-slate-500 select-all font-semibold" title={item.url}>{item.url}</span>
+                                      <span className="truncate max-w-xs block text-slate-500 select-all font-semibold" title={item.url}>{item.url}</span>
                                       <button 
                                         onClick={(e) => {
                                           e.stopPropagation();
@@ -5760,6 +5929,38 @@ export default function App() {
                                       >
                                         <Copy className="w-3.5 h-3.5" />
                                       </button>
+                                    </div>
+                                  </td>
+                                  <td className="py-3.5 px-3">
+                                    <div className="flex items-center gap-1">
+                                      <span className={`inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-bold border ${
+                                        item.streamTypeInfo.type === "HLS" ? "bg-emerald-50 text-emerald-700 border-emerald-200" :
+                                        item.streamTypeInfo.type === "HTTP-FLV" ? "bg-sky-50 text-sky-700 border-sky-200" :
+                                        item.streamTypeInfo.type === "RTSP" ? "bg-purple-50 text-purple-700 border-purple-200" :
+                                        item.streamTypeInfo.isMulticast ? "bg-amber-50 text-amber-700 border-amber-300" :
+                                        "bg-slate-50 text-slate-700 border-slate-200"
+                                      }`}>
+                                        {item.streamTypeInfo.label}
+                                      </span>
+                                      {item.streamTypeInfo.isMulticast && (
+                                        <span className="text-[11px] text-amber-600 font-bold cursor-help" title="纯组播流：常规播放器（PotPlayer/手机）直连可能黑屏，需 Udpxy 网关转换">⚠️</span>
+                                      )}
+                                    </div>
+                                  </td>
+                                  <td className="py-3.5 px-3">
+                                    <div 
+                                      className="flex items-center gap-1.5 cursor-help" 
+                                      title={`综合质量得分: ${item.qualityScore.score}分 (${item.qualityScore.levelText})\n- 状态基线: ${item.qualityScore.breakdown.statusScore}分\n- 延迟得分: +${item.qualityScore.breakdown.latencyScore}分\n- 历史稳定性: +${item.qualityScore.breakdown.stabilityScore}分\n- 画质加分: +${item.qualityScore.breakdown.resolutionScore}分\n- 协议兼容加分: +${item.qualityScore.breakdown.protocolScore}分`}
+                                    >
+                                      <span className={`inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-mono font-black border ${
+                                        item.qualityScore.score >= 85 ? "bg-emerald-50 text-emerald-700 border-emerald-300 shadow-2xs" :
+                                        item.qualityScore.score >= 70 ? "bg-blue-50 text-blue-700 border-blue-200" :
+                                        item.qualityScore.score >= 50 ? "bg-amber-50 text-amber-700 border-amber-200" :
+                                        "bg-rose-50 text-rose-700 border-rose-200"
+                                      }`}>
+                                        ★ {item.qualityScore.score}
+                                      </span>
+                                      <span className="text-[10px] text-slate-400 font-bold">{item.qualityScore.levelText}</span>
                                     </div>
                                   </td>
                                   <td className="py-3.5 px-3">
@@ -6009,6 +6210,33 @@ export default function App() {
 
                                 {/* Badges Row */}
                                 <div className="flex flex-wrap items-center gap-1.5 my-2">
+                                  {/* Protocol Badge */}
+                                  <span className={`px-2 py-0.5 rounded text-[10px] font-bold border ${
+                                    item.streamTypeInfo.type === "HLS" ? "bg-emerald-50 text-emerald-700 border-emerald-200" :
+                                    item.streamTypeInfo.type === "HTTP-FLV" ? "bg-sky-50 text-sky-700 border-sky-200" :
+                                    item.streamTypeInfo.type === "RTSP" ? "bg-purple-50 text-purple-700 border-purple-200" :
+                                    item.streamTypeInfo.isMulticast ? "bg-amber-50 text-amber-800 border-amber-300 font-extrabold" :
+                                    "bg-slate-100 text-slate-700 border-slate-200"
+                                  }`}>
+                                    {item.streamTypeInfo.label}
+                                  </span>
+
+                                  {/* Quality Score Badge */}
+                                  <span className={`px-2 py-0.5 rounded text-[10px] font-mono font-black border ${
+                                    item.qualityScore.score >= 85 ? "bg-emerald-50 text-emerald-700 border-emerald-300 shadow-2xs" :
+                                    item.qualityScore.score >= 70 ? "bg-blue-50 text-blue-700 border-blue-200" :
+                                    item.qualityScore.score >= 50 ? "bg-amber-50 text-amber-700 border-amber-200" :
+                                    "bg-rose-50 text-rose-700 border-rose-200"
+                                  }`} title={`综合质量分: ${item.qualityScore.score}分 (${item.qualityScore.levelText})`}>
+                                    ★ {item.qualityScore.score}
+                                  </span>
+
+                                  {item.resolution && item.resolution !== "未知" && (
+                                    <span className="px-1.5 py-0.5 rounded text-[10px] font-extrabold font-mono bg-purple-50 text-purple-700 border border-purple-200/80">
+                                      {item.resolution}
+                                    </span>
+                                  )}
+
                                   <span className={`px-2 py-0.5 rounded text-[10px] font-bold border ${
                                     item.isp === "电信" ? "bg-sky-50 text-sky-700 border-sky-100" :
                                     item.isp === "联通" ? "bg-orange-50 text-orange-700 border-orange-100" :
@@ -6764,6 +6992,68 @@ export default function App() {
                           </button>
                         ))}
                       </div>
+                    </div>
+
+                    <div className="space-y-1.5">
+                      <label className="flex items-center justify-between">
+                        <span>直播源协议类型 (Stream Protocol)</span>
+                        <span className="text-[10px] text-indigo-600 font-normal">多协议精准过滤</span>
+                      </label>
+                      <select 
+                        value={exportParams.streamType}
+                        onChange={(e) => setExportParams({...exportParams, streamType: e.target.value})}
+                        className="w-full text-xs p-2.5 border border-slate-200 rounded-xl bg-slate-50 focus:outline-none"
+                      >
+                        <option value="">全部协议 (HLS / FLV / TS / RTSP / 切片流等)</option>
+                        <option value="general">仅通用公网流 ━ 排除 /rtp/、/tsfile/ 切片 (全网高兼容)</option>
+                        <option value="HLS">仅 HLS (m3u8) ━ 兼容性最广 (手机/TVBox/网页)</option>
+                        <option value="HTTP-FLV">仅 HTTP-FLV ━ 低延迟直播流</option>
+                        <option value="HTTP-TS">仅 HTTP-TS ━ 传统传输流</option>
+                        <option value="RTSP">仅 RTSP ━ 监控/专网直连</option>
+                        <option value="rtp_ts">仅 RTP/TS 切片流 ━ 包含 /rtp/ 或 /tsfile/ 专网流</option>
+                        <option value="RTMP">仅 RTMP ━ 流媒体直播协议</option>
+                      </select>
+                    </div>
+
+                    {/* RTP/TS Exclusion & Diversity Controls */}
+                    <div className="p-3.5 bg-amber-50/70 border border-amber-200/80 rounded-xl space-y-2.5">
+                      <div className="flex items-center justify-between">
+                        <label className="font-bold text-amber-900 text-xs flex items-center gap-1.5 cursor-pointer">
+                          <input 
+                            type="checkbox"
+                            checked={exportParams.excludeRtp}
+                            onChange={(e) => setExportParams({...exportParams, excludeRtp: e.target.checked})}
+                            className="rounded border-amber-300 text-amber-600 focus:ring-amber-500 w-4 h-4 cursor-pointer"
+                          />
+                          <span>🚫 排除 /rtp/、/tsfile/ 专网切片源</span>
+                        </label>
+                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-200/60 text-amber-900 font-semibold">推荐公网使用</span>
+                      </div>
+                      <p className="text-[11px] text-amber-800 leading-relaxed">
+                        部分网络环境对包含 <code className="bg-amber-100 px-1 rounded font-mono">/rtp/</code>、<code className="bg-amber-100 px-1 rounded font-mono">/tsfile/</code> 的专网切片源支持欠佳。勾选此项将严格排除此类源，确保下发的全是通用单播线路。
+                      </p>
+                      <div className="text-[10px] text-amber-900/80 bg-amber-100/50 p-2 rounded-lg border border-amber-200/50 leading-normal">
+                        🛡️ <b>智能防死锁机制</b>：即使未勾选排除，导出时系统也会自动执行<b>流类型多样性平衡</b>，确保通用 HLS 源不会被切片源全部挤占，保障播放器随时有可播放备线。
+                      </div>
+                    </div>
+
+                    {/* Quality score sorting */}
+                    <div className="p-3 bg-indigo-50/60 border border-indigo-100 rounded-xl space-y-1.5">
+                      <label className="font-bold text-indigo-950 text-xs flex items-center justify-between cursor-pointer">
+                        <span className="flex items-center gap-1.5">
+                          <input 
+                            type="checkbox"
+                            checked={exportParams.sortByQuality}
+                            onChange={(e) => setExportParams({...exportParams, sortByQuality: e.target.checked})}
+                            className="rounded border-indigo-300 text-indigo-600 focus:ring-indigo-500 w-4 h-4 cursor-pointer"
+                          />
+                          ⭐ 优先按综合质量评分 (Quality Score) 排序
+                        </span>
+                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-700 font-semibold">智能排优</span>
+                      </label>
+                      <p className="text-[10px] text-indigo-700 leading-relaxed">
+                        基于真实测速延迟、失败率、画面分辨率 (4K/1080P/720P) 和协议兼容性综合加权打分，将最优质源排在最前供播放器秒开。
+                      </p>
                     </div>
 
                     <div className="space-y-1.5">

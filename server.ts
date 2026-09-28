@@ -84,6 +84,11 @@ import {
   isPrivateOrIntranetUrl
 } from "./server/utils/network";
 
+import {
+  calculateQualityScore,
+  detectStreamType
+} from "./server/utils/quality";
+
 // Geo Channels & AI Services
 import {
   PROVINCES_LIST,
@@ -171,6 +176,7 @@ import {
   getPlaylistCacheKey,
   sortSourcesByGeo,
   sortSourcesForExport,
+  ensureStreamDiversity,
   getPlayableSources,
   getOrGeneratePlaylistExport,
   generateM3uPlaylist,
@@ -4616,10 +4622,31 @@ app.get("/api/channels", async (req, res) => {
 
   // CUSTOM EXPORTS/PLAYBACK API INTERFACE
   // Third-party players consume this!
-  // Example usage: http://localhost:3000/api/export/m3u?isp=电信&status=active
-  // Example usage: http://localhost:3000/api/export/txt?province=北京
+  // Example usage: http://localhost:3000/api/export/m3u?isp=电信&status=active&excludeRtp=true
+  // Example usage: http://localhost:3000/api/export/txt?province=北京&udpxy=http://192.168.1.1:4022
   app.get("/api/export/m3u", async (req, res) => {
-    const { category, isp, province, status, limit, maxPerChannel: queryMaxPerChannel, ip, clientIp, v } = req.query;
+    const {
+      category,
+      isp,
+      province,
+      status,
+      limit,
+      maxPerChannel: queryMaxPerChannel,
+      ip,
+      clientIp,
+      v,
+      excludeRtp: queryExcludeRtp,
+      noRtp,
+      excludeMulticast,
+      udpxy: queryUdpxy,
+      streamType: queryStreamType,
+      sortByQuality: querySortByQuality
+    } = req.query;
+
+    const excludeRtp = queryExcludeRtp === "true" || queryExcludeRtp === "1" || noRtp === "1" || excludeMulticast === "1" || excludeMulticast === "true";
+    const udpxy = queryUdpxy ? String(queryUdpxy).trim() : undefined;
+    const streamType = queryStreamType ? String(queryStreamType).trim() : undefined;
+    const sortByQuality = querySortByQuality !== "false" && querySortByQuality !== "0";
 
     let targetProvince = province ? String(province) : "";
     let targetIsp = isp ? String(isp) : "";
@@ -4673,7 +4700,10 @@ app.get("/api/channels", async (req, res) => {
       limit: limit ? String(limit) : undefined,
       maxPerChannel: queryMaxPerChannel ? String(queryMaxPerChannel) : undefined,
       baseUrl,
-      v: m3uLogoVersion || undefined
+      v: m3uLogoVersion || undefined,
+      excludeRtp,
+      streamType,
+      sortByQuality
     };
 
     const { content, etag } = getOrGeneratePlaylistExport(cacheParams, () => {
@@ -4704,8 +4734,11 @@ app.get("/api/channels", async (req, res) => {
 
           let processedSources = channel.sources;
 
-          // Strict ISP & Province matching via getPlayableSources (excludes cross-province telecom/ISP sources)
-          processedSources = getPlayableSources(processedSources, finalIsp, finalProvince);
+          // Strict ISP & Province matching via getPlayableSources
+          processedSources = getPlayableSources(processedSources, finalIsp, finalProvince, {
+            excludeRtp,
+            streamType
+          });
 
           // Status filtering: if status is "all", output all sources; if specific status, match it; default to "active"
           if (status === "all") {
@@ -4716,11 +4749,11 @@ app.get("/api/channels", async (req, res) => {
             processedSources = processedSources.filter(source => source.status === "active");
           }
 
-          // Prioritize active, RTSP protocol, and lowest latency
-          processedSources = sortSourcesForExport(processedSources);
+          // Prioritize active, general over /rtp/ and /tsfile/, and quality score
+          processedSources = sortSourcesForExport(processedSources, sortByQuality);
 
-          // 限制每个频道最大输出数量 (Limit max sources per channel)
-          const sourcesToExport = processedSources.slice(0, maxPerChannel);
+          // 智能保障流类型多样性，避免全量下发专网/切片流导致的客户端无法播放
+          const sourcesToExport = ensureStreamDiversity(processedSources, maxPerChannel);
           sourcesToExport.forEach(bestSource => {
             if (count >= maxLimit) return;
 
@@ -4776,7 +4809,27 @@ app.get("/api/channels", async (req, res) => {
 
   // TXT (TVBox compatible) format
   app.get("/api/export/txt", async (req, res) => {
-    const { category, isp, province, status, limit, maxPerChannel: queryMaxPerChannel, ip, clientIp } = req.query;
+    const {
+      category,
+      isp,
+      province,
+      status,
+      limit,
+      maxPerChannel: queryMaxPerChannel,
+      ip,
+      clientIp,
+      excludeRtp: queryExcludeRtp,
+      noRtp,
+      excludeMulticast,
+      udpxy: queryUdpxy,
+      streamType: queryStreamType,
+      sortByQuality: querySortByQuality
+    } = req.query;
+
+    const excludeRtp = queryExcludeRtp === "true" || queryExcludeRtp === "1" || noRtp === "1" || excludeMulticast === "1" || excludeMulticast === "true";
+    const udpxy = queryUdpxy ? String(queryUdpxy).trim() : undefined;
+    const streamType = queryStreamType ? String(queryStreamType).trim() : undefined;
+    const sortByQuality = querySortByQuality !== "false" && querySortByQuality !== "0";
 
     let targetProvince = province ? String(province) : "";
     let targetIsp = isp ? String(isp) : "";
@@ -4824,7 +4877,10 @@ app.get("/api/channels", async (req, res) => {
       province: finalProvince || undefined,
       status: status ? String(status) : undefined,
       limit: limit ? String(limit) : undefined,
-      maxPerChannel: queryMaxPerChannel ? String(queryMaxPerChannel) : undefined
+      maxPerChannel: queryMaxPerChannel ? String(queryMaxPerChannel) : undefined,
+      excludeRtp,
+      streamType,
+      sortByQuality
     };
 
     const { content, etag } = getOrGeneratePlaylistExport(cacheParams, () => {
@@ -4850,8 +4906,11 @@ app.get("/api/channels", async (req, res) => {
 
           let processedSources = channel.sources;
 
-          // Strict ISP & Province matching via getPlayableSources (excludes cross-province telecom/ISP sources)
-          processedSources = getPlayableSources(processedSources, finalIsp, finalProvince);
+          // Strict ISP & Province matching via getPlayableSources
+          processedSources = getPlayableSources(processedSources, finalIsp, finalProvince, {
+            excludeRtp,
+            streamType
+          });
 
           // Status filtering: if status is "all", output all sources; if specific status, match it; default to "active"
           if (status === "all") {
@@ -4862,11 +4921,11 @@ app.get("/api/channels", async (req, res) => {
             processedSources = processedSources.filter(source => source.status === "active");
           }
 
-          // Prioritize active, RTSP protocol, and lowest latency
-          processedSources = sortSourcesForExport(processedSources);
+          // Prioritize active, general over /rtp/ and /tsfile/, and quality score
+          processedSources = sortSourcesForExport(processedSources, sortByQuality);
 
-          // 限制每个频道最大输出数量 (Limit max sources per channel)
-          const sourcesToExport = processedSources.slice(0, maxPerChannel);
+          // 智能保障流类型多样性，避免全量下发专网/切片流导致的客户端无法播放
+          const sourcesToExport = ensureStreamDiversity(processedSources, maxPerChannel);
           sourcesToExport.forEach(bestSource => {
             if (count >= maxLimit) return;
 
