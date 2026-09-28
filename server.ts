@@ -81,7 +81,8 @@ import {
 
 import {
   fetchBufferWithFallback,
-  isPrivateOrIntranetUrl
+  isPrivateOrIntranetUrl,
+  extractClientIp
 } from "./server/utils/network";
 
 import {
@@ -4623,7 +4624,7 @@ app.get("/api/channels", async (req, res) => {
   // CUSTOM EXPORTS/PLAYBACK API INTERFACE
   // Third-party players consume this!
   // Example usage: http://localhost:3000/api/export/m3u?isp=电信&status=active&excludeRtp=true
-  // Example usage: http://localhost:3000/api/export/txt?province=北京&udpxy=http://192.168.1.1:4022
+  // Example usage: http://localhost:3000/api/export/txt?status=active
   app.get("/api/export/m3u", async (req, res) => {
     const {
       category,
@@ -4632,54 +4633,43 @@ app.get("/api/channels", async (req, res) => {
       status,
       limit,
       maxPerChannel: queryMaxPerChannel,
-      ip,
-      clientIp,
       v,
       excludeRtp: queryExcludeRtp,
       noRtp,
       excludeMulticast,
-      udpxy: queryUdpxy,
       streamType: queryStreamType,
       sortByQuality: querySortByQuality
     } = req.query;
 
     const excludeRtp = queryExcludeRtp === "true" || queryExcludeRtp === "1" || noRtp === "1" || excludeMulticast === "1" || excludeMulticast === "true";
-    const udpxy = queryUdpxy ? String(queryUdpxy).trim() : undefined;
     const streamType = queryStreamType ? String(queryStreamType).trim() : undefined;
     const sortByQuality = querySortByQuality !== "false" && querySortByQuality !== "0";
 
-    let targetProvince = province ? String(province) : "";
-    let targetIsp = isp ? String(isp) : "";
+    const hasExplicitIsp = typeof isp === "string" && isp.trim() !== "" && isp.trim() !== "all";
+    const hasExplicitProvince = typeof province === "string" && province.trim() !== "" && province.trim() !== "all";
 
-    // If province or isp not explicitly provided, detect from IP
-    let resolvedClientIp = "";
-    if (!targetProvince || !targetIsp) {
-      if (typeof ip === "string" && ip) {
-        resolvedClientIp = ip;
-      } else if (typeof clientIp === "string" && clientIp) {
-        resolvedClientIp = clientIp;
-      } else if (typeof req.headers["x-forwarded-for"] === "string") {
-        resolvedClientIp = req.headers["x-forwarded-for"].split(",")[0].trim();
-      } else if (Array.isArray(req.headers["x-forwarded-for"])) {
-        resolvedClientIp = req.headers["x-forwarded-for"][0].trim();
-      } else if (typeof req.headers["x-real-ip"] === "string") {
-        resolvedClientIp = req.headers["x-real-ip"].trim();
-      } else {
-        resolvedClientIp = req.socket.remoteAddress || "";
-      }
+    let targetProvince = hasExplicitProvince ? String(province).trim() : "";
+    let targetIsp = hasExplicitIsp ? String(isp).trim() : "";
+    const resolvedClientIp = extractClientIp(req);
+    let autoDetected = false;
 
-      if (resolvedClientIp) {
+    // 参数未指定运营商时，根据客户端 IP 通过接口获取 ISP，如果正确获取则下发指定 ISP 专属源，否则导出全网可播放直播源
+    if (!hasExplicitIsp) {
+      if (resolvedClientIp && resolvedClientIp !== "127.0.0.1" && resolvedClientIp !== "localhost") {
         try {
           const geo = await getClientIpGeo(resolvedClientIp);
-          if (!targetProvince && geo.province) {
-            targetProvince = geo.province;
+          if (geo && geo.isp && geo.isp.trim()) {
+            targetIsp = geo.isp.trim();
+            autoDetected = true;
+            if (!hasExplicitProvince && geo.province && geo.province.trim()) {
+              targetProvince = geo.province.trim();
+            }
+            console.log(`[EXPORT M3U AUTO-ISP] 客户端 IP: ${resolvedClientIp} -> 识别到运营商: [${targetIsp}] (省份: ${targetProvince || "全国"}) -> 优先下发 [${targetIsp}] 专属直播源 (专属 RTSP 线路置顶)`);
+          } else {
+            console.log(`[EXPORT M3U AUTO-ISP] 客户端 IP: ${resolvedClientIp} -> 未识别到合适运营商 -> 自动导出全网可播放直播源`);
           }
-          if (!targetIsp && geo.isp) {
-            targetIsp = geo.isp;
-          }
-          console.log(`[EXPORT M3U AUTO-IP] Client IP ${resolvedClientIp} matched Province: ${targetProvince}, ISP: ${targetIsp}`);
         } catch (e) {
-          console.error("[EXPORT M3U AUTO-IP ERROR]", e);
+          console.error("[EXPORT M3U AUTO-ISP ERROR]", e);
         }
       }
     }
@@ -4688,8 +4678,8 @@ app.get("/api/channels", async (req, res) => {
     const protocol = req.headers['x-forwarded-proto'] || req.protocol || 'http';
     const baseUrl = `${protocol}://${host}`;
 
-    const finalIsp = isp ? String(isp) : targetIsp;
-    const finalProvince = province ? String(province) : targetProvince;
+    const finalIsp = targetIsp;
+    const finalProvince = targetProvince;
 
     const cacheParams = {
       format: "m3u" as const,
@@ -4734,26 +4724,26 @@ app.get("/api/channels", async (req, res) => {
 
           let processedSources = channel.sources;
 
-          // Strict ISP & Province matching via getPlayableSources
+          // Strict ISP & Province matching via getPlayableSources (没有合适 ISP 则过滤掉专网绑定源，导出全网可播放直播源)
           processedSources = getPlayableSources(processedSources, finalIsp, finalProvince, {
             excludeRtp,
             streamType
           });
 
-          // Status filtering: if status is "all", output all sources; if specific status, match it; default to "active"
+          // Status filtering
           if (status === "all") {
-            // Keep all sources (active, unknown, inactive)
+            // Keep all sources
           } else if (status) {
             processedSources = processedSources.filter(source => source.status === String(status));
           } else {
             processedSources = processedSources.filter(source => source.status === "active");
           }
 
-          // Prioritize active, general over /rtp/ and /tsfile/, and quality score
-          processedSources = sortSourcesForExport(processedSources, sortByQuality);
+          // ISP 限定模式下电信等专属 RTSP 线路置顶在最前面，全网模式下公网通用源优先
+          processedSources = sortSourcesForExport(processedSources, finalIsp, sortByQuality);
 
-          // 智能保障流类型多样性，避免全量下发专网/切片流导致的客户端无法播放
-          const sourcesToExport = ensureStreamDiversity(processedSources, maxPerChannel);
+          // 智能保障流类型多样性
+          const sourcesToExport = ensureStreamDiversity(processedSources, maxPerChannel, finalIsp);
           sourcesToExport.forEach(bestSource => {
             if (count >= maxLimit) return;
 
@@ -4789,9 +4779,11 @@ app.get("/api/channels", async (req, res) => {
     res.setHeader("Expires", "0");
     res.setHeader("ETag", etag);
     res.setHeader("X-Client-IP", resolvedClientIp || "");
-    res.setHeader("X-Client-ISP", encodeURIComponent(targetIsp || ""));
-    res.setHeader("X-Client-Province", encodeURIComponent(targetProvince || ""));
-    const m3uDebugHeader = `\n# [Debug Info] Client IP: ${resolvedClientIp || "N/A"} | Detected ISP: ${targetIsp || "None"} | Detected Province: ${targetProvince || "None"}`;
+    res.setHeader("X-Client-ISP", encodeURIComponent(finalIsp || ""));
+    res.setHeader("X-Client-Province", encodeURIComponent(finalProvince || ""));
+    
+    const ispDesc = finalIsp ? `${finalIsp}${autoDetected ? " (IP自动识别专属下发，RTSP专线置顶)" : " (参数指定)"}` : "全网通用可播放源";
+    const m3uDebugHeader = `\n# [Smart Dispatch] Client IP: ${resolvedClientIp || "N/A"} | Matched ISP: ${ispDesc} | Province: ${finalProvince || "全国"}`;
     const firstLineEnd = content.indexOf("\n");
 
     recordClientAccess(req, "m3u", "/api/export/m3u", 200, {
@@ -4816,59 +4808,48 @@ app.get("/api/channels", async (req, res) => {
       status,
       limit,
       maxPerChannel: queryMaxPerChannel,
-      ip,
-      clientIp,
       excludeRtp: queryExcludeRtp,
       noRtp,
       excludeMulticast,
-      udpxy: queryUdpxy,
       streamType: queryStreamType,
       sortByQuality: querySortByQuality
     } = req.query;
 
     const excludeRtp = queryExcludeRtp === "true" || queryExcludeRtp === "1" || noRtp === "1" || excludeMulticast === "1" || excludeMulticast === "true";
-    const udpxy = queryUdpxy ? String(queryUdpxy).trim() : undefined;
     const streamType = queryStreamType ? String(queryStreamType).trim() : undefined;
     const sortByQuality = querySortByQuality !== "false" && querySortByQuality !== "0";
 
-    let targetProvince = province ? String(province) : "";
-    let targetIsp = isp ? String(isp) : "";
+    const hasExplicitIsp = typeof isp === "string" && isp.trim() !== "" && isp.trim() !== "all";
+    const hasExplicitProvince = typeof province === "string" && province.trim() !== "" && province.trim() !== "all";
 
-    // If province or isp not explicitly provided, detect from IP
-    let resolvedClientIp = "";
-    if (!targetProvince || !targetIsp) {
-      if (typeof ip === "string" && ip) {
-        resolvedClientIp = ip;
-      } else if (typeof clientIp === "string" && clientIp) {
-        resolvedClientIp = clientIp;
-      } else if (typeof req.headers["x-forwarded-for"] === "string") {
-        resolvedClientIp = req.headers["x-forwarded-for"].split(",")[0].trim();
-      } else if (Array.isArray(req.headers["x-forwarded-for"])) {
-        resolvedClientIp = req.headers["x-forwarded-for"][0].trim();
-      } else if (typeof req.headers["x-real-ip"] === "string") {
-        resolvedClientIp = req.headers["x-real-ip"].trim();
-      } else {
-        resolvedClientIp = req.socket.remoteAddress || "";
-      }
+    let targetProvince = hasExplicitProvince ? String(province).trim() : "";
+    let targetIsp = hasExplicitIsp ? String(isp).trim() : "";
+    const resolvedClientIp = extractClientIp(req);
+    let autoDetected = false;
 
-      if (resolvedClientIp) {
+    // 参数未指定运营商时，根据客户端 IP 通过接口获取 ISP，如果正确获取则下发指定 ISP 专属源，否则导出全网可播放直播源
+    if (!hasExplicitIsp) {
+      if (resolvedClientIp && resolvedClientIp !== "127.0.0.1" && resolvedClientIp !== "localhost") {
         try {
           const geo = await getClientIpGeo(resolvedClientIp);
-          if (!targetProvince && geo.province) {
-            targetProvince = geo.province;
+          if (geo && geo.isp && geo.isp.trim()) {
+            targetIsp = geo.isp.trim();
+            autoDetected = true;
+            if (!hasExplicitProvince && geo.province && geo.province.trim()) {
+              targetProvince = geo.province.trim();
+            }
+            console.log(`[EXPORT TXT AUTO-ISP] 客户端 IP: ${resolvedClientIp} -> 识别到运营商: [${targetIsp}] (省份: ${targetProvince || "全国"}) -> 优先下发 [${targetIsp}] 专属直播源 (专属 RTSP 线路置顶)`);
+          } else {
+            console.log(`[EXPORT TXT AUTO-ISP] 客户端 IP: ${resolvedClientIp} -> 未识别到合适运营商 -> 自动导出全网可播放直播源`);
           }
-          if (!targetIsp && geo.isp) {
-            targetIsp = geo.isp;
-          }
-          console.log(`[EXPORT TXT AUTO-IP] Client IP ${resolvedClientIp} matched Province: ${targetProvince}, ISP: ${targetIsp}`);
         } catch (e) {
-          console.error("[EXPORT TXT AUTO-IP ERROR]", e);
+          console.error("[EXPORT TXT AUTO-ISP ERROR]", e);
         }
       }
     }
 
-    const finalIsp = isp ? String(isp) : targetIsp;
-    const finalProvince = province ? String(province) : targetProvince;
+    const finalIsp = targetIsp;
+    const finalProvince = targetProvince;
 
     const cacheParams = {
       format: "txt" as const,
@@ -4912,20 +4893,20 @@ app.get("/api/channels", async (req, res) => {
             streamType
           });
 
-          // Status filtering: if status is "all", output all sources; if specific status, match it; default to "active"
+          // Status filtering
           if (status === "all") {
-            // Keep all sources (active, unknown, inactive)
+            // Keep all sources
           } else if (status) {
             processedSources = processedSources.filter(source => source.status === String(status));
           } else {
             processedSources = processedSources.filter(source => source.status === "active");
           }
 
-          // Prioritize active, general over /rtp/ and /tsfile/, and quality score
-          processedSources = sortSourcesForExport(processedSources, sortByQuality);
+          // Prioritize active, ISP-specific (e.g. Telecom RTSP on top), general over /rtp/ and /tsfile/, and quality score
+          processedSources = sortSourcesForExport(processedSources, finalIsp, sortByQuality);
 
-          // 智能保障流类型多样性，避免全量下发专网/切片流导致的客户端无法播放
-          const sourcesToExport = ensureStreamDiversity(processedSources, maxPerChannel);
+          // 智能保障流类型多样性
+          const sourcesToExport = ensureStreamDiversity(processedSources, maxPerChannel, finalIsp);
           sourcesToExport.forEach(bestSource => {
             if (count >= maxLimit) return;
 
@@ -4970,8 +4951,8 @@ app.get("/api/channels", async (req, res) => {
     res.setHeader("Expires", "0");
     res.setHeader("ETag", etag);
     res.setHeader("X-Client-IP", resolvedClientIp || "");
-    res.setHeader("X-Client-ISP", encodeURIComponent(targetIsp || ""));
-    res.setHeader("X-Client-Province", encodeURIComponent(targetProvince || ""));
+    res.setHeader("X-Client-ISP", encodeURIComponent(finalIsp || ""));
+    res.setHeader("X-Client-Province", encodeURIComponent(finalProvince || ""));
 
     recordClientAccess(req, "txt", "/api/export/txt", 200, {
       province: finalProvince,
@@ -5031,29 +5012,23 @@ app.get("/api/channels", async (req, res) => {
       const channelName = req.params.channelName;
       const { isp, province } = req.query;
       
-      let targetProvince = province ? String(province) : "";
-      let targetIsp = isp ? String(isp) : "";
+      const hasExplicitIsp = typeof isp === "string" && isp.trim() !== "" && isp.trim() !== "all";
+      const hasExplicitProvince = typeof province === "string" && province.trim() !== "" && province.trim() !== "all";
+
+      let targetProvince = hasExplicitProvince ? String(province).trim() : "";
+      let targetIsp = hasExplicitIsp ? String(isp).trim() : "";
       
-      // Auto detect client IP Geo if params are missing
-      let resolvedClientIp = "";
-      if (!province && !isp) {
-        if (typeof req.query.ip === "string" && req.query.ip) {
-          resolvedClientIp = req.query.ip;
-        } else if (typeof req.headers["x-forwarded-for"] === "string") {
-          resolvedClientIp = req.headers["x-forwarded-for"].split(",")[0].trim();
-        } else if (Array.isArray(req.headers["x-forwarded-for"])) {
-          resolvedClientIp = req.headers["x-forwarded-for"][0].trim();
-        } else if (typeof req.headers["x-real-ip"] === "string") {
-          resolvedClientIp = req.headers["x-real-ip"].trim();
-        } else {
-          resolvedClientIp = req.socket.remoteAddress || "";
-        }
-        
-        if (resolvedClientIp) {
+      const resolvedClientIp = extractClientIp(req);
+      if (!hasExplicitIsp && resolvedClientIp && resolvedClientIp !== "127.0.0.1" && resolvedClientIp !== "localhost") {
+        try {
           const geo = await getClientIpGeo(resolvedClientIp);
-          targetProvince = geo.province;
-          targetIsp = geo.isp;
-        }
+          if (geo && geo.isp && geo.isp.trim()) {
+            targetIsp = geo.isp.trim();
+            if (!hasExplicitProvince && geo.province && geo.province.trim()) {
+              targetProvince = geo.province.trim();
+            }
+          }
+        } catch (e) {}
       }
       
       // Normalize search
@@ -5072,12 +5047,12 @@ app.get("/api/channels", async (req, res) => {
       let processedSources = getPlayableSources(channel.sources, targetIsp, targetProvince);
       processedSources = processedSources.filter(s => s.status === "active");
       
-      // Prioritize active, RTSP protocol, and lowest latency
-      processedSources = sortSourcesForExport(processedSources);
+      // Prioritize active, RTSP protocol (Telecom/ISP RTSP on top), and lowest latency
+      processedSources = sortSourcesForExport(processedSources, targetIsp);
 
       if (processedSources.length === 0) {
         // Fallback to channel sources just in case ISP filtering was too aggressive
-        processedSources = sortSourcesForExport(channel.sources.filter(s => !s.isolated && s.status === "active"));
+        processedSources = sortSourcesForExport(channel.sources.filter(s => !s.isolated && s.status === "active"), targetIsp);
       }
       
       if (processedSources.length === 0) {

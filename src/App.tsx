@@ -870,6 +870,17 @@ export default function App() {
     // Sort according to globalSourceSortBy
     return [...filtered].sort((a, b) => {
       if (globalSourceSortBy === "quality") {
+        if (globalSourceIsp !== "all") {
+          const isRtspA = (a.url || "").trim().toLowerCase().startsWith("rtsp://");
+          const isRtspB = (b.url || "").trim().toLowerCase().startsWith("rtsp://");
+          const matchA = (a.isp || "").includes(globalSourceIsp);
+          const matchB = (b.isp || "").includes(globalSourceIsp);
+          const ispRtspA = matchA && isRtspA;
+          const ispRtspB = matchB && isRtspB;
+          if (ispRtspA !== ispRtspB) {
+            return ispRtspA ? -1 : 1;
+          }
+        }
         return b.qualityScore.score - a.qualityScore.score;
       }
       if (globalSourceSortBy === "quality_asc") {

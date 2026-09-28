@@ -155,3 +155,35 @@ export function isPrivateOrIntranetUrl(urlStr: string): boolean {
   return false;
 }
 
+export function extractClientIp(req: any): string {
+  if (!req) return "127.0.0.1";
+  let ip = "";
+  if (req.query) {
+    if (typeof req.query.ip === "string" && req.query.ip.trim()) {
+      ip = req.query.ip.trim();
+    } else if (typeof req.query.clientIp === "string" && req.query.clientIp.trim()) {
+      ip = req.query.clientIp.trim();
+    }
+  }
+  if (!ip && req.headers) {
+    if (typeof req.headers["x-client-ip"] === "string" && req.headers["x-client-ip"].trim()) {
+      ip = req.headers["x-client-ip"].trim();
+    } else if (typeof req.headers["cf-connecting-ip"] === "string" && req.headers["cf-connecting-ip"].trim()) {
+      ip = req.headers["cf-connecting-ip"].trim();
+    } else if (typeof req.headers["x-real-ip"] === "string" && req.headers["x-real-ip"].trim()) {
+      ip = req.headers["x-real-ip"].trim();
+    } else if (typeof req.headers["x-forwarded-for"] === "string" && req.headers["x-forwarded-for"].trim()) {
+      ip = req.headers["x-forwarded-for"].split(",")[0].trim();
+    } else if (Array.isArray(req.headers["x-forwarded-for"]) && req.headers["x-forwarded-for"].length > 0) {
+      ip = String(req.headers["x-forwarded-for"][0]).trim();
+    }
+  }
+  if (!ip && req.socket && req.socket.remoteAddress) {
+    ip = req.socket.remoteAddress;
+  }
+  if (ip && ip.startsWith("::ffff:")) {
+    ip = ip.substring(7);
+  }
+  return ip || "127.0.0.1";
+}
+
