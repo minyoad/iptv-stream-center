@@ -86,6 +86,23 @@ export function sortSourcesByGeo(
   const hasTargetProv = normTargetProv !== "" && !isNationwideProvince(targetProvince);
 
   return [...sources].sort((a, b) => {
+    const isRtspA = (a.url || "").trim().toLowerCase().startsWith("rtsp://");
+    const isRtspB = (b.url || "").trim().toLowerCase().startsWith("rtsp://");
+    const srcIspA = (a.isp || "").trim().replace("中国", "");
+    const srcIspB = (b.isp || "").trim().replace("中国", "");
+
+    // 0. ISP 限定模式下，该运营商专属 RTSP 线路置顶在最最前面，绝对最高优先级
+    if (normTargetIsp) {
+      const isMatchIspA = srcIspA.includes(normTargetIsp) || normTargetIsp.includes(srcIspA) || (!srcIspA && isRtspA);
+      const isMatchIspB = srcIspB.includes(normTargetIsp) || normTargetIsp.includes(srcIspB) || (!srcIspB && isRtspB);
+
+      const isIspRtspA = isRtspA && isMatchIspA;
+      const isIspRtspB = isRtspB && isMatchIspB;
+      if (isIspRtspA !== isIspRtspB) {
+        return isIspRtspA ? -1 : 1;
+      }
+    }
+
     // 1. Status weight: active > unknown > inactive
     const statusWeightA = a.status === "active" ? 3 : (a.status === "inactive" ? 1 : 2);
     const statusWeightB = b.status === "active" ? 3 : (b.status === "inactive" ? 1 : 2);
@@ -97,9 +114,9 @@ export function sortSourcesByGeo(
     const getMatchScore = (s: LiveSource): number => {
       let score = 0;
       const srcProv = (s.province || "").trim();
-      const srcIsp = (s.isp || "").trim().replace("中国", "");
+      const sIsp = (s.isp || "").trim().replace("中国", "");
       const isSrcNationwide = isNationwideProvince(srcProv);
-      const isBGP = srcIsp.toUpperCase().includes("BGP") || srcIsp.toUpperCase().includes("BPG");
+      const isBGP = sIsp.toUpperCase().includes("BGP") || sIsp.toUpperCase().includes("BPG");
       const isRtsp = (s.url || "").trim().toLowerCase().startsWith("rtsp://");
 
       // Province match
@@ -110,7 +127,7 @@ export function sortSourcesByGeo(
         } else if (isSrcNationwide) {
           score += 100; // Nationwide fallback
         } else {
-          score -= 300; // Other province (heavily penalized)
+          score -= 100; // Other province minor penalty
         }
       } else {
         if (isSrcNationwide) {
@@ -120,13 +137,12 @@ export function sortSourcesByGeo(
 
       // ISP match
       if (normTargetIsp) {
-        if (srcIsp.includes(normTargetIsp) || normTargetIsp.includes(srcIsp)) {
+        if (sIsp.includes(normTargetIsp) || normTargetIsp.includes(sIsp)) {
           score += 200; // Exact ISP match
-          // 核心需求：限定运营商时（如电信），电信专属 RTSP 直连专网线路稳定性极高且低延迟，置顶在最前面
           if (isRtsp) {
-            score += 500;
+            score += 1000; // RTSP 置顶加分
           }
-        } else if (isBGP || !srcIsp || srcIsp === "其它" || srcIsp === "其他" || srcIsp === "未知") {
+        } else if (isBGP || !sIsp || sIsp === "其它" || sIsp === "其他" || sIsp === "未知") {
           score += 80; // BGP / General fallback
         } else {
           score -= 200; // Cross ISP penalty
@@ -164,7 +180,7 @@ export function sortSourcesByGeo(
 
 /**
  * 针对导出进行线路排序：
- * - 当限定了运营商 (如 targetIsp = "电信") 时，该运营商专属的 RTSP 专网线路置顶在最前面 (电信 RTSP 线路最高优先级)，接着是该运营商其它直连源，再之后是通用备用源。
+ * - 当限定了运营商 (如 targetIsp = "电信") 时，该运营商专属的 RTSP 专网线路置顶在最前面 (电信 RTSP 线路最高优先级，无论测试状态如何均绝对置顶)，接着是该运营商其它直连源，再之后是通用备用源。
  * - 当未限定运营商 (通用全网) 时，标准 HLS/通用单播源优先，RTSP 专网源后置或排除。
  */
 export function sortSourcesForExport(
@@ -176,30 +192,28 @@ export function sortSourcesForExport(
   const normTargetIsp = targetIsp ? targetIsp.trim().replace("中国", "") : "";
 
   return [...sources].sort((a, b) => {
-    // 1. Status weight: active > unknown > inactive
-    const statusWeightA = a.status === "active" ? 3 : (a.status === "inactive" ? 1 : 2);
-    const statusWeightB = b.status === "active" ? 3 : (b.status === "inactive" ? 1 : 2);
-    if (statusWeightA !== statusWeightB) {
-      return statusWeightB - statusWeightA;
-    }
-
-    const typeA = detectStreamType(a.url);
-    const typeB = detectStreamType(b.url);
     const isRtspA = (a.url || "").trim().toLowerCase().startsWith("rtsp://");
     const isRtspB = (b.url || "").trim().toLowerCase().startsWith("rtsp://");
+    const srcIspA = (a.isp || "").trim().replace("中国", "");
+    const srcIspB = (b.isp || "").trim().replace("中国", "");
 
-    // 2. ISP-Limited Priority (ISP 限定模式下的专属优化策略，如电信 RTSP 线路置顶在最前面)
+    // 1. ISP-Limited Priority (ISP 限定模式下的专属优化策略，如电信 RTSP 线路置顶在最前面)
     if (normTargetIsp) {
-      const srcIspA = (a.isp || "").trim().replace("中国", "");
-      const srcIspB = (b.isp || "").trim().replace("中国", "");
-      const isMatchIspA = srcIspA.includes(normTargetIsp);
-      const isMatchIspB = srcIspB.includes(normTargetIsp);
+      const isMatchIspA = srcIspA.includes(normTargetIsp) || normTargetIsp.includes(srcIspA) || (!srcIspA && isRtspA);
+      const isMatchIspB = srcIspB.includes(normTargetIsp) || normTargetIsp.includes(srcIspB) || (!srcIspB && isRtspB);
 
-      // 核心需求：限定运营商时（如电信），该运营商专属的 RTSP 专网直连线路最高优先级，置顶在最前面！
-      const isIspRtspA = isMatchIspA && isRtspA;
-      const isIspRtspB = isMatchIspB && isRtspB;
+      // 核心需求：限定运营商时（如电信），电信专属 RTSP 线路最高优先级，置顶在最前面！
+      const isIspRtspA = isRtspA && (isMatchIspA || !srcIspA || srcIspA === "未知" || srcIspA === "其它");
+      const isIspRtspB = isRtspB && (isMatchIspB || !srcIspB || srcIspB === "未知" || srcIspB === "其它");
       if (isIspRtspA !== isIspRtspB) {
         return isIspRtspA ? -1 : 1;
+      }
+
+      // 双方都是 RTSP 时，根据 ISP 匹配度排序
+      if (isRtspA && isRtspB) {
+        if (isMatchIspA !== isMatchIspB) {
+          return isMatchIspA ? -1 : 1;
+        }
       }
 
       // 专属运营商线路优先于通用/BGP/跨网线路
@@ -213,8 +227,24 @@ export function sortSourcesForExport(
           return isRtspA ? -1 : 1;
         }
       }
+
+      // 状态权重 (active > unknown > inactive)
+      const statusWeightA = a.status === "active" ? 3 : (a.status === "inactive" ? 1 : 2);
+      const statusWeightB = b.status === "active" ? 3 : (b.status === "inactive" ? 1 : 2);
+      if (statusWeightA !== statusWeightB) {
+        return statusWeightB - statusWeightA;
+      }
     } else {
-      // 3. 通用全网模式：非特定 ISP 时，HLS/通用单播优先于专网切片源，且 RTSP 专网流后置避免跨网黑屏
+      // 2. 通用全网模式：
+      // 状态权重
+      const statusWeightA = a.status === "active" ? 3 : (a.status === "inactive" ? 1 : 2);
+      const statusWeightB = b.status === "active" ? 3 : (b.status === "inactive" ? 1 : 2);
+      if (statusWeightA !== statusWeightB) {
+        return statusWeightB - statusWeightA;
+      }
+
+      const typeA = detectStreamType(a.url);
+      const typeB = detectStreamType(b.url);
       if (preferGeneral && typeA.isRtpOrTsSlice !== typeB.isRtpOrTsSlice) {
         return typeA.isRtpOrTsSlice ? 1 : -1;
       }
@@ -223,7 +253,7 @@ export function sortSourcesForExport(
       }
     }
 
-    // 4. Quality Score ranking
+    // 3. Quality Score ranking
     if (sortByQuality) {
       const qA = calculateQualityScore(a).score;
       const qB = calculateQualityScore(b).score;
@@ -241,8 +271,7 @@ export function sortSourcesForExport(
 /**
  * 智能保障流类型多样性：
  * 1. 当限定了运营商 (targetIsp) 且存在该运营商专属 RTSP/优质线路时，牢牢保证其排在首位 (置顶最前面)；
- * 2. 同时在备选席位中预留通用单播源 (HLS) 备线，防止单一协议在极端网络下失效；
- * 3. 当未限定运营商时，绝不允许切片源占满全部下发名额，确保普通网络环境客户端始终能获得可播放的通用备选源。
+ * 2. 当未限定运营商时，绝不允许切片源占满全部下发名额，确保普通网络环境客户端始终能获得可播放的通用备选源。
  */
 export function ensureStreamDiversity(
   sources: LiveSource[],
@@ -253,32 +282,9 @@ export function ensureStreamDiversity(
 
   const normTargetIsp = targetIsp ? targetIsp.trim().replace("中国", "") : "";
 
-  // 模式 A：限定了运营商（如电信）
+  // 模式 A：限定了运营商（如电信），由于已由 sortSourcesForExport 将 RTSP 及专属源置顶，直接按顺序截取
   if (normTargetIsp) {
-    const ispMatchedSources: LiveSource[] = [];
-    const otherSources: LiveSource[] = [];
-
-    for (const src of sources) {
-      const srcIsp = (src.isp || "").trim().replace("中国", "");
-      if (srcIsp.includes(normTargetIsp)) {
-        ispMatchedSources.push(src);
-      } else {
-        otherSources.push(src);
-      }
-    }
-
-    if (ispMatchedSources.length > 0) {
-      // 优先将已排序好的专属线路（如电信 RTSP 在最前）放入输出列表
-      const ispQuota = Math.min(
-        ispMatchedSources.length,
-        limit
-      );
-      const selectedIsp = ispMatchedSources.slice(0, ispQuota);
-      const remainingSlots = limit - selectedIsp.length;
-      const selectedOther = remainingSlots > 0 ? otherSources.slice(0, remainingSlots) : [];
-
-      return [...selectedIsp, ...selectedOther];
-    }
+    return sources.slice(0, limit);
   }
 
   // 模式 B：全网通用可播放模式
@@ -334,10 +340,8 @@ export function getPlayableSources(
   let filtered = [...sources].filter(s => !s.isolated);
   
   const normTargetIsp = targetIsp ? targetIsp.trim().replace("中国", "") : "";
-  const normTargetProv = targetProvince ? normalizeProvinceName(targetProvince) : "";
-  const hasTargetProv = normTargetProv !== "" && !isNationwideProvince(targetProvince);
 
-  // 0. Stream Protocol & RTP/TS Slice Filtering (针对 /rtp/、/tsfile/ 无法播放的防护方案)
+  // 0. Stream Protocol & RTP/TS Slice Filtering
   if (options.excludeRtp) {
     filtered = filtered.filter(src => {
       const typeInfo = detectStreamType(src.url);
@@ -350,7 +354,7 @@ export function getPlayableSources(
     filtered = filtered.filter(src => {
       const typeInfo = detectStreamType(src.url);
       if (stLower === "general" || stLower === "通用" || stLower === "公网") {
-        return !typeInfo.isRtpOrTsSlice;
+        return !typeInfo.isRtpOrTsSlice && typeInfo.type !== "RTSP";
       }
       if (stLower === "rtp-ts" || stLower === "rtp" || stLower === "tsfile" || stLower === "切片") {
         return typeInfo.isRtpOrTsSlice;
@@ -365,7 +369,7 @@ export function getPlayableSources(
         return typeInfo.type === "HTTP-TS";
       }
       if (stLower === "rtsp") {
-        return typeInfo.type === "RTSP";
+        return (src.url || "").trim().toLowerCase().startsWith("rtsp://") || typeInfo.type === "RTSP";
       }
       return true;
     });
@@ -374,6 +378,7 @@ export function getPlayableSources(
   if (normTargetIsp) {
     filtered = filtered.filter(src => {
       let srcIsp = (src.isp || "").trim();
+      const isRtsp = (src.url || "").trim().toLowerCase().startsWith("rtsp://");
       
       if (!srcIsp || srcIsp === "其它" || srcIsp === "其他" || srcIsp === "未知") {
         const urlLower = (src.url || "").toLowerCase();
@@ -392,66 +397,32 @@ export function getPlayableSources(
       const sIsp = srcIsp.replace("中国", "");
 
       // 1. ISP 匹配判定
-      let ispMatched = false;
-      if (!sIsp || srcIsp === "其它" || srcIsp === "其他" || isBGP) {
-        ispMatched = true;
-      } else if (sIsp.includes(normTargetIsp) || normTargetIsp.includes(sIsp)) {
-        ispMatched = true;
-      }
-
-      if (!ispMatched) {
-        return false;
-      }
-
-      // 2. 限定 ISP 时的省份互斥过滤
-      const srcProv = (src.province || "").trim();
-      if (hasTargetProv && !isNationwideProvince(srcProv)) {
-        const normSrcProv = normalizeProvinceName(srcProv);
-        if (normSrcProv && normSrcProv !== normTargetProv && !isBGP) {
+      if (sIsp) {
+        if (sIsp.includes(normTargetIsp) || normTargetIsp.includes(sIsp) || isBGP) {
+          return true;
+        }
+        // 排除明确属于其他运营商的专网源
+        const otherKnownIsps = ["电信", "联通", "移动", "广电", "铁通"].filter(k => k !== normTargetIsp);
+        if (otherKnownIsps.some(k => sIsp.includes(k))) {
           return false;
         }
       }
 
-      return true;
-    });
-  } else if (hasTargetProv) {
-    filtered = filtered.filter(src => {
-      const srcProv = (src.province || "").trim();
-      if (!isNationwideProvince(srcProv)) {
-        const normSrcProv = normalizeProvinceName(srcProv);
-        if (normSrcProv && normSrcProv !== normTargetProv) {
-          const isBGP = (src.isp || "").toUpperCase().includes("BGP");
-          if (!isBGP) {
-            return false;
-          }
-        }
+      // 未标明特定运营商的 RTSP 线路，在限定运营商模式下保留
+      if (isRtsp) {
+        return true;
       }
+
       return true;
     });
   }
 
-  // 3. RTSP 协议跨区域与跨运营商隔离
-  // 当未限定运营商（导出全网可播放直播源）时，排除特定运营商绑定的专网 RTSP 线路；
-  // 当限定运营商时，只保留该运营商或全网通用的 RTSP 线路。
+  // 2. RTSP 协议跨运营商隔离
   filtered = filtered.filter(src => {
     const isRtsp = (src.url || "").trim().toLowerCase().startsWith("rtsp://");
     if (!isRtsp) return true;
 
-    const srcProv = (src.province || "").trim();
     const srcIsp = (src.isp || "").trim().replace("中国", "");
-    const isNationwideSrc = isNationwideProvince(srcProv);
-
-    if (!isNationwideSrc) {
-      const normSrcProv = normalizeProvinceName(srcProv);
-      if (hasTargetProv) {
-        if (normSrcProv !== normTargetProv) {
-          return false;
-        }
-      } else {
-        return false;
-      }
-    }
-
     if (srcIsp && srcIsp !== "BGP" && srcIsp !== "未知" && srcIsp !== "其它") {
       if (normTargetIsp) {
         if (!srcIsp.includes(normTargetIsp) && !normTargetIsp.includes(srcIsp)) {
@@ -585,10 +556,23 @@ export function generateM3uPlaylist(options: {
         excludeRtp,
         streamType
       });
+      const normIspM3u = (isp || "").trim().replace("中国", "");
       if (status && status !== "all") {
-        processedSources = processedSources.filter(source => source.status === status);
+        processedSources = processedSources.filter(source => {
+          const isRtsp = (source.url || "").trim().toLowerCase().startsWith("rtsp://");
+          const sIsp = (source.isp || "").trim().replace("中国", "");
+          const isMatchedIspRtsp = isRtsp && normIspM3u && (sIsp.includes(normIspM3u) || !sIsp || sIsp === "未知" || sIsp === "其它");
+          if (isMatchedIspRtsp) return true;
+          return source.status === status;
+        });
       } else if (!status) {
-        processedSources = processedSources.filter(source => source.status === "active");
+        processedSources = processedSources.filter(source => {
+          const isRtsp = (source.url || "").trim().toLowerCase().startsWith("rtsp://");
+          const sIsp = (source.isp || "").trim().replace("中国", "");
+          const isMatchedIspRtsp = isRtsp && normIspM3u && (sIsp.includes(normIspM3u) || !sIsp || sIsp === "未知" || sIsp === "其它");
+          if (isMatchedIspRtsp) return true;
+          return source.status !== "inactive";
+        });
       }
       processedSources = sortSourcesForExport(processedSources, isp, sortByQuality !== false);
       
@@ -648,10 +632,23 @@ export function generateTxtPlaylist(options: {
         excludeRtp,
         streamType
       });
+      const normIspTxt = (isp || "").trim().replace("中国", "");
       if (status && status !== "all") {
-        processedSources = processedSources.filter(source => source.status === status);
+        processedSources = processedSources.filter(source => {
+          const isRtsp = (source.url || "").trim().toLowerCase().startsWith("rtsp://");
+          const sIsp = (source.isp || "").trim().replace("中国", "");
+          const isMatchedIspRtsp = isRtsp && normIspTxt && (sIsp.includes(normIspTxt) || !sIsp || sIsp === "未知" || sIsp === "其它");
+          if (isMatchedIspRtsp) return true;
+          return source.status === status;
+        });
       } else if (!status) {
-        processedSources = processedSources.filter(source => source.status === "active");
+        processedSources = processedSources.filter(source => {
+          const isRtsp = (source.url || "").trim().toLowerCase().startsWith("rtsp://");
+          const sIsp = (source.isp || "").trim().replace("中国", "");
+          const isMatchedIspRtsp = isRtsp && normIspTxt && (sIsp.includes(normIspTxt) || !sIsp || sIsp === "未知" || sIsp === "其它");
+          if (isMatchedIspRtsp) return true;
+          return source.status !== "inactive";
+        });
       }
       processedSources = sortSourcesForExport(processedSources, isp, sortByQuality !== false);
       

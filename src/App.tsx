@@ -1012,86 +1012,66 @@ export default function App() {
 
   const processBackupFile = async (file: File) => {
     setIsRestoring(true);
-    showFeedback("info", `正在读取并解析备份文件 [${file.name}]...`);
+    showFeedback("info", `正在分析备份文件 [${file.name}]...`);
 
     try {
-      const buffer = await file.arrayBuffer();
-      const bytes = new Uint8Array(buffer);
-      
-      let textTask = "";
-      const isGzip = (bytes.length >= 2 && bytes[0] === 0x1f && bytes[1] === 0x8b) || file.name.endsWith(".gz");
+      const isGzip = file.name.endsWith(".gz");
+      const isJson = file.name.endsWith(".json");
+      const isPlaylist = file.name.endsWith(".m3u") || file.name.endsWith(".txt") || file.name.endsWith(".m3u8");
 
+      let summaryInfo = `${(file.size / 1024).toFixed(1)} KB`;
       if (isGzip) {
-        try {
-          if (typeof DecompressionStream !== "undefined") {
-            const stream = new Blob([buffer]).stream().pipeThrough(new DecompressionStream("gzip"));
-            textTask = await new Response(stream).text();
-          } else {
-            textTask = new TextDecoder("utf-8").decode(buffer);
-          }
-        } catch (decompErr) {
-          console.warn("Gzip client decompression warning, fallback to text:", decompErr);
-          textTask = new TextDecoder("utf-8").decode(buffer);
-        }
-      } else {
-        textTask = new TextDecoder("utf-8").decode(buffer);
-      }
-
-      let summaryInfo = "";
-      let isParseable = false;
-
-      try {
-        const parsed = JSON.parse(textTask);
-        const norm = parsed.data || parsed.backup || parsed.result || parsed;
-        if (Array.isArray(norm)) {
-          summaryInfo = `包含 ${norm.length} 个频道的完整列表`;
-          isParseable = true;
-        } else if (typeof norm === "object" && norm !== null) {
-          const chLen = Array.isArray(norm.channels) ? norm.channels.length : 0;
-          const grpLen = Array.isArray(norm.groups) ? norm.groups.length : 0;
-          const syncLen = Array.isArray(norm.syncConfigs) ? norm.syncConfigs.length : 0;
-          summaryInfo = `包含 ${chLen} 个频道，${grpLen} 个分组，${syncLen} 个订阅任务`;
-          if (chLen > 0 || grpLen > 0 || syncLen > 0 || norm.epgSources) {
-            isParseable = true;
-          }
-        }
-      } catch (jsonErr) {
-        if (textTask.includes("#EXTM3U") || textTask.includes("#EXTINF") || textTask.includes(",http")) {
-          summaryInfo = "检测到 M3U / TXT 播放列表格式，将自动解析转换并恢复数据";
-          isParseable = true;
-        }
-      }
-
-      if (!isParseable) {
-        showFeedback("error", "未能识别合法的备份数据格式，请确保上传的是系统 JSON 备份文件或 M3U/TXT 播放列表");
-        setIsRestoring(false);
-        return;
+        summaryInfo = `Gzip 压缩备份镜像 (${(file.size / 1024).toFixed(1)} KB)`;
+      } else if (isJson) {
+        summaryInfo = `JSON 系统备份 (${(file.size / 1024).toFixed(1)} KB)`;
+      } else if (isPlaylist) {
+        summaryInfo = `M3U/TXT 播放列表 (${(file.size / 1024).toFixed(1)} KB)`;
       }
 
       setIsRestoring(false);
 
       triggerConfirm(
         "确认上传并还原系统备份？",
-        `您选择了本地备份 [${file.name}] (${summaryInfo})。还原后当前数据库将被完全覆盖，系统在恢复前会自动留存一份紧急防丢失快照。`,
+        `您选择了备份文件 [${file.name}] (${summaryInfo})。还原后当前电视频道、分组及订阅设置将被恢复替换，系统在恢复前会自动为您留存一份安全防丢快照。是否确认立即还原？`,
         async () => {
           setIsRestoring(true);
-          showFeedback("info", "正在传输数据并执行恢复，请稍候...");
+          showFeedback("info", "正在上传备份并执行全量数据重构与恢复，请稍候...");
           try {
-            const res = await fetch("/api/backups/restore", {
+            // Method 1: Try direct binary stream upload to /api/backups/upload-restore
+            let res = await fetch("/api/backups/upload-restore", {
               method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ content: textTask })
+              headers: { "Content-Type": "application/octet-stream" },
+              body: file
             });
-            const data = await res.json();
-            if (res.ok && data.success) {
-              showFeedback("success", data.message || "本地备份文件还原成功！系统数据已更新。");
+
+            if (!res.ok) {
+              // Method 2: Fallback to text reading & JSON restore
+              try {
+                const textTask = await file.text();
+                res = await fetch("/api/backups/restore", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ content: textTask })
+                });
+              } catch (_) {}
+            }
+
+            let data: any = null;
+            try {
+              data = await res.json();
+            } catch (_) {
+              data = { error: `服务器返回状态码: HTTP ${res.status}` };
+            }
+
+            if (res.ok && data && data.success) {
+              showFeedback("success", data.message || "本地备份还原成功！系统数据已全面更新。");
               await fetchData();
               fetchBackups();
             } else {
-              showFeedback("error", data.error || "还原本地备份失败");
+              showFeedback("error", (data && data.error) || `还原失败 (HTTP ${res.status})`);
             }
-          } catch (err) {
-            showFeedback("error", "与服务器通信中断，还原失败");
+          } catch (err: any) {
+            showFeedback("error", `通信异常: ${err.message || "连接服务器失败"}`);
           } finally {
             setIsRestoring(false);
           }

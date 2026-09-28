@@ -203,7 +203,8 @@ async function startServer() {
   const PORT = Number(process.env.PORT) || 3000;
 
   app.use(compression());
-  app.use(express.json({ limit: "50mb" }));
+  app.use(express.json({ limit: "100mb" }));
+  app.use(express.urlencoded({ limit: "100mb", extended: true }));
 
   // Prevent browser caching for all API routes
   app.use("/api", (req, res, next) => {
@@ -4730,13 +4731,26 @@ app.get("/api/channels", async (req, res) => {
             streamType
           });
 
-          // Status filtering
+          // Status filtering: ISP 匹配专属 RTSP 线路始终保留置顶，普通公网源过滤 inactive
+          const normFinalIsp = (finalIsp || "").trim().replace("中国", "");
           if (status === "all") {
             // Keep all sources
           } else if (status) {
-            processedSources = processedSources.filter(source => source.status === String(status));
+            processedSources = processedSources.filter(source => {
+              const isRtsp = (source.url || "").trim().toLowerCase().startsWith("rtsp://");
+              const sIsp = (source.isp || "").trim().replace("中国", "");
+              const isMatchedIspRtsp = isRtsp && normFinalIsp && (sIsp.includes(normFinalIsp) || !sIsp || sIsp === "未知" || sIsp === "其它");
+              if (isMatchedIspRtsp) return true;
+              return source.status === String(status);
+            });
           } else {
-            processedSources = processedSources.filter(source => source.status === "active");
+            processedSources = processedSources.filter(source => {
+              const isRtsp = (source.url || "").trim().toLowerCase().startsWith("rtsp://");
+              const sIsp = (source.isp || "").trim().replace("中国", "");
+              const isMatchedIspRtsp = isRtsp && normFinalIsp && (sIsp.includes(normFinalIsp) || !sIsp || sIsp === "未知" || sIsp === "其它");
+              if (isMatchedIspRtsp) return true;
+              return source.status !== "inactive";
+            });
           }
 
           // ISP 限定模式下电信等专属 RTSP 线路置顶在最前面，全网模式下公网通用源优先
@@ -4893,13 +4907,26 @@ app.get("/api/channels", async (req, res) => {
             streamType
           });
 
-          // Status filtering
+          // Status filtering: ISP 匹配专属 RTSP 线路始终保留置顶，普通公网源过滤 inactive
+          const normFinalIsp = (finalIsp || "").trim().replace("中国", "");
           if (status === "all") {
             // Keep all sources
           } else if (status) {
-            processedSources = processedSources.filter(source => source.status === String(status));
+            processedSources = processedSources.filter(source => {
+              const isRtsp = (source.url || "").trim().toLowerCase().startsWith("rtsp://");
+              const sIsp = (source.isp || "").trim().replace("中国", "");
+              const isMatchedIspRtsp = isRtsp && normFinalIsp && (sIsp.includes(normFinalIsp) || !sIsp || sIsp === "未知" || sIsp === "其它");
+              if (isMatchedIspRtsp) return true;
+              return source.status === String(status);
+            });
           } else {
-            processedSources = processedSources.filter(source => source.status === "active");
+            processedSources = processedSources.filter(source => {
+              const isRtsp = (source.url || "").trim().toLowerCase().startsWith("rtsp://");
+              const sIsp = (source.isp || "").trim().replace("中国", "");
+              const isMatchedIspRtsp = isRtsp && normFinalIsp && (sIsp.includes(normFinalIsp) || !sIsp || sIsp === "未知" || sIsp === "其它");
+              if (isMatchedIspRtsp) return true;
+              return source.status !== "inactive";
+            });
           }
 
           // Prioritize active, ISP-specific (e.g. Telecom RTSP on top), general over /rtp/ and /tsfile/, and quality score
@@ -5314,20 +5341,34 @@ app.get("/api/channels", async (req, res) => {
     let parsed: any = null;
 
     if (Buffer.isBuffer(rawInput) || rawInput instanceof Uint8Array) {
-      if (rawInput.length >= 2 && rawInput[0] === 0x1f && rawInput[1] === 0x8b) {
+      const buf = Buffer.isBuffer(rawInput) ? rawInput : Buffer.from(rawInput);
+      // Check Gzip magic bytes: 0x1f 0x8b
+      if (buf.length >= 2 && buf[0] === 0x1f && buf[1] === 0x8b) {
         try {
-          const uncompressed = zlib.gunzipSync(rawInput);
+          const uncompressed = zlib.gunzipSync(buf);
           return parseAndNormalizeBackup(uncompressed.toString("utf-8"));
         } catch (e) {
-          return parseAndNormalizeBackup(rawInput.toString("utf-8"));
+          return parseAndNormalizeBackup(buf.toString("utf-8"));
         }
-      } else {
-        return parseAndNormalizeBackup(rawInput.toString("utf-8"));
       }
+      // Check Zlib deflate magic bytes: 0x78 0x9c or 0x78 0x01 or 0x78 0xda
+      if (buf.length >= 2 && buf[0] === 0x78 && (buf[1] === 0x9c || buf[1] === 0x01 || buf[1] === 0xda)) {
+        try {
+          const uncompressed = zlib.inflateSync(buf);
+          return parseAndNormalizeBackup(uncompressed.toString("utf-8"));
+        } catch (e) {}
+      }
+      return parseAndNormalizeBackup(buf.toString("utf-8"));
     }
 
     if (typeof rawInput === "string") {
-      const trimmed = rawInput.trim();
+      let trimmed = rawInput.trim();
+      // Strip UTF-8 BOM if present
+      if (trimmed.charCodeAt(0) === 0xFEFF) {
+        trimmed = trimmed.substring(1).trim();
+      }
+
+      // Check if it's base64 encoded
       if (!trimmed.startsWith("{") && !trimmed.startsWith("[") && !trimmed.startsWith("#") && trimmed.length > 20) {
         try {
           const decoded = Buffer.from(trimmed, "base64");
@@ -5335,73 +5376,320 @@ app.get("/api/channels", async (req, res) => {
             const uncompressed = zlib.gunzipSync(decoded);
             return parseAndNormalizeBackup(uncompressed.toString("utf-8"));
           }
+          if (decoded.length >= 2 && decoded[0] === 0x78 && (decoded[1] === 0x9c || decoded[1] === 0x01 || decoded[1] === 0xda)) {
+            const uncompressed = zlib.inflateSync(decoded);
+            return parseAndNormalizeBackup(uncompressed.toString("utf-8"));
+          }
+          const decodedStr = decoded.toString("utf-8").trim();
+          if (decodedStr.startsWith("{") || decodedStr.startsWith("[") || decodedStr.startsWith("#") || decodedStr.includes(",http")) {
+            return parseAndNormalizeBackup(decodedStr);
+          }
         } catch (e) {}
       }
 
       try {
         parsed = JSON.parse(trimmed);
       } catch (e) {
-        if (trimmed.includes("#EXTM3U") || trimmed.includes("#EXTINF") || trimmed.includes(",http")) {
+        if (trimmed.includes("#EXTM3U") || trimmed.includes("#EXTINF") || trimmed.includes(",http") || trimmed.includes(",#genre")) {
           return parseM3uToBackup(trimmed);
         }
-        throw new Error("备份文件解析失败：既不是有效的 JSON 格式，也不是可解析的 M3U/TXT 播放列表");
+        // Try finding JSON substring if there is surrounding whitespace or quotes
+        const firstBrace = trimmed.indexOf("{");
+        const lastBrace = trimmed.lastIndexOf("}");
+        const firstBracket = trimmed.indexOf("[");
+        const lastBracket = trimmed.lastIndexOf("]");
+        if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
+          try {
+            parsed = JSON.parse(trimmed.substring(firstBrace, lastBrace + 1));
+          } catch (_) {}
+        } else if (firstBracket !== -1 && lastBracket !== -1 && lastBracket > firstBracket) {
+          try {
+            parsed = JSON.parse(trimmed.substring(firstBracket, lastBracket + 1));
+          } catch (_) {}
+        }
+        if (!parsed) {
+          throw new Error("备份文件解析失败：既不是有效的 JSON 格式，也不是可识别的 M3U/TXT 播放列表");
+        }
       }
     } else if (typeof rawInput === "object" && rawInput !== null) {
       parsed = rawInput;
     }
 
     if (!parsed) {
-      throw new Error("无效的备份文件内容");
+      throw new Error("无效的备份文件内容 (Empty or invalid payload)");
     }
 
-    if (parsed.data && typeof parsed.data === "object") parsed = parsed.data;
-    else if (parsed.backup && typeof parsed.backup === "object") parsed = parsed.backup;
-    else if (parsed.result && typeof parsed.result === "object") parsed = parsed.result;
-    else if (parsed.content && typeof parsed.content === "object") parsed = parsed.content;
+    // Unwrap wrapped layers
+    while (parsed && typeof parsed === "object") {
+      if (parsed.data && typeof parsed.data === "object") {
+        parsed = parsed.data;
+      } else if (parsed.backup && typeof parsed.backup === "object") {
+        parsed = parsed.backup;
+      } else if (parsed.result && typeof parsed.result === "object") {
+        parsed = parsed.result;
+      } else if (parsed.content && typeof parsed.content === "object") {
+        parsed = parsed.content;
+      } else if (parsed.payload && typeof parsed.payload === "object") {
+        parsed = parsed.payload;
+      } else if (parsed.config && typeof parsed.config === "object") {
+        parsed = parsed.config;
+      } else if (parsed.iptv && typeof parsed.iptv === "object") {
+        parsed = parsed.iptv;
+      } else {
+        break;
+      }
+    }
 
-    if (Array.isArray(parsed)) {
-      const channels: any[] = [];
-      const groups: any[] = [{ id: "g_imported", name: "导入备份", isolated: false }];
-      parsed.forEach((item, idx) => {
-        if (item && typeof item === "object") {
-          const chId = item.id || `ch_imp_${idx}_${Date.now()}`;
-          const chName = toSimplifiedChinese(item.name || item.title || `频道 ${idx + 1}`);
-          const chAlias = Array.isArray(item.alias)
-            ? item.alias.map((a: string) => toSimplifiedChinese(a))
-            : [];
-          let sources: any[] = [];
-          if (Array.isArray(item.sources)) {
-            sources = item.sources;
-          } else if (item.url) {
-            sources = [{ id: `src_imp_${idx}_1`, url: item.url, status: "unknown", isolated: false }];
-          }
-          channels.push({
-            id: chId,
-            name: chName,
-            logo: item.logo || "",
-            groupIds: item.groupIds || ["g_imported"],
-            alias: chAlias,
-            epgId: item.epgId || "",
-            isolated: !!item.isolated,
+    // Handle TVBox structure: { "lives": [ { "group": "央视", "channels": [ { "name": "CCTV-1", "urls": ["..."] } ] } ] }
+    if (parsed.lives && Array.isArray(parsed.lives)) {
+      const extractedChannels: any[] = [];
+      const extractedGroups: any[] = [];
+      const groupMap = new Map<string, string>();
+
+      parsed.lives.forEach((lv: any, lvIdx: number) => {
+        const groupName = lv.group || lv.name || `分组 ${lvIdx + 1}`;
+        let gId = groupMap.get(groupName);
+        if (!gId) {
+          gId = `g_tvbox_${extractedGroups.length + 1}`;
+          groupMap.set(groupName, gId);
+          extractedGroups.push({ id: gId, name: groupName, isolated: false });
+        }
+        const chList = Array.isArray(lv.channels) ? lv.channels : [];
+        chList.forEach((ch: any, chIdx: number) => {
+          const chName = ch.name || ch.title || `频道 ${chIdx + 1}`;
+          const rawUrls = ch.urls || ch.sources || (ch.url ? [ch.url] : []);
+          const sources = (Array.isArray(rawUrls) ? rawUrls : []).map((u: any, uIdx: number) => {
+            const urlStr = typeof u === "string" ? u : (u.url || u.link || "");
+            return {
+              id: `src_tvbox_${extractedChannels.length}_${uIdx + 1}`,
+              url: String(urlStr).trim(),
+              status: "unknown",
+              isolated: false
+            };
+          }).filter((s: any) => s.url);
+
+          extractedChannels.push({
+            id: `ch_tvbox_${extractedChannels.length + 1}`,
+            name: toSimplifiedChinese(chName),
+            logo: ch.logo || ch.icon || "",
+            groupIds: [gId!],
+            alias: [],
+            epgId: ch.epgId || "",
+            isolated: false,
             sources
           });
-        }
+        });
       });
-      return { channels, groups, syncConfigs: [], epgSources: [] };
+
+      return {
+        channels: extractedChannels,
+        groups: extractedGroups.length > 0 ? extractedGroups : [{ id: "g_default", name: "默认分组", isolated: false }],
+        syncConfigs: [],
+        epgSources: []
+      };
     }
 
+    // Handle if parsed is a dictionary / map of channels: { "cctv1": { name: "CCTV1", ... }, ... }
+    if (!Array.isArray(parsed) && !parsed.channels && !parsed.groups) {
+      const values = Object.values(parsed);
+      const isChannelDict = values.length > 0 && values.every((v: any) => v && typeof v === "object" && (v.name || v.url || v.sources || v.urls || v.playUrl));
+      if (isChannelDict) {
+        parsed = { channels: values, groups: [] };
+      }
+    }
+
+    // Handle if top level is array of channels: [ { name: "...", ... } ]
+    if (Array.isArray(parsed)) {
+      parsed = { channels: parsed, groups: [] };
+    }
+
+    // Build unified groups map
+    const groupsMap = new Map<string, { id: string; name: string; isolated: boolean }>();
+    const groupNameToId = new Map<string, string>();
+
+    const rawGroups = Array.isArray(parsed.groups) ? parsed.groups : (Array.isArray(parsed.categories) ? parsed.categories : []);
+    rawGroups.forEach((g: any, idx: number) => {
+      if (typeof g === "string") {
+        const gName = g.trim() || `分组 ${idx + 1}`;
+        const gId = `g_norm_${idx + 1}`;
+        groupsMap.set(gId, { id: gId, name: gName, isolated: false });
+        groupNameToId.set(gName, gId);
+      } else if (g && typeof g === "object") {
+        const gName = g.name || g.title || g.groupName || `分组 ${idx + 1}`;
+        const gId = g.id || `g_norm_${idx + 1}`;
+        groupsMap.set(gId, { id: gId, name: gName, isolated: !!g.isolated });
+        groupNameToId.set(gName, gId);
+      }
+    });
+
+    const rawChannels = Array.isArray(parsed.channels) ? parsed.channels : (Array.isArray(parsed.channelList) ? parsed.channelList : (Array.isArray(parsed.items) ? parsed.items : []));
+    
+    const normalizedChannels = rawChannels.map((ch: any, idx: number) => {
+      const chName = toSimplifiedChinese(ch.name || ch.title || ch.tvgName || ch.channelName || `频道 ${idx + 1}`);
+      const chId = ch.id || `ch_norm_${idx + 1}_${Date.now()}`;
+      
+      let chAlias: string[] = [];
+      if (Array.isArray(ch.alias)) {
+        chAlias = ch.alias.map((a: any) => toSimplifiedChinese(String(a)));
+      } else if (typeof ch.alias === "string" && ch.alias.trim()) {
+        chAlias = ch.alias.split(/[,;，；:]/).map((a: string) => toSimplifiedChinese(a.trim())).filter(Boolean);
+      }
+
+      // Group resolution: check groupIds, groups, group, category, groupName, groupTitle
+      const assignedGroupIds: string[] = [];
+      if (Array.isArray(ch.groupIds)) {
+        ch.groupIds.forEach((gid: any) => {
+          if (groupsMap.has(gid)) {
+            assignedGroupIds.push(gid);
+          } else if (groupNameToId.has(String(gid))) {
+            assignedGroupIds.push(groupNameToId.get(String(gid))!);
+          } else if (typeof gid === "string" && gid.trim()) {
+            const newGid = `g_custom_${groupsMap.size + 1}`;
+            groupsMap.set(newGid, { id: newGid, name: gid.trim(), isolated: false });
+            groupNameToId.set(gid.trim(), newGid);
+            assignedGroupIds.push(newGid);
+          }
+        });
+      }
+
+      const inlineGroup = ch.group || ch.category || ch.groupName || ch.groupTitle || ch.tvgGroup;
+      if (inlineGroup && typeof inlineGroup === "string" && inlineGroup.trim()) {
+        const gName = inlineGroup.trim();
+        let targetGid = groupNameToId.get(gName);
+        if (!targetGid) {
+          targetGid = `g_custom_${groupsMap.size + 1}`;
+          groupsMap.set(targetGid, { id: targetGid, name: gName, isolated: false });
+          groupNameToId.set(gName, targetGid);
+        }
+        if (!assignedGroupIds.includes(targetGid)) {
+          assignedGroupIds.push(targetGid);
+        }
+      }
+
+      if (Array.isArray(ch.groups)) {
+        ch.groups.forEach((gItem: any) => {
+          const gName = typeof gItem === "string" ? gItem.trim() : (gItem?.name || "");
+          if (gName) {
+            let targetGid = groupNameToId.get(gName);
+            if (!targetGid) {
+              targetGid = `g_custom_${groupsMap.size + 1}`;
+              groupsMap.set(targetGid, { id: targetGid, name: gName, isolated: false });
+              groupNameToId.set(gName, targetGid);
+            }
+            if (!assignedGroupIds.includes(targetGid)) {
+              assignedGroupIds.push(targetGid);
+            }
+          }
+        });
+      }
+
+      // Sources resolution
+      let rawSources: any[] = [];
+      if (Array.isArray(ch.sources)) rawSources = ch.sources;
+      else if (Array.isArray(ch.urls)) rawSources = ch.urls;
+      else if (Array.isArray(ch.links)) rawSources = ch.links;
+      else if (Array.isArray(ch.playUrls)) rawSources = ch.playUrls;
+      else if (Array.isArray(ch.streamUrls)) rawSources = ch.streamUrls;
+      else if (Array.isArray(ch.streams)) rawSources = ch.streams;
+      else if (Array.isArray(ch.lines)) rawSources = ch.lines;
+      else if (typeof ch.sources === "string") rawSources = [ch.sources];
+      else if (ch.url || ch.playUrl || ch.streamUrl || ch.link || ch.src || ch.address) {
+        rawSources = [ch.url || ch.playUrl || ch.streamUrl || ch.link || ch.src || ch.address];
+      }
+
+      const normalizedSources = rawSources.map((s: any, sIdx: number) => {
+        if (typeof s === "string") {
+          return {
+            id: `src_${chId}_${sIdx + 1}`,
+            url: s.trim(),
+            status: "unknown",
+            isolated: false
+          };
+        }
+        const sUrl = s.url || s.playUrl || s.streamUrl || s.link || s.src || s.address || s.stream || "";
+        return {
+          id: s.id || `src_${chId}_${sIdx + 1}`,
+          url: String(sUrl).trim(),
+          isp: s.isp || "",
+          province: s.province || "",
+          status: s.status || "unknown",
+          resolution: s.resolution || s.quality || "",
+          latency: s.latency !== undefined ? s.latency : undefined,
+          isolated: !!s.isolated,
+          lastChecked: s.lastChecked
+        };
+      }).filter((s: any) => s.url);
+
+      return {
+        id: chId,
+        name: chName,
+        logo: ch.logo || ch.tvgLogo || ch.icon || ch.logo_url || "",
+        groupIds: assignedGroupIds,
+        alias: chAlias,
+        epgId: ch.epgId || ch.tvgId || ch.epg_id || "",
+        epgMatchName: ch.epgMatchName || "",
+        description: ch.description || ch.notes || "",
+        isolated: !!ch.isolated,
+        sources: normalizedSources
+      };
+    });
+
+    // Ensure fallback group if channels have no group or groups is empty
+    if (groupsMap.size === 0) {
+      const fallbackGroup = { id: "g_default", name: "综合频道", isolated: false };
+      groupsMap.set(fallbackGroup.id, fallbackGroup);
+    }
+
+    const finalGroups = Array.from(groupsMap.values());
+    const defaultGid = finalGroups[0].id;
+    normalizedChannels.forEach((ch: any) => {
+      if (!ch.groupIds || ch.groupIds.length === 0) {
+        ch.groupIds = [defaultGid];
+      }
+    });
+
+    // Normalizing syncConfigs
+    const rawSyncs = Array.isArray(parsed.syncConfigs) ? parsed.syncConfigs : (Array.isArray(parsed.subscriptions) ? parsed.subscriptions : (Array.isArray(parsed.sync_configs) ? parsed.sync_configs : []));
+    const normalizedSyncConfigs = rawSyncs.map((sc: any, idx: number) => ({
+      id: sc.id || `sync_${idx + 1}_${Date.now()}`,
+      name: sc.name || sc.title || `同步源 ${idx + 1}`,
+      url: sc.url || sc.link || "",
+      type: (sc.type === "txt" ? "txt" : "m3u") as "m3u" | "txt",
+      autoSync: sc.autoSync !== undefined ? !!sc.autoSync : true,
+      syncInterval: sc.syncInterval || 12,
+      lastSynced: sc.lastSynced || "",
+      status: sc.status || "never",
+      message: sc.message || "",
+      disabled: !!sc.disabled,
+      consecutiveFailures: sc.consecutiveFailures || 0,
+      contentHash: sc.contentHash || "",
+      isp: sc.isp || "",
+      aliasOnly: !!sc.aliasOnly
+    })).filter((sc: any) => sc.url);
+
+    // Normalizing epgSources
+    const rawEpgs = Array.isArray(parsed.epgSources) ? parsed.epgSources : (Array.isArray(parsed.epg_sources) ? parsed.epg_sources : (Array.isArray(parsed.epgs) ? parsed.epgs : []));
+    const normalizedEpgSources = rawEpgs.map((es: any, idx: number) => ({
+      id: es.id || `epg_${idx + 1}_${Date.now()}`,
+      name: es.name || es.title || `EPG源 ${idx + 1}`,
+      url: es.url || es.link || "",
+      active: es.active !== undefined ? !!es.active : true,
+      lastSynced: es.lastSynced || "",
+      status: es.status || "never",
+      message: es.message || ""
+    })).filter((es: any) => es.url);
+
     const resultObj: any = {
-      channels: Array.isArray(parsed.channels) ? parsed.channels : [],
-      groups: Array.isArray(parsed.groups) ? parsed.groups : [],
-      syncConfigs: Array.isArray(parsed.syncConfigs) ? parsed.syncConfigs : [],
-      epgSources: Array.isArray(parsed.epgSources) ? parsed.epgSources : [],
+      channels: normalizedChannels,
+      groups: finalGroups,
+      syncConfigs: normalizedSyncConfigs,
+      epgSources: normalizedEpgSources
     };
 
     if (parsed.adminPassword !== undefined) resultObj.adminPassword = parsed.adminPassword;
     if (parsed.githubProxy !== undefined) resultObj.githubProxy = parsed.githubProxy;
     if (parsed.autoCreateChannel !== undefined) resultObj.autoCreateChannel = parsed.autoCreateChannel;
     if (parsed.cronJobs && Array.isArray(parsed.cronJobs)) resultObj.cronJobs = parsed.cronJobs;
-
     if (Array.isArray(parsed.carouselProxies)) resultObj.carouselProxies = parsed.carouselProxies;
     if (Array.isArray(parsed.deletedCarouselProxies)) resultObj.deletedCarouselProxies = parsed.deletedCarouselProxies;
     if (Array.isArray(parsed.carouselChannels)) resultObj.carouselChannels = parsed.carouselChannels;
@@ -5524,6 +5812,67 @@ app.get("/api/channels", async (req, res) => {
     }
   });
 
+  // Direct binary stream file upload restore API
+  app.post("/api/backups/upload-restore", express.raw({ type: "*/*", limit: "100mb" }), (req, res) => {
+    try {
+      const rawBody = req.body;
+      if (!rawBody || (Buffer.isBuffer(rawBody) && rawBody.length === 0)) {
+        return res.status(400).json({ error: "上传的备份文件内容为空" });
+      }
+
+      // Save current database as prior safety backup
+      const autoBackupName = `iptv_data_backup_before_restore_${Date.now()}.json.gz`;
+      try {
+        const priorBackupJson = {
+          groups,
+          channels,
+          syncConfigs,
+          epgSources,
+          carouselProxies: db.prepare("SELECT * FROM carousel_proxies").all(),
+          deletedCarouselProxies: db.prepare("SELECT * FROM deleted_carousel_proxies").all(),
+          carouselChannels: db.prepare("SELECT * FROM carousel_channels").all(),
+          carouselDiscoveryRules: db.prepare("SELECT * FROM carousel_discovery_rules").all(),
+          carouselDisabledRules: db.prepare("SELECT * FROM carousel_disabled_rules").all(),
+          adminPassword,
+          githubProxy,
+        };
+        fs.writeFileSync(path.join(DATA_DIR, autoBackupName), zlib.gzipSync(Buffer.from(JSON.stringify(priorBackupJson, null, 2), "utf-8")));
+      } catch (backupErr) {
+        console.error("[Restore Backup] Failed to write safety prior backup:", backupErr);
+      }
+
+      let parsedBackupData: any = null;
+      try {
+        parsedBackupData = parseAndNormalizeBackup(rawBody);
+      } catch (e: any) {
+        return res.status(400).json({ error: "备份文件解析失败: " + e.message });
+      }
+
+      fs.writeFileSync(DATA_FILE, JSON.stringify(parsedBackupData, null, 2), "utf-8");
+      loadData();
+      saveDataSync();
+      invalidatePlaylistExportCache();
+      invalidateIntegratedEpgCache();
+      preGenerateIspPlaylists();
+      setGlobalLastDataUpdate(Date.now());
+
+      const chCount = parsedBackupData.channels ? parsedBackupData.channels.length : 0;
+      const grpCount = parsedBackupData.groups ? parsedBackupData.groups.length : 0;
+      const syncCount = parsedBackupData.syncConfigs ? parsedBackupData.syncConfigs.length : 0;
+
+      return res.json({
+        success: true,
+        message: `成功完成恢复！共载入 ${chCount} 个频道、${grpCount} 个分组和 ${syncCount} 个订阅源。原有数据已自动为您归档为：${autoBackupName}`,
+        autoBackupName,
+        channelCount: chCount,
+        groupCount: grpCount,
+        syncCount
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: "恢复备份失败: " + (err.message || err) });
+    }
+  });
+
   app.post("/api/backups/restore", (req, res) => {
     try {
       const { filename, content } = req.body;
@@ -5581,16 +5930,22 @@ app.get("/api/channels", async (req, res) => {
       fs.writeFileSync(DATA_FILE, JSON.stringify(parsedBackupData, null, 2), "utf-8");
       loadData();
       saveDataSync(); // Force immediate persistence to SQLite
+      invalidatePlaylistExportCache();
+      invalidateIntegratedEpgCache();
+      preGenerateIspPlaylists();
+      setGlobalLastDataUpdate(Date.now());
 
       const chCount = parsedBackupData.channels ? parsedBackupData.channels.length : 0;
       const grpCount = parsedBackupData.groups ? parsedBackupData.groups.length : 0;
+      const syncCount = parsedBackupData.syncConfigs ? parsedBackupData.syncConfigs.length : 0;
 
       return res.json({
         success: true,
-        message: `成功完成恢复！共载入 ${chCount} 个频道和 ${grpCount} 个分组。原有数据已自动为您归档为：${autoBackupName}`,
+        message: `成功完成恢复！共载入 ${chCount} 个频道、${grpCount} 个分组和 ${syncCount} 个订阅源。原有数据已自动为您归档为：${autoBackupName}`,
         autoBackupName,
         channelCount: chCount,
-        groupCount: grpCount
+        groupCount: grpCount,
+        syncCount
       });
     } catch (err: any) {
       res.status(500).json({ error: "恢复备份失败: " + err.message });
@@ -5642,6 +5997,7 @@ app.get("/api/channels", async (req, res) => {
 
   // Bind to PORT 3000 and 0.0.0.0
   app.listen(PORT, "0.0.0.0", () => {
+    invalidatePlaylistExportCache();
     preGenerateIspPlaylists();
     startCronScheduler();
     enrichChannelsRtspSources(channels).then((c) => {
