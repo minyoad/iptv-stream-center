@@ -137,6 +137,7 @@ export interface QualityScoreDetail {
     stabilityScore: number;
     resolutionScore: number;
     protocolScore: number;
+    rtpTsPenalty: number;
   };
 }
 
@@ -160,6 +161,7 @@ export function calculateQualityScore(source: {
         stabilityScore: 0,
         resolutionScore: 0,
         protocolScore: 0,
+        rtpTsPenalty: 0,
       },
     };
   }
@@ -217,21 +219,31 @@ export function calculateQualityScore(source: {
   }
 
   let protocolScore = 3;
+  let rtpTsPenalty = 0;
   const streamInfo = detectStreamType(source.url || "");
-  if (streamInfo.type === "HLS") {
+  if (streamInfo.isRtpOrTsSlice || streamInfo.type === "RTP-TS") {
+    // RTP/TS切片类型 (包含 /rtp/, /tsfile/, rtp://, udp:// 等)
+    // 实际播放体验较差（易卡顿、鉴权过期、私网代理不稳定），大幅降低其评分
+    protocolScore = 0;
+    rtpTsPenalty = -25;
+  } else if (streamInfo.type === "HLS") {
     protocolScore = 5;
   } else if (streamInfo.type === "HTTP-FLV") {
     protocolScore = 4;
   } else if (streamInfo.type === "RTSP") {
     protocolScore = 3;
-  } else if (streamInfo.type === "RTP-TS") {
+  } else {
     protocolScore = 2;
   }
 
-  const totalScore = Math.min(
-    100,
-    Math.max(0, statusScore + latencyScore + stabilityScore + resolutionScore + protocolScore)
-  );
+  let rawScore = statusScore + latencyScore + stabilityScore + resolutionScore + protocolScore + rtpTsPenalty;
+
+  // RTP/TS切片类型实际播放体验较差，上限严格限制在68分以下（最高只能评为一般，避免评为极佳或良好）
+  if (streamInfo.isRtpOrTsSlice || streamInfo.type === "RTP-TS") {
+    rawScore = Math.min(68, rawScore);
+  }
+
+  const totalScore = Math.min(100, Math.max(0, rawScore));
 
   let level: "excellent" | "good" | "fair" | "poor" = "poor";
   let levelText = "较差";
@@ -257,6 +269,7 @@ export function calculateQualityScore(source: {
       stabilityScore,
       resolutionScore,
       protocolScore,
+      rtpTsPenalty,
     },
   };
 }

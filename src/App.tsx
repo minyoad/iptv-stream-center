@@ -4963,7 +4963,7 @@ export default function App() {
                                         {/* Quality Score Pill */}
                                         <div 
                                           className="inline-flex items-center gap-1 cursor-help"
-                                          title={`综合质量评分: ${qScore.score}分 (${qScore.levelText})\n- 状态基线: ${qScore.breakdown.statusScore}分\n- 延迟得分: +${qScore.breakdown.latencyScore}分\n- 历史稳定性: +${qScore.breakdown.stabilityScore}分\n- 画质加分: +${qScore.breakdown.resolutionScore}分\n- 协议兼容加分: +${qScore.breakdown.protocolScore}分`}
+                                          title={`综合质量评分: ${qScore.score}分 (${qScore.levelText})\n- 状态基线: ${qScore.breakdown.statusScore}分\n- 延迟得分: +${qScore.breakdown.latencyScore}分\n- 历史稳定性: +${qScore.breakdown.stabilityScore}分\n- 画质加分: +${qScore.breakdown.resolutionScore}分\n- 协议兼容: +${qScore.breakdown.protocolScore}分${qScore.breakdown.rtpTsPenalty ? `\n- RTP/TS切片降权: ${qScore.breakdown.rtpTsPenalty}分 (播放易卡顿/兼容性较差)` : ""}`}
                                         >
                                           <span className={`px-1.5 py-0.5 rounded text-[10px] font-mono font-black border ${
                                             qScore.score >= 85 ? "bg-emerald-50 text-emerald-700 border-emerald-300" :
@@ -5941,7 +5941,7 @@ export default function App() {
                                   <td className="py-3.5 px-3">
                                     <div 
                                       className="flex items-center gap-1.5 cursor-help" 
-                                      title={`综合质量得分: ${item.qualityScore.score}分 (${item.qualityScore.levelText})\n- 状态基线: ${item.qualityScore.breakdown.statusScore}分\n- 延迟得分: +${item.qualityScore.breakdown.latencyScore}分\n- 历史稳定性: +${item.qualityScore.breakdown.stabilityScore}分\n- 画质加分: +${item.qualityScore.breakdown.resolutionScore}分\n- 协议兼容加分: +${item.qualityScore.breakdown.protocolScore}分`}
+                                      title={`综合质量得分: ${item.qualityScore.score}分 (${item.qualityScore.levelText})\n- 状态基线: ${item.qualityScore.breakdown.statusScore}分\n- 延迟得分: +${item.qualityScore.breakdown.latencyScore}分\n- 历史稳定性: +${item.qualityScore.breakdown.stabilityScore}分\n- 画质加分: +${item.qualityScore.breakdown.resolutionScore}分\n- 协议兼容: +${item.qualityScore.breakdown.protocolScore}分${item.qualityScore.breakdown.rtpTsPenalty ? `\n- RTP/TS切片降权: ${item.qualityScore.breakdown.rtpTsPenalty}分 (播放易卡顿/兼容性较差)` : ""}`}
                                     >
                                       <span className={`inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-mono font-black border ${
                                         item.qualityScore.score >= 85 ? "bg-emerald-50 text-emerald-700 border-emerald-300 shadow-2xs" :
