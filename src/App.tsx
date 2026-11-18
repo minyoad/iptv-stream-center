@@ -2435,7 +2435,9 @@ export default function App() {
           diagMsg: data.diagMsg,
           isRetesting: false
         }));
-        showFeedback("success", "现场深度诊断完成！");
+        showFeedback("success", data.statusUpdated
+          ? "现场深度诊断完成！"
+          : "服务端诊断完成，仅展示本次结果，未更新线路状态。");
         await fetchData();
       } else {
         showFeedback("error", data.error || "现场诊断失败");
@@ -2592,14 +2594,19 @@ export default function App() {
 
   const runClientSideProbeTest = async () => {
     if (clientTestList.length === 0) return;
-    
+
+    const queue = clientTestList.filter(item => !isPrivateOrIntranetUrl(item.url));
+    const skippedCount = clientTestList.length - queue.length;
+    if (queue.length === 0) {
+      showFeedback("info", "这些线路需要在对应网络中使用外部探针测试。");
+      return;
+    }
+
     setIsClientTesting(true);
     setIsClientTestReady(false);
     setClientTestProgress(0);
-    setClientTestTotal(clientTestList.length);
+    setClientTestTotal(queue.length);
     setClientTestResults([]);
-
-    const queue = [...clientTestList];
     const resultsTemp: { sourceId: string; channelId: string; url: string; status: "active" | "inactive"; latency: number; resolution?: string }[] = [];
     let processedCount = 0;
 
@@ -2618,35 +2625,19 @@ export default function App() {
         let latency = 9999;
 
         const urlLower = item.url.trim().toLowerCase();
-        const isNonHttpOrPrivate = isPrivateOrIntranetUrl(item.url);
-
-        if (isNonHttpOrPrivate) {
-          // RTSP / RTMP / UDP / RTP / P2P and Intranet IP stream probe protection:
-          // Web browsers (including iOS Safari / Chrome WebKit) cannot open raw TCP/UDP sockets for RTSP/RTMP via DOM fetch().
-          // Inherit status directly from server-side socket test result to guarantee 100% server alignment consistency!
+        try {
+          await fetch(item.url, {
+            method: "GET",
+            mode: "no-cors",
+            cache: "no-cache",
+            signal: controller.signal
+          });
+          latency = Date.now() - startTime;
+          status = "active";
+        } catch (_) {
+          // A browser request may fail because of network or browser policy.
+        } finally {
           clearTimeout(timer);
-          status = item.status === "active" ? "active" : (item.status === "inactive" ? "inactive" : "unknown" as any);
-          latency = status === "active" ? (item.latency && item.latency > 0 ? item.latency : 60) : 9999;
-        } else {
-          // Standard HTTP / HTTPS / HLS / FLV probe
-          try {
-            await fetch(item.url, {
-              method: "GET",
-              mode: "no-cors",
-              cache: "no-cache",
-              signal: controller.signal
-            });
-            clearTimeout(timer);
-            latency = Date.now() - startTime;
-            status = "active";
-          } catch (err: any) {
-            clearTimeout(timer);
-            // CORS error indicates the target HTTP stream server is alive and responding!
-            if (err && err.name !== "AbortError" && err.name !== "TypeError") {
-              latency = Date.now() - startTime;
-              status = "active";
-            }
-          }
         }
 
         let resolution: string | undefined = item.resolution;
@@ -2673,12 +2664,13 @@ export default function App() {
       }
     };
 
-    const countOfThreads = Math.min(clientThreadCount, clientTestList.length);
+    const countOfThreads = Math.min(clientThreadCount, queue.length);
     const pool = Array.from({ length: countOfThreads }, runWorker);
     await Promise.all(pool);
 
     setIsClientTesting(false);
-    showFeedback("success", `[${clientTestIsp} 专线优先] 探针测速完成！评估出 ${(resultsTemp || []).filter(r => r.status === "active").length} 条可用源，正在自动同步至服务器...`);
+    const skippedNote = skippedCount > 0 ? `，另有 ${skippedCount} 条需使用外部探针` : "";
+    showFeedback("success", `浏览器探测完成，收到 ${resultsTemp.filter(r => r.status === "active").length} 条响应${skippedNote}，正在同步报告…`);
     
     // Automatically submit results
     if (resultsTemp.length > 0) {
@@ -2688,12 +2680,13 @@ export default function App() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             results: resultsTemp,
+            probeType: "browser",
             clientIsp: clientTestIsp,
             clientProvince: clientTestProvince
           })
         });
         if (res.ok) {
-          showFeedback("success", `已自动回传 ${resultsTemp.length} 条探针测试结果，UI 局部数据已更新`);
+          showFeedback("success", `已自动回传 ${resultsTemp.length} 条浏览器探测结果${skippedNote}`);
           setClientTestResults([]);
           setClientTestProgress(0);
           setClientTestTotal(0);
@@ -2724,13 +2717,14 @@ export default function App() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           results: clientTestResults,
+          probeType: "browser",
           clientIsp: clientTestIsp,
           clientProvince: clientTestProvince
         })
       });
 
       if (res.ok) {
-        showFeedback("success", `已完美回传 ${clientTestResults.length} 条本地探针检测性能到主服务器，直播源数据库配置已完成热更新`);
+        showFeedback("success", `已完美回传 ${clientTestResults.length} 条浏览器探测结果`);
         setClientTestResults([]);
         setClientTestProgress(0);
         setClientTestTotal(0);
@@ -9855,7 +9849,7 @@ export default function App() {
                     <div className="flex items-center justify-between text-rose-800 font-black text-sm">
                       <span className="flex items-center gap-1.5">
                         <XCircle className="w-4 h-4 text-rose-600 shrink-0" />
-                        检测结论: 直播源无法正常播放 / 数据异常
+                        检测结论: 当前检测网络未确认线路可播
                       </span>
                       <span className="text-xs bg-rose-200/80 text-rose-900 px-2 py-0.5 rounded font-mono font-black">
                         {parsedDiag?.httpStatus !== undefined ? `HTTP ${parsedDiag.httpStatus}` : "连接超时/拒绝"}

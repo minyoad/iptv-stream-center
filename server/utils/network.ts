@@ -155,6 +155,16 @@ export function isPrivateOrIntranetUrl(urlStr: string): boolean {
   return false;
 }
 
+export function getSingleIsp(value: unknown): string {
+  if (typeof value !== "string") return "";
+  const isp = value.trim().replace(/^中国/, "");
+  return ["电信", "联通", "移动", "广电", "铁通"].includes(isp) ? isp : "";
+}
+
+export function isNetworkScopedSource(source: { url: string; isp?: string }): boolean {
+  return isPrivateOrIntranetUrl(source.url) || !!getSingleIsp(source.isp);
+}
+
 export function extractClientIp(req: any): string {
   if (!req) return "127.0.0.1";
   let ip = "";

@@ -81,6 +81,8 @@ import {
 
 import {
   fetchBufferWithFallback,
+  getSingleIsp,
+  isNetworkScopedSource,
   isPrivateOrIntranetUrl,
   extractClientIp
 } from "./server/utils/network";
@@ -175,6 +177,8 @@ import {
 // Playlist Services
 import {
   getPlaylistCacheKey,
+  isNationwideProvince,
+  normalizeProvinceName,
   sortSourcesByGeo,
   sortSourcesForExport,
   ensureStreamDiversity,
@@ -520,12 +524,13 @@ async function startServer() {
 
     try {
       const result = await testSingleUrl(targetUrl, 6000);
-      if (targetChannelId && targetSourceId) {
-        updateSourceDbStatus(targetChannelId, targetSourceId, result.status, result.latency, result.resolution, result.diagMsg);
-        saveData(true);
-      }
+      const statusUpdated = !!(targetChannelId && targetSourceId && updateSourceDbStatus(
+        targetChannelId, targetSourceId, targetUrl, result.status, result.latency, result.resolution, result.diagMsg
+      ));
+      if (statusUpdated) saveData(true);
       res.json({
         success: true,
+        statusUpdated,
         status: result.status,
         latency: result.latency,
         resolution: result.resolution,
@@ -2953,20 +2958,40 @@ app.get("/api/channels", async (req, res) => {
 
   // Option 2: Endpoint for client-side/browser speed test report submission
   app.post("/api/sources/client-test-results", (req, res) => {
-    const { results, clientIsp, clientProvince } = req.body;
+    const { results, probeType } = req.body;
+    const clientIsp = typeof req.body.clientIsp === "string" ? req.body.clientIsp.trim() : "";
+    const clientProvince = typeof req.body.clientProvince === "string" ? req.body.clientProvince.trim() : "";
     if (!Array.isArray(results) || results.length === 0) {
       return res.status(400).json({ error: "请提供有效的客户端代测结果报告数据" });
     }
 
+    const reportedIsp = getSingleIsp(clientIsp);
+    const reportedProvince = normalizeProvinceName(clientProvince);
     let updatedCount = 0;
     results.forEach((r: any) => {
-      const { sourceId, channelId, status, latency, resolution } = r;
-      if (!sourceId || !status) return;
+      const { sourceId, channelId, url, status, latency, resolution } = r || {};
+      if (!sourceId || (status !== "active" && status !== "inactive")) return;
 
       channels.forEach((c) => {
         if (channelId && c.id !== channelId) return;
         const src = c.sources.find((s) => s.id === sourceId);
-        if (src) {
+        if (src && (!url || src.url === url)) {
+          const networkScoped = isNetworkScopedSource(src);
+          if (networkScoped) {
+            const previousIsp = getSingleIsp(src.clientIspReported);
+            const previousProvince = normalizeProvinceName(src.clientProvinceReported || "");
+            const sourceIsp = getSingleIsp(src.isp) || previousIsp;
+            let sourceProvince = isNationwideProvince(src.province) ? "" : normalizeProvinceName(src.province);
+            if (!sourceProvince && previousIsp === sourceIsp && PROVINCES_LIST.includes(previousProvince)) {
+              sourceProvince = previousProvince;
+            }
+            // Keep observations from other networks (and browser reachability checks) in the report only.
+            if (probeType === "browser" || !reportedIsp || !PROVINCES_LIST.includes(reportedProvince) ||
+                (sourceIsp && sourceIsp !== reportedIsp) ||
+                (sourceProvince && sourceProvince !== reportedProvince) ||
+                (status === "inactive" && (!sourceIsp || !sourceProvince))) return;
+          }
+
           // Update test counts
           src.testCount = (src.testCount || 0) + 1;
           if (status === "active") {
@@ -2978,7 +3003,7 @@ app.get("/api/channels", async (req, res) => {
           }
 
           // Exponential Moving Average for latency to smooth out anomalies
-          if (latency !== undefined && latency > 0) {
+          if (latency !== undefined && latency > 0 && (!networkScoped || status === "active")) {
             if (src.latency && src.latency > 0) {
                src.latency = Math.round(src.latency * 0.7 + latency * 0.3);
             } else {
@@ -2988,7 +3013,7 @@ app.get("/api/channels", async (req, res) => {
 
           // Smart ISP/Province Discovery:
           // If the source lacks ISP/Province info, and the client had a great connection (<100ms)
-          if (status === "active" && latency !== undefined && latency <= 100) {
+          if (probeType !== "browser" && status === "active" && latency !== undefined && latency <= 100) {
             if ((!src.isp || src.isp === "未知") && clientIsp) {
               src.isp = clientIsp;
             }
@@ -2997,14 +3022,7 @@ app.get("/api/channels", async (req, res) => {
             }
           }
 
-          // Decide status based on reliability if we have enough tests
-          // E.g., if it failed now, but has > 50% success rate historically, we might keep it active
-          // But to be responsive to actual outages, we just use the latest status.
-          if (isPrivateOrIntranetUrl(src.url) && status === "inactive") {
-            src.status = "active";
-          } else {
-            src.status = status;
-          }
+          src.status = status;
           src.lastChecked = new Date().toISOString();
           
           src.clientIspReported = clientIsp || "宿主";

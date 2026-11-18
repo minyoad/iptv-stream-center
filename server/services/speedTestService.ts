@@ -2,7 +2,7 @@ import net from "net";
 import { execFile } from "child_process";
 import { promisify } from "util";
 import { channels, ipGeoApis, autoSwitchGeoApi, saveData, carouselProxyPresets, invalidatePlaylistExportCache } from "../store";
-import { isPrivateOrIntranetUrl } from "../utils/network";
+import { isNetworkScopedSource, isPrivateOrIntranetUrl } from "../utils/network";
 import { isCarouselSource, normalizePlatform, formatProxyUrl } from "./carouselService";
 import { getDb } from "../db/sqlite";
 
@@ -740,15 +740,17 @@ export async function testCarouselProxyAvailability(proxy: { platform: string; u
 export function updateSourceDbStatus(
   channelId: string,
   sourceId: string,
+  testedUrl: string,
   status: "active" | "inactive" | "checking" | "unknown",
   latency?: number,
   resolution?: string,
   diagMsg?: string
 ) {
+  // A server-side observation cannot replace the status reported from the source's network.
   const channel = channels.find((c) => c.id === channelId);
   if (channel) {
     const source = channel.sources.find((s) => s.id === sourceId);
-    if (source) {
+    if (source && source.url === testedUrl && !isNetworkScopedSource(source)) {
       source.status = status;
       if (latency !== undefined) {
         source.latency = latency;
@@ -790,8 +792,10 @@ export function updateSourceDbStatus(
           );
         } catch (_) {}
       }
+      return true;
     }
   }
+  return false;
 }
 
 export const testStatus: {
@@ -836,11 +840,11 @@ export async function runConcurrentTest(
       const item = queue.shift();
       if (!item) continue;
 
-      updateSourceDbStatus(item.channelId, item.id, "checking", undefined);
+      updateSourceDbStatus(item.channelId, item.id, item.url, "checking");
 
       const result = await testSingleUrl(item.url);
 
-      updateSourceDbStatus(item.channelId, item.id, result.status, result.latency, result.resolution, result.diagMsg);
+      updateSourceDbStatus(item.channelId, item.id, item.url, result.status, result.latency, result.resolution, result.diagMsg);
 
       testStatus.checked++;
       testStatus.results.push({
@@ -887,8 +891,8 @@ export async function retestOfflineSources(concurrency = 6): Promise<{
     if (channel.isolated) return;
     if (!channel.sources) return;
     channel.sources.forEach((source) => {
-      // 严格跳过已隔离的线路（避免复测用户手动或批量隔离的无用/垃圾源）
-      if (source.isolated) return;
+      // 已隔离线路及需要同网探针的线路不参加服务端失效复测
+      if (source.isolated || isNetworkScopedSource(source)) return;
       const isInvalid = source.status === "inactive" || (source.latency !== undefined && source.latency >= 9999);
       if (isInvalid) {
         targetSources.push({
@@ -907,7 +911,7 @@ export async function retestOfflineSources(concurrency = 6): Promise<{
       recovered: 0,
       stillOffline: 0,
       autoIsolated: 0,
-      message: "当前全域没有处于失效状态的未隔离线路，无需复测",
+      message: "没有可从服务端复测的未隔离失效线路",
     };
   }
 
@@ -949,7 +953,7 @@ export async function retestOfflineSources(concurrency = 6): Promise<{
   channels.forEach((channel) => {
     if (!channel.sources) return;
     channel.sources.forEach((source) => {
-      if (source.isolated) return;
+      if (source.isolated || isNetworkScopedSource(source)) return;
       const isInvalid = source.status === "inactive" || (source.latency !== undefined && source.latency >= 9999);
       if (isInvalid) {
         // 失效次数：净失败次数 = (testCount || 0) - (successCount || 0)

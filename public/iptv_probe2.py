@@ -79,18 +79,6 @@ async def phase_1_network_check(session: aiohttp.ClientSession, url: str) -> tup
             latency = int((time.time() - start_time) * 1000)
             return True, latency
         except Exception:
-            # 内网 / 私网 RTSP 地址或特殊内网源保护：若处于局域网/局点，标记为可用
-            parsed = urllib.parse.urlparse(url)
-            host = (parsed.hostname or "").lower()
-            if (
-                host.startswith("10.") or 
-                host.startswith("192.168.") or 
-                host.startswith("127.") or 
-                host.endswith(".local") or 
-                host.endswith(".lan") or
-                any(host.startswith(f"172.{i}.") for i in range(16, 32))
-            ):
-                return True, 60
             return False, 9999
             
     
